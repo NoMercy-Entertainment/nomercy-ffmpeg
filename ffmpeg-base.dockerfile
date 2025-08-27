@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
-ENV ffmpeg_version=7.1 \
+ENV ffmpeg_version=8.0 \
     iconv_version=1.18 \
     libxml2_version=2.13 \
     zlib_version=1.3.1 \
@@ -66,7 +66,7 @@ ENV ffmpeg_version=7.1 \
     frei0r_version=2.3.3 \
     libvpl_version=2.14.0 \
     libsvtav1_version=2.3.0 \
-    amf_version=1.4.35 \
+    amf_version=1.4.36 \
     nvcodec_version=12.2.72.0 \
     leptonica_version=1.85.0 \
     libtesseract_version=5.5.0 \
@@ -731,5 +731,6 @@ WORKDIR /
 RUN echo "------------------------------------------------------" \
     && echo "📦 Base build completed successfully" \
     && echo "------------------------------------------------------"
+
 
 CMD ["rm", "-f", "/output/*.tar.gz"]

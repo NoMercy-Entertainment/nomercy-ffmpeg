@@ -44,11 +44,11 @@ else
 fi
 cd /ffmpeg/${TARGET_OS}/${ARCH}
 if [[ ${TARGET_OS} == "windows" ]]; then
-    zip -r /build/ffmpeg-7.1-${TARGET_OS}-${ARCH}.zip . >/dev/null 2>&1
+    zip -r /build/ffmpeg-8.0-${TARGET_OS}-${ARCH}.zip . >/dev/null 2>&1
 else
-    tar -czf /build/ffmpeg-7.1-${TARGET_OS}-${ARCH}.tar.gz . >/dev/null 2>&1
+    tar -czf /build/ffmpeg-8.0-${TARGET_OS}-${ARCH}.tar.gz . >/dev/null 2>&1
 fi
-cp /build/ffmpeg-7.1-${TARGET_OS}-${ARCH}.* /output
+cp /build/ffmpeg-8.0-${TARGET_OS}-${ARCH}.* /output
 
 if [[ ${TARGET_OS} == "windows" ]]; then
     text_with_padding "✅ FFmpeg zip file created successfully" ""

@@ -140,6 +140,6 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=linux /output/ffmpeg-7.1-linux-x86_64.tar.gz /build/ffmpeg-7.1-linux-x86_64.tar.gz
+COPY --from=linux /output/ffmpeg-8.0-linux-x86_64.tar.gz /build/ffmpeg-8.0-linux-x86_64.tar.gz
 
-CMD ["cp", "/build/ffmpeg-7.1-linux-x86_64.tar.gz", "/output"]
+CMD ["cp", "/build/ffmpeg-8.0-linux-x86_64.tar.gz", "/output"]

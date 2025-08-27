@@ -40,11 +40,11 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "x86_64" ]; then
-            FILE_NAME="downloads/ffmpeg-7.1-linux-${{ matrix.arch }}.tar.gz"
+            FILE_NAME="downloads/ffmpeg-8.0-linux-${{ matrix.arch }}.tar.gz"
           elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            FILE_NAME="downloads/ffmpeg-7.1-linux-aarch64.tar.gz"
+            FILE_NAME="downloads/ffmpeg-8.0-linux-aarch64.tar.gz"
           elif [ "${{ matrix.os }}" == "macos-latest" ]; then
-            FILE_NAME="downloads/ffmpeg-7.1-darwin-${{ matrix.arch }}.tar.gz"
+            FILE_NAME="downloads/ffmpeg-8.0-darwin-${{ matrix.arch }}.tar.gz"
           fi
 
           tar -xvf $FILE_NAME
@@ -83,7 +83,7 @@ jobs:
       - name: Unpack ffmpeg binary
         shell: bash
         run: |
-          FILE_NAME="downloads/ffmpeg-7.1-windows-${{ matrix.arch }}.zip"
+          FILE_NAME="downloads/ffmpeg-8.0-windows-${{ matrix.arch }}.zip"
           unzip -o $FILE_NAME
 
       - name: Run Tests

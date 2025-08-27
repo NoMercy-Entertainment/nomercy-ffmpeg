@@ -198,6 +198,6 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=darwin /output/ffmpeg-7.1-darwin-arm64.tar.gz /build/ffmpeg-7.1-darwin-arm64.tar.gz
+COPY --from=darwin /output/ffmpeg-8.0-darwin-arm64.tar.gz /build/ffmpeg-8.0-darwin-arm64.tar.gz
 
-CMD ["cp", "/build/ffmpeg-7.1-darwin-arm64.tar.gz", "/output"]
+CMD ["cp", "/build/ffmpeg-8.0-darwin-arm64.tar.gz", "/output"]
