@@ -144,6 +144,7 @@ check_command() {
         printf "%s\n" "❌ FFmpeg executable not found in current directory"
         exit 1
     fi
+    chmod +x ${Workspace}/ffmpeg
 }
 
 run_test() {

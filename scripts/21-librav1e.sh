@@ -14,7 +14,7 @@ elif [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "darwin" ]]; then
 fi
 
 cd /build/librav1e
-cargo cinstall -v ${LIBRAV1E_TARGET} --prefix=${PREFIX} --library-type=staticlib --crt-static --release | tee /ffmpeg_build.log
+cargo cinstall -j$(nproc) -v ${LIBRAV1E_TARGET} --prefix=${PREFIX} --library-type=staticlib --crt-static --release | tee /ffmpeg_build.log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi

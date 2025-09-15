@@ -40,3 +40,5 @@ fi
 mv OpenCL.pc ${PREFIX}/lib/pkgconfig/OpenCL.pc
 
 add_enable "--enable-opencl"
+
+exit 0
