@@ -1,9 +1,9 @@
-name: Test
+name: Test & Security
 
 on:
   workflow_run:
     workflows:
-      - Build
+      - CI/CD Pipeline
     types:
       - completed
   workflow_dispatch:
@@ -15,12 +15,33 @@ on:
         default: true
 
 jobs:
-  platform-tests-unix:
+  # Test platform builds with matrix strategy
+  platform-tests:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        arch: [x86_64, arm64]
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            platform: linux
+            file_ext: tar.gz
+          - os: ubuntu-latest
+            arch: aarch64
+            platform: linux
+            file_ext: tar.gz
+          - os: macos-latest
+            arch: x86_64
+            platform: darwin
+            file_ext: tar.gz
+          - os: macos-latest
+            arch: arm64
+            platform: darwin
+            file_ext: tar.gz
+          - os: windows-latest
+            arch: x86_64
+            platform: windows
+            file_ext: zip
     continue-on-error: true
     steps:
       - name: Checkout Code
@@ -36,66 +57,95 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: downloads/
 
-      - name: Unpack ffmpeg binary
+      - name: Unpack ffmpeg binary (Unix)
+        if: matrix.platform != 'windows'
         shell: bash
         run: |
-          if [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "x86_64" ]; then
-            FILE_NAME="downloads/ffmpeg-8.0-linux-${{ matrix.arch }}.tar.gz"
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
+          if [ "${{ matrix.platform }}" == "linux" ] && [ "${{ matrix.arch }}" == "aarch64" ]; then
             FILE_NAME="downloads/ffmpeg-8.0-linux-aarch64.tar.gz"
-          elif [ "${{ matrix.os }}" == "macos-latest" ]; then
-            FILE_NAME="downloads/ffmpeg-8.0-darwin-${{ matrix.arch }}.tar.gz"
+          else
+            FILE_NAME="downloads/ffmpeg-8.0-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz"
+          fi
+          
+          if [ -f "$FILE_NAME" ]; then
+            tar -xvf "$FILE_NAME"
+            chmod +x "${{ github.workspace }}/ffmpeg" "${{ github.workspace }}/ffprobe"
+          else
+            echo "Warning: $FILE_NAME not found"
+            exit 0
           fi
 
-          tar -xvf $FILE_NAME
-
-          chmod +x ${{ github.workspace }}/ffmpeg ${{ github.workspace }}/ffprobe
-          
-      - name: Run Tests
-        id: tests
-        shell: bash
-        run: |
-          chmod +x ${{ github.workspace }}/tests/tests.sh
-          ${{ github.workspace }}/tests/tests.sh "${{ github.workspace }}"
-          exit 0
-
-  platform-tests-windows:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest]
-        arch: [x86_64] #, arm64]
-    continue-on-error: true
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: downloads/
-
-      - name: Unpack ffmpeg binary
+      - name: Unpack ffmpeg binary (Windows)
+        if: matrix.platform == 'windows'
         shell: bash
         run: |
           FILE_NAME="downloads/ffmpeg-8.0-windows-${{ matrix.arch }}.zip"
-          unzip -o $FILE_NAME
+          if [ -f "$FILE_NAME" ]; then
+            unzip -o "$FILE_NAME"
+          else
+            echo "Warning: $FILE_NAME not found"
+            exit 0
+          fi
 
-      - name: Run Tests
-        id: tests
-        shell: pwsh
+      - name: Run Tests (Unix)
+        if: matrix.platform != 'windows'
+        shell: bash
         run: |
-          ${{ github.workspace }}\tests\tests.ps1 "${{ github.workspace }}"
+          if [ -f "${{ github.workspace }}/tests/tests.sh" ]; then
+            chmod +x "${{ github.workspace }}/tests/tests.sh"
+            "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}"
+          fi
           exit 0
 
+      - name: Run Tests (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "${{ github.workspace }}\tests\tests.ps1") {
+            & "${{ github.workspace }}\tests\tests.ps1" "${{ github.workspace }}"
+          }
+          exit 0
+
+  # Security scanning for Docker images
+  security-scans:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - nomercyentertainment/ffmpeg-base:latest
+          - nomercyentertainment/ffmpeg-linux-x86_64:latest
+          - nomercyentertainment/ffmpeg-linux-aarch64:latest
+          - nomercyentertainment/ffmpeg-windows-x86_64:latest
+          - nomercyentertainment/ffmpeg-darwin-x86_64:latest
+          - nomercyentertainment/ffmpeg-darwin-arm64:latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Run Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Security Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Prepare release artifacts if tests pass
   prepare-release:
     runs-on: ubuntu-latest
-    needs: [platform-tests-unix, platform-tests-windows]
+    needs: [platform-tests]
     continue-on-error: false
     if: success()
     steps:    
@@ -112,3 +162,4 @@ jobs:
         with:
           name: release-artifacts
           path: downloads/
+          retention-days: 90

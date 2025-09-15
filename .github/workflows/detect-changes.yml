@@ -1,0 +1,156 @@
+name: Detect Changes
+
+on:
+  workflow_call:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild all components'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: 'Generated version number'
+        value: ${{ jobs.detect-changes.outputs.version }}
+      base-changed:
+        description: 'Base image changed'
+        value: ${{ jobs.detect-changes.outputs.base-changed }}
+      linux-x86_64-changed:
+        description: 'Linux x86_64 changed'
+        value: ${{ jobs.detect-changes.outputs.linux-x86_64-changed }}
+      linux-aarch64-changed:
+        description: 'Linux aarch64 changed'
+        value: ${{ jobs.detect-changes.outputs.linux-aarch64-changed }}
+      windows-x86_64-changed:
+        description: 'Windows x86_64 changed'
+        value: ${{ jobs.detect-changes.outputs.windows-x86_64-changed }}
+      darwin-x86_64-changed:
+        description: 'Darwin x86_64 changed'
+        value: ${{ jobs.detect-changes.outputs.darwin-x86_64-changed }}
+      darwin-arm64-changed:
+        description: 'Darwin arm64 changed'
+        value: ${{ jobs.detect-changes.outputs.darwin-arm64-changed }}
+      workflow-changed:
+        description: 'Workflow files changed'
+        value: ${{ jobs.detect-changes.outputs.workflow-changed }}
+      any-changed:
+        description: 'Any component changed'
+        value: ${{ jobs.detect-changes.outputs.any-changed }}
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump-version.outputs.version }}
+      base-changed: ${{ steps.check-base.outputs.changed }}
+      linux-x86_64-changed: ${{ steps.check-linux-x86_64.outputs.changed }}
+      linux-aarch64-changed: ${{ steps.check-linux-aarch64.outputs.changed }}
+      windows-x86_64-changed: ${{ steps.check-windows-x86_64.outputs.changed }}
+      darwin-x86_64-changed: ${{ steps.check-darwin-x86_64.outputs.changed }}
+      darwin-arm64-changed: ${{ steps.check-darwin-arm64.outputs.changed }}
+      workflow-changed: ${{ steps.check-workflow.outputs.changed }}
+      any-changed: ${{ steps.check-any.outputs.changed }}
+      
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: master
+
+      - name: Generate Version
+        id: bump-version
+        run: |
+          git config --global --add safe.directory ${{ github.workspace }}
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          
+          echo "LATEST_TAG=$LATEST_TAG" 
+
+          # Extract version components
+          MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1 | sed 's/v//')
+          MINOR=$(echo "$LATEST_TAG" | cut -d. -f2)
+          PATCH=$(echo "$LATEST_TAG" | cut -d. -f3)
+
+          echo "MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
+
+          # Increment patch version
+          NEW_PATCH=$(($PATCH + 1))
+          NEW_VERSION=v$MAJOR.$MINOR.$NEW_PATCH 
+          
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version will be: $NEW_VERSION"
+
+      - name: Check for file changes
+        id: check-files
+        run: |
+          git config --global --add safe.directory ${{ github.workspace }}
+          
+          # Check if force rebuild is enabled
+          FORCE_REBUILD="${{ inputs.force_rebuild }}"
+          if [[ "$FORCE_REBUILD" == "true" ]]; then
+            echo "Force rebuild enabled - marking all as changed"
+            echo "base=true" >> $GITHUB_OUTPUT
+            echo "linux-x86_64=true" >> $GITHUB_OUTPUT
+            echo "linux-aarch64=true" >> $GITHUB_OUTPUT
+            echo "windows-x86_64=true" >> $GITHUB_OUTPUT
+            echo "darwin-x86_64=true" >> $GITHUB_OUTPUT
+            echo "darwin-arm64=true" >> $GITHUB_OUTPUT
+            echo "workflow=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Get changed files since last commit
+          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
+          echo "Changed files: $CHANGED_FILES"
+          
+          # Check each component
+          echo "base=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-base.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          echo "linux-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-linux-x86_64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          echo "linux-aarch64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-linux-aarch64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          echo "windows-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-windows-x86_64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          echo "darwin-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-darwin-x86_64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          echo "darwin-arm64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-darwin-arm64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          echo "workflow=$(echo "$CHANGED_FILES" | grep -q ".github/workflows/" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+
+      - name: Set individual outputs
+        id: check-base
+        run: echo "changed=${{ steps.check-files.outputs.base }}" >> $GITHUB_OUTPUT
+
+      - name: Set Linux x86_64 output
+        id: check-linux-x86_64
+        run: echo "changed=${{ steps.check-files.outputs.linux-x86_64 }}" >> $GITHUB_OUTPUT
+
+      - name: Set Linux aarch64 output
+        id: check-linux-aarch64
+        run: echo "changed=${{ steps.check-files.outputs.linux-aarch64 }}" >> $GITHUB_OUTPUT
+
+      - name: Set Windows x86_64 output
+        id: check-windows-x86_64
+        run: echo "changed=${{ steps.check-files.outputs.windows-x86_64 }}" >> $GITHUB_OUTPUT
+
+      - name: Set Darwin x86_64 output
+        id: check-darwin-x86_64
+        run: echo "changed=${{ steps.check-files.outputs.darwin-x86_64 }}" >> $GITHUB_OUTPUT
+
+      - name: Set Darwin arm64 output
+        id: check-darwin-arm64
+        run: echo "changed=${{ steps.check-files.outputs.darwin-arm64 }}" >> $GITHUB_OUTPUT
+
+      - name: Set workflow output
+        id: check-workflow
+        run: echo "changed=${{ steps.check-files.outputs.workflow }}" >> $GITHUB_OUTPUT
+
+      - name: Check if any component changed
+        id: check-any
+        run: |
+          ANY_CHANGED="false"
+          if [[ "${{ steps.check-files.outputs.base }}" == "true" || \
+                "${{ steps.check-files.outputs.linux-x86_64 }}" == "true" || \
+                "${{ steps.check-files.outputs.linux-aarch64 }}" == "true" || \
+                "${{ steps.check-files.outputs.windows-x86_64 }}" == "true" || \
+                "${{ steps.check-files.outputs.darwin-x86_64 }}" == "true" || \
+                "${{ steps.check-files.outputs.darwin-arm64 }}" == "true" || \
+                "${{ steps.check-files.outputs.workflow }}" == "true" ]]; then
+            ANY_CHANGED="true"
+          fi
+          echo "changed=$ANY_CHANGED" >> $GITHUB_OUTPUT
