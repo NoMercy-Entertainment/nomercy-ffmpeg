@@ -1,4 +1,4 @@
-name: Build
+name: CI/CD Pipeline
 
 on:
   push:
@@ -14,570 +14,222 @@ on:
         required: true
         type: boolean
         default: true
+      enable_cache_warmup:
+        description: 'Warm up caches before building'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  check-changes:
+  # Detect what has changed to optimize builds
+  detect-changes:
+    uses: ./.github/workflows/detect-changes.yml
+    with:
+      force_rebuild: ${{ inputs.force_rebuild || false }}
+
+  # Optional cache warmup for better build performance
+  cache-warmup:
     runs-on: ubuntu-latest
-    outputs:
-      workflow-changed: ${{ steps.check-workflow.outputs.changed }}
-      base-changed: ${{ steps.check-base.outputs.changed }}
-      linux-x86_64-changed: ${{ steps.check-linux-x86_64.outputs.changed }}
-      linux-aarch64-changed: ${{ steps.check-linux-aarch64.outputs.changed }}
-      windows-x86_64-changed: ${{ steps.check-windows-x86_64.outputs.changed }}
-      # windows-arm64-changed: ${{ steps.check-windows-arm64.outputs.changed }}
-      darwin-x86_64-changed: ${{ steps.check-darwin-x86_64.outputs.changed }}
-      darwin-arm64-changed: ${{ steps.check-darwin-arm64.outputs.changed }}
-      version: ${{ steps.bump-version.outputs.version }}
-      
+    if: inputs.enable_cache_warmup
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Warm Up Global Caches
+        uses: actions/cache@v4
         with:
-          fetch-depth: 0
-          ref: master
+          path: |
+            ~/.cache/pip
+            ~/.cache/npm
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.ccache
+            ~/.docker/buildx-cache
+          key: global-cache-warmup-${{ github.sha }}
+          restore-keys: |
+            global-cache-warmup-
+            ${{ runner.os }}-deps-
+            ${{ runner.os }}-buildx-
 
-      - name: Bump version
-        id: bump-version
+      - name: Pre-populate Build Caches
         run: |
-          git config --global --add safe.directory ${{ github.workspace }}
-          # Get the latest version tag
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
-          
-          echo "LATEST_TAG=$LATEST_TAG" 
+          echo "🔥 Pre-warming build environment caches..."
+          mkdir -p ~/.cache/pip ~/.cache/npm ~/.cargo/registry ~/.docker/buildx-cache
+          echo "✅ Cache directories prepared"
 
-          # Extract components
-          MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1 | sed 's/v//')
-          MINOR=$(echo "$LATEST_TAG" | cut -d. -f2)
-          PATCH=$(echo "$LATEST_TAG" | cut -d. -f3)
-
-          # Validate components
-          echo "MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
-
-          # Increment patch version
-          NEW_PATCH=$(($PATCH + 1))
-          NEW_VERSION=v$MAJOR.$MINOR.$NEW_PATCH 
-          
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "New version will be: $NEW_VERSION"
-
-      - name: Check workflow changes
-        id: check-workflow
-        run: |
-          echo force: ${{ github.event.inputs.force_rebuild }}
-          git config --global --add safe.directory ${{ github.workspace }}
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-            CHANGED=true
-          else
-            CHANGED=false
-            git diff --name-only HEAD^ HEAD | grep -q ".github/workflows/main.yml" && CHANGED=true
-            git diff --name-only HEAD^ HEAD | grep -q ".github/workflows/test.yml" && CHANGED=true
-            git diff --name-only HEAD^ HEAD | grep -q ".github/workflows/release.yml" && CHANGED=true
-          fi
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-
-      - name: Check base image changes
-        id: check-base
-        run: |
-          git config --global --add safe.directory ${{ github.workspace }}
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-            CHANGED=true
-          else
-            CHANGED=false
-            git diff --name-only HEAD^ HEAD | grep -q "ffmpeg-base.dockerfile" && CHANGED=true
-          fi
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-
-      - name: Check Linux x86_64 image changes
-        id: check-linux-x86_64
-        run: |
-          git config --global --add safe.directory ${{ github.workspace }}
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-            CHANGED=true
-          else
-            CHANGED=false
-            git diff --name-only HEAD^ HEAD | grep -q "ffmpeg-linux-x86_64.dockerfile" && CHANGED=true
-          fi
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-
-      - name: Check Linux Aarch64 image changes
-        id: check-linux-aarch64
-        run: |
-          git config --global --add safe.directory ${{ github.workspace }}
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-            CHANGED=true
-          else
-            CHANGED=false
-            git diff --name-only HEAD^ HEAD | grep -q "ffmpeg-linux-aarch64.dockerfile" && CHANGED=true
-          fi
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-          
-      - name: Check Windows x86_64 image changes
-        id: check-windows-x86_64
-        run: |
-          git config --global --add safe.directory ${{ github.workspace }}
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-            CHANGED=true
-          else
-            CHANGED=false
-            git diff --name-only HEAD^ HEAD | grep -q "ffmpeg-windows-x86_64.dockerfile" && CHANGED=true
-          fi
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-
-      # - name: Check Windows Arm64 image changes
-        # id: check-windows-arm64
-        # run: |
-        #   git config --global --add safe.directory ${{ github.workspace }}
-        #   if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-        #     CHANGED=true
-        #   else
-        #     CHANGED=false
-        #     git diff --name-only HEAD^ HEAD | grep -q "ffmpeg-windows-arm64.dockerfile" && CHANGED=true
-        #   fi
-        #   echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-
-      - name: Check Darwin x86_64 image changes
-        id: check-darwin-x86_64
-        run: |
-          git config --global --add safe.directory ${{ github.workspace }}
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-            CHANGED=true
-          else
-            CHANGED=false
-            git diff --name-only HEAD^ HEAD | grep -q "ffmpeg-darwin-x86_64.dockerfile" && CHANGED=true
-          fi
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-
-      - name: Check Darwin arm64 image changes
-        id: check-darwin-arm64
-        run: |
-          git config --global --add safe.directory ${{ github.workspace }}
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
-            CHANGED=true
-          else
-            CHANGED=false
-            git diff --name-only HEAD^ HEAD | grep -q "ffmpeg-darwin-arm64.dockerfile" && CHANGED=true
-          fi
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-
+  # Build the base image that others depend on
   build-base:
-    needs: check-changes
-    if: needs.check-changes.outputs.base-changed || needs.check-changes.outputs.workflow-changed || github.event.inputs.force_rebuild
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+    needs: [detect-changes, cache-warmup]
+    if: always() && (needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
+    uses: ./.github/workflows/reusable-docker-build.yml
+    with:
+      dockerfile: ffmpeg-base.dockerfile
+      platform: base
+      secrets_repo: false
+      depends_on_base: false
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push base image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ffmpeg-base.dockerfile
-          push: true
-          tags: nomercyentertainment/ffmpeg-base:latest
-          cache-from: type=registry,ref=nomercyentertainment/ffmpeg-base:buildcache
-          cache-to: type=registry,ref=nomercyentertainment/ffmpeg-base:buildcache,mode=max
-
+  # Build platform-specific images using the reusable workflow
   build-linux-x86_64:
-    needs: [check-changes, build-base]
-    if: needs.check-changes.outputs.linux-x86_64-changed || needs.check-changes.outputs.base-changed || needs.check-changes.outputs.workflow-changed || github.event.inputs.force_rebuild
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: master
-          token: ${{ secrets.PAT_TOKEN }}
-          repository: "NoMercy-Entertainment/FFMPEG-Secrets"
-          path: "${{ github.workspace }}/FFMPEG-Secrets"
-      
-      - name: Copy secrets
-        run: |
-          cp -r FFMPEG-Secrets/* ${{ github.workspace }}/scripts/
-          rm -rf FFMPEG-Secrets
-
-      - name: Build and push Linux x86_64 image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ffmpeg-linux-x86_64.dockerfile
-          push: true
-          tags: nomercyentertainment/ffmpeg-linux-x86_64:latest
-          cache-from: type=registry,ref=nomercyentertainment/ffmpeg-linux-x86_64:buildcache
-          cache-to: type=registry,ref=nomercyentertainment/ffmpeg-linux-x86_64:buildcache,mode=max
+    needs: [detect-changes, build-base]
+    if: needs.detect-changes.outputs.linux-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    uses: ./.github/workflows/reusable-docker-build.yml
+    with:
+      dockerfile: ffmpeg-linux-x86_64.dockerfile
+      platform: linux-x86_64
+      secrets_repo: true
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
   build-linux-aarch64:
-    needs: [check-changes, build-base]
-    if: needs.check-changes.outputs.linux-aarch64-changed || needs.check-changes.outputs.base-changed || needs.check-changes.outputs.workflow-changed || github.event.inputs.force_rebuild
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: master
-          token: ${{ secrets.PAT_TOKEN }}
-          repository: "NoMercy-Entertainment/FFMPEG-Secrets"
-          path: "${{ github.workspace }}/FFMPEG-Secrets"
-      
-      - name: Copy secrets
-        run: |
-          cp -r FFMPEG-Secrets/* ${{ github.workspace }}/scripts/
-          rm -rf FFMPEG-Secrets
-
-      - name: Build and push Aarch64 image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ffmpeg-linux-aarch64.dockerfile
-          push: true
-          tags: nomercyentertainment/ffmpeg-linux-aarch64:latest
-          cache-from: type=registry,ref=nomercyentertainment/ffmpeg-linux-aarch64:buildcache
-          cache-to: type=registry,ref=nomercyentertainment/ffmpeg-linux-aarch64:buildcache,mode=max
+    needs: [detect-changes, build-base]
+    if: needs.detect-changes.outputs.linux-aarch64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    uses: ./.github/workflows/reusable-docker-build.yml
+    with:
+      dockerfile: ffmpeg-linux-aarch64.dockerfile
+      platform: linux-aarch64
+      secrets_repo: true
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
   build-windows-x86_64:
-    needs: [check-changes, build-base]
-    if: needs.check-changes.outputs.windows-x86_64-changed || needs.check-changes.outputs.base-changed || needs.check-changes.outputs.workflow-changed || github.event.inputs.force_rebuild
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: master
-          token: ${{ secrets.PAT_TOKEN }}
-          repository: "NoMercy-Entertainment/FFMPEG-Secrets"
-          path: "${{ github.workspace }}/FFMPEG-Secrets"
-      
-      - name: Copy secrets
-        run: |
-          cp -r FFMPEG-Secrets/* ${{ github.workspace }}/scripts/
-          rm -rf FFMPEG-Secrets
-
-      - name: Build and push Windows image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ffmpeg-windows-x86_64.dockerfile
-          push: true
-          tags: nomercyentertainment/ffmpeg-windows-x86_64:latest
-          cache-from: type=registry,ref=nomercyentertainment/ffmpeg-windows-x86_64:buildcache
-          cache-to: type=registry,ref=nomercyentertainment/ffmpeg-windows-x86_64:buildcache,mode=max
-
-  # build-windows-arch64:
-    # needs: [check-changes, build-base]
-    # if: needs.check-changes.outputs.windows-arch64-changed || needs.check-changes.outputs.base-changed || needs.check-changes.outputs.workflow-changed
-    # runs-on: ubuntu-latest
-    # steps:
-    #   - name: Free Disk Space (Ubuntu)
-    #     uses: jlumbroso/free-disk-space@main
-    #     with:
-    #       tool-cache: false
-    #       android: true
-    #       dotnet: true
-    #       haskell: true
-    #       large-packages: true
-    #       docker-images: true
-    #       swap-storage: true
-
-    #   - name: Checkout Code
-    #     uses: actions/checkout@v4
-
-    #   - name: Set up Docker Buildx
-    #     uses: docker/setup-buildx-action@v2
-
-    #   - name: Log in to DockerHub
-    #     uses: docker/login-action@v2
-    #     with:
-    #       username: ${{ secrets.DOCKER_USERNAME }}
-    #       password: ${{ secrets.DOCKER_PASSWORD }}
-      
-    #   - name: Checkout Secrets
-    #     uses: actions/checkout@v4
-    #     with:
-    #       fetch-depth: 0
-    #       ref: master
-    #       token: ${{ secrets.GITHUB_TOKEN }}
-    #       ref: master
-    #       repository: NoMercy-Entertainment/FFMPEG-Secrets  
-    #       path: FFMPEG-Secrets
-       
-    #   - name: Copy secrets
-    #     run: |
-    #       cp -r FFMPEG-Secrets/* ${{ github.workspace }}/scripts/
-    #       rm -rf FFMPEG-Secrets
-
-    #   - name: Build and push Windows image
-    #     uses: docker/build-push-action@v4
-    #     with:
-    #       context: .
-    #       file: ffmpeg-windows-arch64.dockerfile
-    #       push: true
-    #       tags: nomercyentertainment/ffmpeg-windows-arch64:latest
-    #       cache-from: type=registry,ref=nomercyentertainment/ffmpeg-windows-arch64:buildcache
-    #       cache-to: type=registry,ref=nomercyentertainment/ffmpeg-windows-arch64:buildcache,mode=max
+    needs: [detect-changes, build-base]
+    if: needs.detect-changes.outputs.windows-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    uses: ./.github/workflows/reusable-docker-build.yml
+    with:
+      dockerfile: ffmpeg-windows-x86_64.dockerfile
+      platform: windows-x86_64
+      secrets_repo: true
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
   build-darwin-x86_64:
-    needs: [check-changes, build-base]
-    if: needs.check-changes.outputs.darwin-x86_64-changed || needs.check-changes.outputs.base-changed || needs.check-changes.outputs.workflow-changed || github.event.inputs.force_rebuild
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: master
-          token: ${{ secrets.PAT_TOKEN }}
-          repository: "NoMercy-Entertainment/FFMPEG-Secrets"
-          path: "${{ github.workspace }}/FFMPEG-Secrets"
-      
-      - name: Copy secrets
-        run: |
-          cp -r FFMPEG-Secrets/* ${{ github.workspace }}/scripts/
-          rm -rf FFMPEG-Secrets
-
-      - name: Build and push Darwin image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ffmpeg-darwin-x86_64.dockerfile
-          push: true
-          tags: nomercyentertainment/ffmpeg-darwin-x86_64:latest
-          cache-from: type=registry,ref=nomercyentertainment/ffmpeg-darwin-x86_64:buildcache
-          cache-to: type=registry,ref=nomercyentertainment/ffmpeg-darwin-x86_64:buildcache,mode=max
+    needs: [detect-changes, build-base]
+    if: needs.detect-changes.outputs.darwin-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    uses: ./.github/workflows/reusable-docker-build.yml
+    with:
+      dockerfile: ffmpeg-darwin-x86_64.dockerfile
+      platform: darwin-x86_64
+      secrets_repo: true
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
   build-darwin-arm64:
-    needs: [check-changes, build-base]
-    if: needs.check-changes.outputs.darwin-arm64-changed || needs.check-changes.outputs.base-changed || needs.check-changes.outputs.workflow-changed || github.event.inputs.force_rebuild
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+    needs: [detect-changes, build-base]
+    if: needs.detect-changes.outputs.darwin-arm64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    uses: ./.github/workflows/reusable-docker-build.yml
+    with:
+      dockerfile: ffmpeg-darwin-arm64.dockerfile
+      platform: darwin-arm64
+      secrets_repo: true
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: master
-          token: ${{ secrets.PAT_TOKEN }}
-          repository: "NoMercy-Entertainment/FFMPEG-Secrets"
-          path: "${{ github.workspace }}/FFMPEG-Secrets"
-      
-      - name: Copy secrets
-        run: |
-          cp -r FFMPEG-Secrets/* ${{ github.workspace }}/scripts/
-          rm -rf FFMPEG-Secrets
-
-      - name: Build and push Darwin image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ffmpeg-darwin-arm64.dockerfile
-          push: true
-          tags: nomercyentertainment/ffmpeg-darwin-arm64:latest
-          cache-from: type=registry,ref=nomercyentertainment/ffmpeg-darwin-arm64:buildcache
-          cache-to: type=registry,ref=nomercyentertainment/ffmpeg-darwin-arm64:buildcache,mode=max
-
+  # Export artifacts from built images
   export-artifacts:
     runs-on: ubuntu-latest
-    needs: [build-linux-x86_64, build-linux-aarch64, build-windows-x86_64, build-darwin-x86_64, build-darwin-arm64, check-changes] #, build-windows-arm64
-    if: needs.check-changes.outputs.base-changed || needs.check-changes.outputs.linux-x86_64-changed || needs.check-changes.outputs.linux-aarch64-changed || needs.check-changes.outputs.windows-x86_64-changed || needs.check-changes.outputs.darwin-x86_64-changed || needs.check-changes.outputs.darwin-arm64-changed || needs.check-changes.outputs.workflow-changed  || github.event.inputs.force_rebuild
-    #|| needs.check-changes.outputs.windows-arm64-changed
+    needs: [detect-changes, build-linux-x86_64, build-linux-aarch64, build-windows-x86_64, build-darwin-x86_64, build-darwin-arm64]
+    if: always() && (needs.detect-changes.outputs.any-changed == 'true' || inputs.force_rebuild) && (needs.build-linux-x86_64.result != 'failure' || needs.build-linux-aarch64.result != 'failure' || needs.build-windows-x86_64.result != 'failure' || needs.build-darwin-x86_64.result != 'failure' || needs.build-darwin-arm64.result != 'failure')
     steps:
+      - name: Cache Downloaded Artifacts
+        uses: actions/cache@v4
+        with:
+          path: downloads/
+          key: artifacts-${{ github.sha }}-${{ hashFiles('**/*.dockerfile') }}
+          restore-keys: |
+            artifacts-${{ github.sha }}-
+            artifacts-
+
       - name: Log in to DockerHub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Export Linux x86_64 Artifact
+      - name: Create downloads directory
+        run: mkdir -p downloads
+
+      - name: Export Artifacts
         run: |
-          mkdir -p downloads/linux-x86_64
-          docker pull nomercyentertainment/ffmpeg-linux-x86_64:latest
-          docker create --name linux-x86_64-container nomercyentertainment/ffmpeg-linux-x86_64:latest
-          docker cp linux-x86_64-container:/build/ffmpeg-8.0-linux-x86_64.tar.gz downloads/ffmpeg-8.0-linux-x86_64.tar.gz || echo "File not found in container."
-          # docker cp linux-x86_64-container:/build/linux-x86_64 downloads/linux-x86_64 || echo "Directory not found in container."
-          docker rm linux-x86_64-container
+          # Define platforms and their corresponding archive formats
+          declare -A platforms=(
+            ["linux-x86_64"]="tar.gz"
+            ["linux-aarch64"]="tar.gz"
+            ["windows-x86_64"]="zip"
+            ["darwin-x86_64"]="tar.gz"
+            ["darwin-arm64"]="tar.gz"
+          )
           
-      - name: Export Linux Aarch64 Artifact
-        run: |
-          mkdir -p downloads/aarch64
-          docker pull nomercyentertainment/ffmpeg-linux-aarch64:latest
-          docker create --name linux-aarch64-container nomercyentertainment/ffmpeg-linux-aarch64:latest
-          docker cp linux-aarch64-container:/build/ffmpeg-8.0-linux-aarch64.tar.gz downloads/ffmpeg-8.0-linux-aarch64.tar.gz || echo "File not found in container."
-          # docker cp linux-aarch64-container:/build/aarch64 downloads/aarch64 || echo "Directory not found in container."
-          docker rm linux-aarch64-container
-
-      - name: Export Windows x86_64 Artifact
-        run: |
-          mkdir -p downloads/windows-x86_64
-          docker pull nomercyentertainment/ffmpeg-windows-x86_64:latest
-          docker create --name windows-x86_64-container nomercyentertainment/ffmpeg-windows-x86_64:latest
-          docker cp windows-x86_64-container:/build/ffmpeg-8.0-windows-x86_64.zip downloads/ffmpeg-8.0-windows-x86_64.zip || echo "File not found in container."
-          # docker cp windows-x86_64-container:/build/windows downloads/windows-x86_64 || echo "Directory not found in container."
-          docker rm windows-x86_64-container
-
-      # - name: Export Windows arm64 Artifact
-        # run: |
-        #   mkdir -p downloads/windows-arm64
-        #   docker pull nomercyentertainment/ffmpeg-windows-arm64:latest
-        #   docker create --name windows-arm64-container nomercyentertainment/ffmpeg-windows-arm64:latest
-        #   docker cp windows-arm64-container:/build/ffmpeg-8.0-windows-arm64.tar.gz downloads/ffmpeg-8.0-windows-arm64.tar.gz || echo "File not found in container."
-        #   docker cp windows-arm64-container:/build/windows downloads/windows-arm64 || echo "Directory not found in container."
-        #   docker rm windows-arm64-container
-
-      - name: Export Darwin x86_64 Artifact
-        run: |
-          mkdir -p downloads/darwin/x86_64
-          docker pull nomercyentertainment/ffmpeg-darwin-x86_64:latest
-          docker create --name darwin-x86_64-container nomercyentertainment/ffmpeg-darwin-x86_64:latest
-          docker cp darwin-x86_64-container:/build/ffmpeg-8.0-darwin-x86_64.tar.gz downloads/ffmpeg-8.0-darwin-x86_64.tar.gz || echo "File not found in container."
-          # docker cp darwin-x86_64-container:/build/darwin/x86_64 downloads/darwin/x86_64 || echo "Directory not found in container."
-          docker rm darwin-x86_64-container
-
-      - name: Export Darwin arm64 Artifact
-        run: |
-          mkdir -p downloads/darwin/arm64
-          docker pull nomercyentertainment/ffmpeg-darwin-arm64:latest
-          docker create --name darwin-arm64-container nomercyentertainment/ffmpeg-darwin-arm64:latest
-          docker cp darwin-arm64-container:/build/ffmpeg-8.0-darwin-arm64.tar.gz downloads/ffmpeg-8.0-darwin-arm64.tar.gz || echo "File not found in container."
-          # docker cp darwin-arm64-container:/build/darwin/arm64 downloads/darwin/arm64 || echo "Directory not found in container."
-          docker rm darwin-arm64-container
+          for platform in "${!platforms[@]}"; do
+            echo "🚀 Exporting $platform..."
+            if docker pull nomercyentertainment/ffmpeg-${platform}:latest; then
+              docker create --name ${platform}-container nomercyentertainment/ffmpeg-${platform}:latest
+              if docker cp ${platform}-container:/build/ffmpeg-8.0-${platform}.${platforms[$platform]} downloads/ffmpeg-8.0-${platform}.${platforms[$platform]}; then
+                echo "✅ Successfully exported $platform"
+                ls -lh downloads/ffmpeg-8.0-${platform}.${platforms[$platform]}
+              else
+                echo "⚠️ Artifact not found for $platform"
+              fi
+              docker rm ${platform}-container
+            else
+              echo "⚠️ Failed to pull image for $platform"
+            fi
+          done
+          
+          # Display final artifacts
+          echo "📦 Final artifacts:"
+          ls -lh downloads/ || echo "No artifacts found"
       
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: downloads/
+          retention-days: 30
+          
+      - name: Create Artifact Summary
+        run: |
+          echo "## Build Artifacts Summary" > artifact-summary.md
+          echo "Generated: $(date)" >> artifact-summary.md
+          echo "" >> artifact-summary.md
+          
+          if [ -d downloads ] && [ "$(ls -A downloads)" ]; then
+            echo "### Successfully Built Platforms:" >> artifact-summary.md
+            for file in downloads/*; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                size=$(du -h "$file" | cut -f1)
+                echo "- **$filename**: $size" >> artifact-summary.md
+              fi
+            done
+          else
+            echo "⚠️ No artifacts were generated" >> artifact-summary.md
+          fi
+          
+          echo "" >> artifact-summary.md
+          echo "### Cache Performance" >> artifact-summary.md
+          echo "- Docker registry cache: Enabled" >> artifact-summary.md
+          echo "- Local buildx cache: Enabled" >> artifact-summary.md
+          echo "- Dependency cache: Enabled" >> artifact-summary.md
+          echo "- Artifact cache: Enabled" >> artifact-summary.md
+          
+          cat artifact-summary.md
+
+      - name: Upload Artifact Summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact-summary
+          path: artifact-summary.md
+          retention-days: 30

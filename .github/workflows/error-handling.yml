@@ -1,0 +1,158 @@
+name: Error Handling & Retry Logic
+
+on:
+  workflow_call:
+    inputs:
+      max_retries:
+        description: 'Maximum number of retries for failed steps'
+        required: false
+        type: number
+        default: 3
+      retry_delay:
+        description: 'Delay between retries in seconds'
+        required: false
+        type: number
+        default: 30
+      notification_webhook:
+        description: 'Webhook URL for failure notifications'
+        required: false
+        type: string
+    outputs:
+      success:
+        description: 'Whether the workflow succeeded'
+        value: ${{ jobs.error-handler.outputs.success }}
+      retry_count:
+        description: 'Number of retries performed'
+        value: ${{ jobs.error-handler.outputs.retry_count }}
+
+jobs:
+  error-handler:
+    runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.final-status.outputs.success }}
+      retry_count: ${{ steps.retry-counter.outputs.count }}
+    steps:
+      - name: Initialize Retry Counter
+        id: retry-counter
+        run: |
+          echo "count=0" >> $GITHUB_OUTPUT
+          echo "max_retries=${{ inputs.max_retries }}" >> $GITHUB_OUTPUT
+
+      - name: Error Recovery Functions
+        id: error-functions
+        run: |
+          # Create error handling functions
+          cat > error_handler.sh << 'EOF'
+          #!/bin/bash
+          
+          # Retry function with exponential backoff
+          retry_with_backoff() {
+            local max_attempts=$1
+            local delay=$2
+            local command="$3"
+            local attempt=1
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "🔄 Attempt $attempt/$max_attempts: $command"
+              
+              if eval "$command"; then
+                echo "✅ Command succeeded on attempt $attempt"
+                return 0
+              else
+                if [ $attempt -eq $max_attempts ]; then
+                  echo "❌ Command failed after $max_attempts attempts"
+                  return 1
+                fi
+                
+                local sleep_time=$((delay * (2 ** (attempt - 1))))
+                echo "⏰ Waiting ${sleep_time}s before retry..."
+                sleep $sleep_time
+                ((attempt++))
+              fi
+            done
+          }
+          
+          # Docker-specific retry for network issues
+          docker_retry() {
+            local command="$1"
+            local max_attempts=5
+            local delay=10
+            
+            retry_with_backoff $max_attempts $delay "$command"
+          }
+          
+          # Build-specific error recovery
+          build_error_recovery() {
+            local error_type="$1"
+            local platform="$2"
+            
+            case $error_type in
+              "disk_space")
+                echo "🧹 Cleaning up disk space..."
+                docker system prune -af --volumes || true
+                docker builder prune -af || true
+                rm -rf /tmp/* || true
+                ;;
+              "network")
+                echo "🌐 Network error detected, waiting and retrying..."
+                sleep 30
+                ;;
+              "dependency")
+                echo "📦 Dependency error, clearing caches..."
+                rm -rf ~/.cache/* || true
+                ;;
+              "build_failure")
+                echo "🔧 Build failure detected for $platform"
+                # Could implement platform-specific recovery here
+                ;;
+              *)
+                echo "❓ Unknown error type: $error_type"
+                ;;
+            esac
+          }
+          
+          # Send notification function
+          send_notification() {
+            local webhook_url="$1"
+            local message="$2"
+            local level="$3"
+            
+            if [ -n "$webhook_url" ]; then
+              curl -X POST "$webhook_url" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"text\": \"[$level] NoMercy FFmpeg Build: $message\",
+                  \"username\": \"GitHub Actions\",
+                  \"icon_emoji\": \":warning:\"
+                }" || echo "Failed to send notification"
+            fi
+          }
+          EOF
+          
+          chmod +x error_handler.sh
+          echo "✅ Error handling functions created"
+
+      - name: Test Error Handling Functions
+        run: |
+          source error_handler.sh
+          
+          # Test retry mechanism
+          echo "🧪 Testing retry mechanism..."
+          retry_with_backoff 2 1 "echo 'Test command'"
+          
+          # Test notification (without actually sending)
+          echo "🧪 Testing notification function..."
+          send_notification "" "Test message" "INFO"
+
+      - name: Export Error Handling Functions
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-handling-functions
+          path: error_handler.sh
+          retention-days: 1
+
+      - name: Final Status Check
+        id: final-status
+        run: |
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "✅ Error handling workflow completed successfully"

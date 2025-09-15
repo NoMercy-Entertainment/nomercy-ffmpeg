@@ -1,0 +1,297 @@
+name: Reusable Docker Build
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile:
+        description: 'Dockerfile to build'
+        required: true
+        type: string
+      platform:
+        description: 'Platform name for tagging'
+        required: true
+        type: string
+      context:
+        description: 'Build context'
+        required: false
+        type: string
+        default: '.'
+      secrets_repo:
+        description: 'Whether to fetch secrets repository'
+        required: false
+        type: boolean
+        default: true
+      depends_on_base:
+        description: 'Whether this build depends on base image'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PASSWORD:
+        required: true
+      PAT_TOKEN:
+        required: false
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false  # Don't cancel other builds if one fails
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Check Available Space
+        run: |
+          echo "🔍 Checking available disk space..."
+          df -h
+          free -h
+          echo "Available space in /tmp: $(df -h /tmp | tail -1 | awk '{print $4}')"
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        timeout-minutes: 5
+
+      - name: Setup Error Handling
+        run: |
+          # Create error handling functions
+          cat > error_handler.sh << 'EOF'
+          #!/bin/bash
+          retry_with_backoff() {
+            local max_attempts=$1
+            local delay=$2
+            local command="$3"
+            local attempt=1
+            while [ $attempt -le $max_attempts ]; do
+              echo "🔄 Attempt $attempt/$max_attempts: $command"
+              if eval "$command"; then
+                echo "✅ Success on attempt $attempt"
+                return 0
+              fi
+              if [ $attempt -eq $max_attempts ]; then
+                echo "❌ Failed after $max_attempts attempts"
+                return 1
+              fi
+              local sleep_time=$((delay * (2 ** (attempt - 1))))
+              echo "⏰ Waiting ${sleep_time}s..."
+              sleep $sleep_time
+              ((attempt++))
+            done
+          }
+          docker_retry() {
+            retry_with_backoff 3 10 "$1"
+          }
+          EOF
+          chmod +x error_handler.sh
+          source error_handler.sh
+
+      - name: Set up Docker Buildx with Retry
+        run: |
+          source error_handler.sh
+          docker_retry "docker buildx create --use --driver docker-container --driver-opt network=host || true"
+          docker_retry "docker buildx inspect --bootstrap"
+
+      - name: Create Cache Directories
+        run: |
+          mkdir -p ~/.docker/buildx-cache
+          mkdir -p ~/.cache/pip
+          mkdir -p ~/.cache/npm
+
+      - name: Cache Docker Buildx
+        uses: actions/cache@v4
+        with:
+          path: ~/.docker/buildx-cache
+          key: ${{ runner.os }}-buildx-${{ inputs.platform }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ inputs.platform }}-
+            ${{ runner.os }}-buildx-
+
+      - name: Cache Build Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/npm
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.ccache
+          key: ${{ runner.os }}-deps-${{ inputs.platform }}-${{ hashFiles('scripts/**') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-${{ inputs.platform }}-
+            ${{ runner.os }}-deps-
+
+      - name: Login to DockerHub with Retry
+        run: |
+          source error_handler.sh
+          docker_retry "echo '${{ secrets.DOCKER_PASSWORD }}' | docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin"
+
+      - name: Checkout Secrets Repository
+        if: ${{ inputs.secrets_repo }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: master
+          token: ${{ secrets.PAT_TOKEN }}
+          repository: "NoMercy-Entertainment/FFMPEG-Secrets"
+          path: "${{ github.workspace }}/FFMPEG-Secrets"
+      
+      - name: Copy Secrets
+        if: ${{ inputs.secrets_repo }}
+        run: |
+          cp -r FFMPEG-Secrets/* ${{ github.workspace }}/scripts/
+          rm -rf FFMPEG-Secrets
+
+      - name: Build and Push Docker Image with Retry
+        run: |
+          source error_handler.sh
+          
+          # Build configuration
+          BUILD_ARGS="--file ${{ inputs.dockerfile }} \
+            --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest \
+            --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:${{ github.sha }} \
+            --cache-from type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache \
+            --cache-from type=registry,ref=nomercyentertainment/ffmpeg-base:buildcache \
+            --cache-from type=local,src=~/.docker/buildx-cache \
+            --cache-to type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache,mode=max \
+            --cache-to type=local,dest=~/.docker/buildx-cache-new,mode=max \
+            --platform linux/amd64 \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg DOCKER_BUILDKIT=1 \
+            --push \
+            ${{ inputs.context }}"
+          
+          # Function to handle build with monitoring
+          build_with_monitoring() {
+            echo "🚀 Starting Docker build for ${{ inputs.platform }}..."
+            
+            # Monitor disk space during build
+            (
+              while true; do
+                available=$(df /var/lib/docker | tail -1 | awk '{print $4}')
+                if [ "$available" -lt 1048576 ]; then  # Less than 1GB
+                  echo "⚠️ Low disk space: ${available}KB available"
+                  docker system prune -f || true
+                fi
+                sleep 60
+              done
+            ) &
+            MONITOR_PID=$!
+            
+            # Execute the build
+            if docker buildx build $BUILD_ARGS; then
+              kill $MONITOR_PID 2>/dev/null || true
+              echo "✅ Build completed successfully"
+              return 0
+            else
+              kill $MONITOR_PID 2>/dev/null || true
+              echo "❌ Build failed"
+              return 1
+            fi
+          }
+          
+          # Retry build with error recovery
+          MAX_BUILD_ATTEMPTS=2
+          for attempt in $(seq 1 $MAX_BUILD_ATTEMPTS); do
+            echo "🔄 Build attempt $attempt/$MAX_BUILD_ATTEMPTS"
+            
+            if build_with_monitoring; then
+              echo "✅ Build succeeded on attempt $attempt"
+              break
+            else
+              echo "❌ Build failed on attempt $attempt"
+              
+              if [ $attempt -lt $MAX_BUILD_ATTEMPTS ]; then
+                echo "🧹 Cleaning up before retry..."
+                docker system prune -af --volumes || true
+                docker builder prune -af || true
+                rm -rf /tmp/* || true
+                
+                echo "⏰ Waiting 30 seconds before retry..."
+                sleep 30
+              else
+                echo "💥 Build failed after $MAX_BUILD_ATTEMPTS attempts"
+                
+                # Generate build failure report
+                echo "## Build Failure Report" > build-failure-report.md
+                echo "Platform: ${{ inputs.platform }}" >> build-failure-report.md
+                echo "Dockerfile: ${{ inputs.dockerfile }}" >> build-failure-report.md
+                echo "Timestamp: $(date)" >> build-failure-report.md
+                echo "Attempts: $MAX_BUILD_ATTEMPTS" >> build-failure-report.md
+                echo "" >> build-failure-report.md
+                echo "### System Information:" >> build-failure-report.md
+                df -h >> build-failure-report.md
+                echo "" >> build-failure-report.md
+                docker system df >> build-failure-report.md
+                
+                exit 1
+              fi
+            fi
+          done
+        timeout-minutes: 180  # 3 hour timeout for builds
+
+      - name: Upload Build Failure Report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-report-${{ inputs.platform }}
+          path: build-failure-report.md
+          retention-days: 7
+
+      - name: Optimize Cache
+        if: success()
+        run: |
+          # Move cache to avoid cache bloat
+          if [ -d ~/.docker/buildx-cache-new ]; then
+            rm -rf ~/.docker/buildx-cache
+            mv ~/.docker/buildx-cache-new ~/.docker/buildx-cache
+            echo "✅ Cache optimized"
+          fi
+
+      - name: Verify Build Output
+        if: success()
+        run: |
+          source error_handler.sh
+          
+          echo "🔍 Verifying build output..."
+          docker_retry "docker pull nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest"
+          
+          # Test that the image can run
+          if docker run --rm nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest echo "Build verification successful"; then
+            echo "✅ Build verification passed"
+          else
+            echo "❌ Build verification failed"
+            exit 1
+          fi
+
+      - name: Clean up build artifacts
+        if: always()
+        run: |
+          echo "🧹 Cleaning up build artifacts..."
+          docker system prune -af --volumes || true
+          docker builder prune -af || true
+          rm -rf ~/.docker/buildx-cache-new || true
+          echo "✅ Cleanup completed"
+
+      - name: Send Success Notification
+        if: success()
+        run: |
+          echo "✅ Build completed successfully for ${{ inputs.platform }}"
+          echo "Image: nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest"
+          echo "Build time: $(date)"
+
+      - name: Send Failure Notification  
+        if: failure()
+        run: |
+          echo "❌ Build failed for ${{ inputs.platform }}"
+          echo "Check the build failure report artifact for details"
+          echo "Failure time: $(date)"
