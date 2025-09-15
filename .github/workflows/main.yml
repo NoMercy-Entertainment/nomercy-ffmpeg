@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - master
-      - ci-testing
   pull_request:
     branches:
       - master
-      - ci-testing
   workflow_dispatch:
     inputs:
       force_rebuild:
