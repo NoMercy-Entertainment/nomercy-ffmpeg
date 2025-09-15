@@ -40,12 +40,26 @@ Our build system uses a modular Docker-based approach with automated CI/CD pipel
 Our GitHub Actions workflows provide a complete automation pipeline:
 
 ```mermaid
-graph LR
+graph TD
     A[Push/PR] --> B[Detect Changes]
-    B --> C[Build Matrix]
-    C --> D[Security Scan]
-    D --> E[Test & Validate]
-    E --> F[Release Artifacts]
+    B --> C{Changes Found?}
+    C -->|Yes| D[Cache Warmup]
+    C -->|No| Z[Skip Build]
+    D --> E[Build Base Image]
+    E --> F[Parallel Platform Builds]
+    F --> G[Linux x86_64]
+    F --> H[Linux aarch64]
+    F --> I[Windows x86_64]
+    F --> J[macOS x86_64]
+    F --> K[macOS ARM64]
+    G --> L[Export Artifacts]
+    H --> L
+    I --> L
+    J --> L
+    K --> L
+    L --> M[Security Scan]
+    M --> N[Test & Validate]
+    N --> O[Release]
 ```
 
 ### Workflow Components

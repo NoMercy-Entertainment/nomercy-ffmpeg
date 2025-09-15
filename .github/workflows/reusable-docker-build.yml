@@ -61,34 +61,38 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         timeout-minutes: 5
-        
-      - name: Download Error Handling Functions
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: error-handling-functions
-          path: .
 
       - name: Setup Error Handling
         run: |
-          # Create error handling if not available
-          if [ ! -f error_handler.sh ]; then
-            cat > error_handler.sh << 'EOF'
-            #!/bin/bash
-            retry_with_backoff() {
-              local max_attempts=$1; local delay=$2; local command="$3"; local attempt=1
-              while [ $attempt -le $max_attempts ]; do
-                echo "🔄 Attempt $attempt/$max_attempts: $command"
-                if eval "$command"; then echo "✅ Success on attempt $attempt"; return 0; fi
-                if [ $attempt -eq $max_attempts ]; then echo "❌ Failed after $max_attempts attempts"; return 1; fi
-                local sleep_time=$((delay * (2 ** (attempt - 1))))
-                echo "⏰ Waiting ${sleep_time}s..."; sleep $sleep_time; ((attempt++))
-              done
-            }
-            docker_retry() { retry_with_backoff 3 10 "$1"; }
-            EOF
-            chmod +x error_handler.sh
-          fi
+          # Create error handling functions
+          cat > error_handler.sh << 'EOF'
+          #!/bin/bash
+          retry_with_backoff() {
+            local max_attempts=$1
+            local delay=$2
+            local command="$3"
+            local attempt=1
+            while [ $attempt -le $max_attempts ]; do
+              echo "🔄 Attempt $attempt/$max_attempts: $command"
+              if eval "$command"; then
+                echo "✅ Success on attempt $attempt"
+                return 0
+              fi
+              if [ $attempt -eq $max_attempts ]; then
+                echo "❌ Failed after $max_attempts attempts"
+                return 1
+              fi
+              local sleep_time=$((delay * (2 ** (attempt - 1))))
+              echo "⏰ Waiting ${sleep_time}s..."
+              sleep $sleep_time
+              ((attempt++))
+            done
+          }
+          docker_retry() {
+            retry_with_backoff 3 10 "$1"
+          }
+          EOF
+          chmod +x error_handler.sh
           source error_handler.sh
 
       - name: Set up Docker Buildx with Retry
