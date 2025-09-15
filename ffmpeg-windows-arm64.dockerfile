@@ -175,6 +175,8 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=windows /output/ffmpeg-8.0-windows-aarch64.zip /build/ffmpeg-8.0-windows-aarch64.zip
+ENV ffmpeg_version=8.0
 
-CMD ["cp", "/build/ffmpeg-8.0-windows-aarch64.zip", "/output"]
+COPY --from=windows /output/ffmpeg-${ffmpeg_version}-windows-aarch64.zip /build/ffmpeg-${ffmpeg_version}-windows-aarch64.zip
+
+CMD ["cp", "/build/ffmpeg-${ffmpeg_version}-windows-aarch64.zip", "/output"]
