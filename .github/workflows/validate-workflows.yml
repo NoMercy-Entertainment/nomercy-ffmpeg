@@ -11,8 +11,6 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    outputs:
-      ffmpegversion: '8.0'
     steps:
       - name: Check workflow status
         run: |
@@ -41,11 +39,11 @@ jobs:
           # Check if all assets are present
           ASSETS=$(echo $RELEASE | jq -r '.assets[].name')
           REQUIRED_ASSETS=(
-            "ffmpeg-${{ needs.validate.outputs.ffmpegversion }}-linux-x86_64"
-            "ffmpeg-${{ needs.validate.outputs.ffmpegversion }}-linux-aarch64"
-            "ffmpeg-${{ needs.validate.outputs.ffmpegversion }}-windows-x86_64"
-            "ffmpeg-${{ needs.validate.outputs.ffmpegversion }}-darwin-x86_64"
-            "ffmpeg-${{ needs.validate.outputs.ffmpegversion }}-darwin-arm64"
+            "ffmpeg-8.0-linux-x86_64"
+            "ffmpeg-8.0-linux-aarch64"
+            "ffmpeg-8.0-windows-x86_64"
+            "ffmpeg-8.0-darwin-x86_64"
+            "ffmpeg-8.0-darwin-arm64"
           )
 
           for asset in "${REQUIRED_ASSETS[@]}"; do

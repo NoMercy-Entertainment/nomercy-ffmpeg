@@ -19,7 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump-version.outputs.version }}      
-      ffmpegversion: '8.0'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -82,8 +81,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-linux-x86_64.tar.gz
-          asset_name: ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-linux-x86_64-${{ needs.check-build.outputs.version }}.tar.gz
+          asset_path: downloads/ffmpeg-8.0-linux-x86_64.tar.gz
+          asset_name: ffmpeg-8.0-linux-x86_64-${{ needs.check-build.outputs.version }}.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload Linux Aarch64 Release Asset
@@ -92,8 +91,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-linux-aarch64.tar.gz
-          asset_name: ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-linux-aarch64-${{ needs.check-build.outputs.version }}.tar.gz
+          asset_path: downloads/ffmpeg-8.0-linux-aarch64.tar.gz
+          asset_name: ffmpeg-8.0-linux-aarch64-${{ needs.check-build.outputs.version }}.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload Windows x86_64 Release Asset
@@ -102,8 +101,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-windows-x86_64.zip
-          asset_name: ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-windows-x86_64-${{ needs.check-build.outputs.version }}.zip
+          asset_path: downloads/ffmpeg-8.0-windows-x86_64.zip
+          asset_name: ffmpeg-8.0-windows-x86_64-${{ needs.check-build.outputs.version }}.zip
           asset_content_type: application/gzip
 
       # - name: Upload Windows aarch64 Release Asset
@@ -112,8 +111,8 @@ jobs:
         #   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # with:
         #   upload_url: ${{ steps.create-release.outputs.upload_url }}
-        #   asset_path: downloads/ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-windows-aarch64.tar.gz
-        #   asset_name: ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-windows-aarch64-${{ needs.check-build.outputs.version }}.tar.gz
+        #   asset_path: downloads/ffmpeg-8.0-windows-aarch64.tar.gz
+        #   asset_name: ffmpeg-8.0-windows-aarch64-${{ needs.check-build.outputs.version }}.tar.gz
         #   asset_content_type: application/gzip
 
       - name: Upload Darwin x86_64 Release Asset
@@ -122,8 +121,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-darwin-x86_64.tar.gz
-          asset_name: ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-darwin-x86_64-${{ needs.check-build.outputs.version }}.tar.gz
+          asset_path: downloads/ffmpeg-8.0-darwin-x86_64.tar.gz
+          asset_name: ffmpeg-8.0-darwin-x86_64-${{ needs.check-build.outputs.version }}.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload Darwin arm64 Release Asset
@@ -132,6 +131,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-darwin-arm64.tar.gz
-          asset_name: ffmpeg-${{ needs.check-build.outputs.ffmpegversion }}-darwin-arm64-${{ needs.check-build.outputs.version }}.tar.gz
+          asset_path: downloads/ffmpeg-8.0-darwin-arm64.tar.gz
+          asset_name: ffmpeg-8.0-darwin-arm64-${{ needs.check-build.outputs.version }}.tar.gz
           asset_content_type: application/gzip

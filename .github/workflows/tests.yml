@@ -22,8 +22,6 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         arch: [x86_64, arm64]
     continue-on-error: true
-    outputs:
-      ffmpegversion: '8.0'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -42,11 +40,11 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "x86_64" ]; then
-            FILE_NAME="downloads/ffmpeg-${{ needs.platform-tests-unix.outputs.ffmpegversion }}-linux-${{ matrix.arch }}.tar.gz"
+            FILE_NAME="downloads/ffmpeg-8.0-linux-${{ matrix.arch }}.tar.gz"
           elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            FILE_NAME="downloads/ffmpeg-${{ needs.platform-tests-unix.outputs.ffmpegversion }}-linux-aarch64.tar.gz"
+            FILE_NAME="downloads/ffmpeg-8.0-linux-aarch64.tar.gz"
           elif [ "${{ matrix.os }}" == "macos-latest" ]; then
-            FILE_NAME="downloads/ffmpeg-${{ needs.platform-tests-unix.outputs.ffmpegversion }}-darwin-${{ matrix.arch }}.tar.gz"
+            FILE_NAME="downloads/ffmpeg-8.0-darwin-${{ matrix.arch }}.tar.gz"
           fi
 
           tar -xvf $FILE_NAME
@@ -68,8 +66,6 @@ jobs:
         os: [windows-latest]
         arch: [x86_64] #, arm64]
     continue-on-error: true
-    outputs:
-      ffmpegversion: '8.0'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -87,7 +83,7 @@ jobs:
       - name: Unpack ffmpeg binary
         shell: bash
         run: |
-          FILE_NAME="downloads/ffmpeg-${{ needs.platform-tests-windows.outputs.ffmpegversion }}-windows-${{ matrix.arch }}.zip"
+          FILE_NAME="downloads/ffmpeg-8.0-windows-${{ matrix.arch }}.zip"
           unzip -o $FILE_NAME
 
       - name: Run Tests
