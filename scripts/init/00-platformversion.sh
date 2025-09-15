@@ -26,3 +26,5 @@ ${AR} rcs libplatformversion.a platformversion.o
 cp libplatformversion.a ${PREFIX}/lib/
 
 add_ldflag "-lplatformversion"
+
+exit 0

@@ -116,3 +116,26 @@ apply_sed() {
     sed -i "$prefix_flags/$search_pattern/$replacement$suffix_flags" "$file_path" || return 1
     return 0
 }
+
+check_enabled() {
+    # Controleer of er een argument is doorgegeven
+    if [ -z "$1" ]; then
+        return 1
+    fi
+
+    # Het woord om te vinden wordt opgeslagen in een variabele
+    local search_word="--enable-$1"
+    local FILE_PATH="/build/enable.txt"
+
+    # Controleer of het bestand bestaat
+    if [ ! -f "$FILE_PATH" ]; then
+        return 1
+    fi
+
+    # Zoek naar het woord in het bestand
+    if grep -iqE "$search_word" "$FILE_PATH"; then
+        return 0
+    else
+        return 1
+    fi
+}

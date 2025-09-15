@@ -81,7 +81,7 @@ echo "⚙️ Registering helper functions"
 
 mkdir -p /logs
 . /scripts/init/helpers.sh
-export -f hr text_with_padding add_enable add_cflag add_ldflag add_extralib join_lines split_lines clean_whitespace apply_sed
+export -f hr text_with_padding add_enable add_cflag add_ldflag add_extralib join_lines split_lines clean_whitespace apply_sed check_enabled
 
 text_with_padding "✅ Helper functions registered" ""
 hr # Print a horizontal line

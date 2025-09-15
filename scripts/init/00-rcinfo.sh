@@ -36,3 +36,5 @@ PRODUCTVERSION      ${FILEVERSION}
 EOF
 
 chmod +x "/build/ffmpeg/fftools/fftoolsres.rc" || exit 1
+
+exit 0

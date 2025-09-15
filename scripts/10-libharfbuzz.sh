@@ -14,7 +14,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-ninja -C build && ninja -C build install
+ninja -j$(nproc) -C build && ninja -C build install
 rm -rf /build/harfbuzz
 
 add_enable "--enable-libharfbuzz"
