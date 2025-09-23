@@ -60,7 +60,7 @@ jobs:
   # Build the base image that others depend on
   build-base:
     needs: [detect-changes, cache-warmup]
-    if: always() && (needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
+    if: needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-base.dockerfile
@@ -81,7 +81,6 @@ jobs:
       dockerfile: ffmpeg-linux-x86_64.dockerfile
       platform: linux-x86_64
       secrets_repo: true
-      group: Fillz
       labels: self-hosted,builderz
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
@@ -96,7 +95,6 @@ jobs:
       dockerfile: ffmpeg-linux-aarch64.dockerfile
       platform: linux-aarch64
       secrets_repo: true
-      group: Fillz
       labels: self-hosted,builderz
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
@@ -111,7 +109,6 @@ jobs:
       dockerfile: ffmpeg-windows-x86_64.dockerfile
       platform: windows-x86_64
       secrets_repo: true
-      group: Fillz
       labels: self-hosted,builderz
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
