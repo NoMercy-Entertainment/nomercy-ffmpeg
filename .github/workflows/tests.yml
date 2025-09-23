@@ -30,15 +30,15 @@ jobs:
             arch: aarch64
             platform: linux
             file_ext: tar.gz
-          - os: macos-latest
+          - os: ubuntu-latest
             arch: x86_64
             platform: darwin
             file_ext: tar.gz
-          - os: macos-latest
+          - os: ubuntu-latest
             arch: arm64
             platform: darwin
             file_ext: tar.gz
-          - os: windows-latest
+          - os: ubuntu-latest
             arch: x86_64
             platform: windows
             file_ext: zip
