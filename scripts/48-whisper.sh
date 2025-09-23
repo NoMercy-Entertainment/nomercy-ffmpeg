@@ -12,8 +12,8 @@ git clone --branch v${whisper_version} https://github.com/ggml-org/whisper.cpp.g
 
 rm -rf build
 
-chmod +x ./models/download-ggml-model.sh
-./models/download-ggml-model.sh base
+# chmod +x ./models/download-ggml-model.sh
+# ./models/download-ggml-model.sh base
 
 NPROC=$(nproc)
 
