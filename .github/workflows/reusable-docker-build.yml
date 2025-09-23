@@ -26,6 +26,14 @@ on:
         required: false
         type: boolean
         default: true
+      group:
+        description: 'Runner group to use'
+        required: true
+        type: string
+      labels:
+        description: 'Labels for the self-hosted runner'
+        required: true
+        type: string
     secrets:
       DOCKER_USERNAME:
         required: true
@@ -36,7 +44,9 @@ on:
 
 jobs:
   docker-build:
-    runs-on: self-hosted
+    runs-on:
+      group: ${{ inputs.group }}
+      labels: ${{ inputs.labels }}
     strategy:
       fail-fast: false  # Don't cancel other builds if one fails
     steps:

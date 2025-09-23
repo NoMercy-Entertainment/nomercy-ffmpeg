@@ -67,6 +67,8 @@ jobs:
       platform: base
       secrets_repo: false
       depends_on_base: false
+      group: default
+      labels: ubuntu-latest
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -80,6 +82,8 @@ jobs:
       dockerfile: ffmpeg-linux-x86_64.dockerfile
       platform: linux-x86_64
       secrets_repo: true
+      group: Fillz
+      labels: self-hosted,builderz
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -93,6 +97,8 @@ jobs:
       dockerfile: ffmpeg-linux-aarch64.dockerfile
       platform: linux-aarch64
       secrets_repo: true
+      group: Fillz
+      labels: self-hosted,builderz
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -106,6 +112,8 @@ jobs:
       dockerfile: ffmpeg-windows-x86_64.dockerfile
       platform: windows-x86_64
       secrets_repo: true
+      group: windows-group
+      labels: self-hosted,builderz
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -119,6 +127,8 @@ jobs:
       dockerfile: ffmpeg-darwin-x86_64.dockerfile
       platform: darwin-x86_64
       secrets_repo: true
+      group: Stoney
+      labels: self-hosted,Eagle
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -132,6 +142,8 @@ jobs:
       dockerfile: ffmpeg-darwin-arm64.dockerfile
       platform: darwin-arm64
       secrets_repo: true
+      group: Stoney
+      labels: self-hosted,Eagle
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
