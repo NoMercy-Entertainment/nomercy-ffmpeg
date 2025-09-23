@@ -91,9 +91,19 @@ hr # Print a horizontal line
 text_with_padding "🔍 Checking for scripts..." ""
 
 if [[ ${TARGET_OS} == "darwin" ]]; then
-    mv /scripts/init/00-platformversion.sh /scripts/00-platformversion.sh
+    darwin_extra_scripts=(/scripts/includes/darwin/*.sh)
+    for script in "${darwin_extra_scripts[@]}"; do
+        if [[ -f "${script}" ]]; then
+            cp "${script}" /scripts/
+        fi
+    done
 elif [[ ${TARGET_OS} == "windows" ]]; then
-    mv /scripts/init/00-rcinfo.sh /scripts/00-rcinfo.sh
+    windows_extra_scripts=(/scripts/includes/windows/*.sh)
+    for script in "${windows_extra_scripts[@]}"; do
+        if [[ -f "${script}" ]]; then
+            cp "${script}" /scripts/
+        fi
+    done
 fi
 
 files=(/scripts/*.sh)    # Expand matching .sh files into an array
