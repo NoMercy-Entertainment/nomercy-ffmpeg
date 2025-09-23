@@ -154,7 +154,6 @@ jobs:
       - name: Build and Push Docker Image with Retry
         run: |
           source error_handler.sh
-          
           # Build configuration
           BUILD_ARGS="--file ${{ inputs.dockerfile }} \
             --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest \
@@ -169,58 +168,25 @@ jobs:
             --build-arg DOCKER_BUILDKIT=1 \
             --push \
             ${{ inputs.context }}"
-          
-          # Function to handle build with monitoring
-          build_with_monitoring() {
-            echo "🚀 Starting Docker build for ${{ inputs.platform }}..."
-            
-            # Monitor disk space during build
-            (
-              while true; do
-                available=$(df /var/lib/docker | tail -1 | awk '{print $4}')
-                if [ "$available" -lt 1048576 ]; then  # Less than 1GB
-                  echo "⚠️ Low disk space: ${available}KB available"
-                  docker system prune -f || true
-                fi
-                sleep 60
-              done
-            ) &
-            MONITOR_PID=$!
-            
-            # Execute the build
-            if docker buildx build $BUILD_ARGS; then
-              kill $MONITOR_PID 2>/dev/null || true
-              echo "✅ Build completed successfully"
-              return 0
-            else
-              kill $MONITOR_PID 2>/dev/null || true
-              echo "❌ Build failed"
-              return 1
-            fi
-          }
-          
+
           # Retry build with error recovery
           MAX_BUILD_ATTEMPTS=2
           for attempt in $(seq 1 $MAX_BUILD_ATTEMPTS); do
             echo "🔄 Build attempt $attempt/$MAX_BUILD_ATTEMPTS"
-            
-            if build_with_monitoring; then
+            if docker buildx build $BUILD_ARGS; then
               echo "✅ Build succeeded on attempt $attempt"
               break
             else
               echo "❌ Build failed on attempt $attempt"
-              
               if [ $attempt -lt $MAX_BUILD_ATTEMPTS ]; then
                 echo "🧹 Cleaning up before retry..."
                 docker system prune -af --volumes || true
                 docker builder prune -af || true
                 rm -rf /tmp/* || true
-                
                 echo "⏰ Waiting 30 seconds before retry..."
                 sleep 30
               else
                 echo "💥 Build failed after $MAX_BUILD_ATTEMPTS attempts"
-                
                 # Generate build failure report
                 echo "## Build Failure Report" > build-failure-report.md
                 echo "Platform: ${{ inputs.platform }}" >> build-failure-report.md
@@ -232,7 +198,6 @@ jobs:
                 df -h >> build-failure-report.md
                 echo "" >> build-failure-report.md
                 docker system df >> build-failure-report.md
-                
                 exit 1
               fi
             fi
