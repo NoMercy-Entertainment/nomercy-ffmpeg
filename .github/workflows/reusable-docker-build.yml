@@ -28,7 +28,7 @@ on:
         default: true
       group:
         description: 'Runner group to use'
-        required: true
+        required: false
         type: string
       labels:
         description: 'Labels for the self-hosted runner'

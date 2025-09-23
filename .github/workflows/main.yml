@@ -67,7 +67,6 @@ jobs:
       platform: base
       secrets_repo: false
       depends_on_base: false
-      group: default
       labels: ubuntu-latest
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
@@ -127,7 +126,6 @@ jobs:
       dockerfile: ffmpeg-darwin-x86_64.dockerfile
       platform: darwin-x86_64
       secrets_repo: true
-      group: default
       labels: ubuntu-latest
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
@@ -142,7 +140,6 @@ jobs:
       dockerfile: ffmpeg-darwin-arm64.dockerfile
       platform: darwin-arm64
       secrets_repo: true
-      group: default
       labels: ubuntu-latest
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
