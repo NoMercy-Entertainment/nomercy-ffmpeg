@@ -19,6 +19,7 @@ on:
 jobs:    
   # Only create release if tests passed
   check-prerequisites:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump-version.outputs.version }}

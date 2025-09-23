@@ -17,6 +17,7 @@ on:
 jobs:
   # Test platform builds with matrix strategy
   platform-tests:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -108,6 +109,7 @@ jobs:
 
   # Security scanning for Docker images
   security-scans:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
