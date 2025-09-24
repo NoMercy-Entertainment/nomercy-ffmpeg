@@ -140,11 +140,13 @@ text_with_padding() {
 }
 
 check_command() {
-    if [[ ! -x ${Workspace}/ffmpeg ]]; then
+    if [[ ! -f ${Workspace}/ffmpeg ]]; then
         printf "%s\n" "❌ FFmpeg executable not found in current directory"
         exit 1
     fi
-    chmod +x ${Workspace}/ffmpeg
+    if [[ ! -x ${Workspace}/ffmpeg ]]; then
+        chmod +x ${Workspace}/ffmpeg
+    fi
 }
 
 run_test() {
