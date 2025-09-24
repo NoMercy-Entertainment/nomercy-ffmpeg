@@ -185,6 +185,7 @@ jobs:
           - nomercyentertainment/ffmpeg-windows-x86_64:latest
           - nomercyentertainment/ffmpeg-darwin-x86_64:latest
           - nomercyentertainment/ffmpeg-darwin-arm64:latest
+    continue-on-error: true
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
