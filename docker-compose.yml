@@ -48,7 +48,7 @@ services:
     build:
       context: .
       args:
-        DEBUG: "false"
+        DEBUG: "true"
       dockerfile: ffmpeg-windows-x86_64.dockerfile
     depends_on:
       - ffmpeg-base

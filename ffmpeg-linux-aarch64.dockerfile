@@ -136,6 +136,7 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --enable-version3 \
     --enable-nonfree \
     ${FFMPEG_ENABLES} \
+    --enable-filter=all \
     --enable-runtime-cpudetect \
     --extra-version="NoMercy-MediaServer" \
     --extra-cflags="-static -static-libgcc -static-libstdc++" \

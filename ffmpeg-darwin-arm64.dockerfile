@@ -179,6 +179,7 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --enable-version3 \
     --enable-nonfree \
     ${FFMPEG_ENABLES} \
+    --enable-filter=all \
     --enable-runtime-cpudetect \
     --cc=${CC} \
     --cxx=${CXX} \
