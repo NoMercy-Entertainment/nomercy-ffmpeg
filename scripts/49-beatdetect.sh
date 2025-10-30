@@ -1,5 +1,10 @@
 #!/bin/bash
 
+#/******************************/#
+#/*  Made by Phillippe Pelzer  */#
+#/*  https://github.com/Fill84 */#
+#/******************************/#
+
 # Copy the custom filter source
 cp /scripts/includes/af_beatdetect.c /build/ffmpeg/libavfilter/af_beatdetect.c
 

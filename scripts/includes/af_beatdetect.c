@@ -1,3 +1,8 @@
+/******************************/
+/*  Made by Phillippe Pelzer  */
+/*  https://github.com/Fill84 */
+/******************************/
+
 #include <math.h>
 
 #include "libavutil/channel_layout.h"
@@ -59,13 +64,11 @@ static av_cold void uninit(AVFilterContext *ctx)
     // Calculate final average BPM from all detected beats
     if (s->bpm > 0)
     {
-        av_log(ctx, AV_LOG_INFO, "\n========================================\n");
-        av_log(ctx, AV_LOG_INFO, "Final Average BPM: %.2f\n", s->bpm);
-        av_log(ctx, AV_LOG_INFO, "========================================\n");
+        av_log(ctx, AV_LOG_INFO, "lavfi.beatdetect.bpm.average=%.2f", s->bpm);
     }
     else
     {
-        av_log(ctx, AV_LOG_WARNING, "No beats detected - try lowering the threshold\n");
+        av_log(ctx, AV_LOG_WARNING, "lavfi.beatdetect.bpm.average=null");
     }
 
     av_freep(&s->energy_history);
@@ -163,8 +166,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     // Beat detection logic with minimum interval constraint
     if (energy > avg_energy * s->threshold)
     {
-        av_log(ctx, AV_LOG_WARNING, "BEAT DETECTED! Energy: %.6f > Avg: %.6f * %.2f\n",
-               energy, avg_energy, s->threshold);
+        // av_log(ctx, AV_LOG_WARNING, "BEAT DETECTED! Energy: %.6f > Avg: %.6f * %.2f\n",
+        //        energy, avg_energy, s->threshold);
         if (s->last_beat_pts != AV_NOPTS_VALUE)
         {
             int64_t beat_interval = frame->pts - s->last_beat_pts;
@@ -204,7 +207,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
         }
         else
         {
-            // First beat detected
             s->last_beat_pts = frame->pts;
             av_dict_set(&frame->metadata, "lavfi.beatdetect.beat", "1", 0);
         }
