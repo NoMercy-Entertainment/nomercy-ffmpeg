@@ -64,11 +64,11 @@ static av_cold void uninit(AVFilterContext *ctx)
     // Calculate final average BPM from all detected beats
     if (s->bpm > 0)
     {
-        av_log(ctx, AV_LOG_INFO, "lavfi.beatdetect.bpm.average=%.2f", s->bpm);
+        av_log(ctx, AV_LOG_INFO, "lavfi.beatdetect.bpm.average=%.2f\n", s->bpm);
     }
     else
     {
-        av_log(ctx, AV_LOG_WARNING, "lavfi.beatdetect.bpm.average=null");
+        av_log(ctx, AV_LOG_WARNING, "lavfi.beatdetect.bpm.average=null\n");
     }
 
     av_freep(&s->energy_history);
