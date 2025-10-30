@@ -18,7 +18,7 @@ on:
         description: 'Warm up caches before building'
         required: false
         type: boolean
-        default: false
+        default: true
 
 jobs:
   # Detect what has changed to optimize builds
@@ -123,7 +123,7 @@ jobs:
       dockerfile: ffmpeg-darwin-x86_64.dockerfile
       platform: darwin-x86_64
       secrets_repo: true
-      labels: ubuntu-latest
+      labels: beast-unit
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -137,7 +137,7 @@ jobs:
       dockerfile: ffmpeg-darwin-arm64.dockerfile
       platform: darwin-arm64
       secrets_repo: true
-      labels: ubuntu-latest
+      labels: beast-unit
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
