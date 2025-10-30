@@ -68,7 +68,7 @@ static av_cold void uninit(AVFilterContext *ctx)
     }
     else
     {
-        av_log(ctx, AV_LOG_WARNING, "lavfi.beatdetect.bpm.average=null\n");
+        av_log(ctx, AV_LOG_WARNING, "lavfi.beatdetect.bpm.average=0.00\n");
     }
 
     av_freep(&s->energy_history);
