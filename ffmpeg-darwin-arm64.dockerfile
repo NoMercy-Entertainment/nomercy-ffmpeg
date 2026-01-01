@@ -51,7 +51,7 @@ RUN echo "------------------------------------------------------" \
     && echo "------------------------------------------------------"
 
 ENV PREFIX=/ffmpeg_build/darwin
-ENV MACOSX_DEPLOYMENT_TARGET=10.15.0
+ENV MACOSX_DEPLOYMENT_TARGET=11.0.0
 ENV SDK_VERSION=15.1
 ENV SDK_PATH=${PREFIX}/osxcross/SDK/MacOSX${SDK_VERSION}.sdk
 ENV OSX_FRAMEWORKS=${SDK_PATH}/System/Library/Frameworks
