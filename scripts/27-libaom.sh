@@ -4,7 +4,7 @@ cd /build/libaom
 mkdir -p build && cd build
 cmake -S .. -B . \
     ${CMAKE_COMMON_ARG} \
-    -DENABLE_EXAMPLES=NO -DENABLE_TESTS=NO -DENABLE_TOOLS=NO -DCONFIG_TUNE_VMAF=1 | tee /ffmpeg_build.log
+    -DENABLE_EXAMPLES=NO -DENABLE_TESTS=NO -DENABLE_TOOLS=NO -DCONFIG_TUNE_VMAF=1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

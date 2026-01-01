@@ -5,7 +5,7 @@ export NOCONFIGURE=1
 ./autogen.sh
 touch doc/twolame.1
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-sndfile \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

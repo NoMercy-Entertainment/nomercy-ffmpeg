@@ -9,7 +9,7 @@ fi
 if [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "linux" ]]; then
     cd /build/libcddb
     ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic ${EXTRA_FLAGS} \
-        --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -25,7 +25,7 @@ touch src/cd-drive.1 src/cd-info.1 src/cd-read.1 src/iso-info.1 src/iso-read.1
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic ${EXTRA_FLAGS} \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic ${EXTRA_FLAGS} \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -44,7 +44,7 @@ cd /build/libcdio-paranoia
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic ${EXTRA_FLAGS} \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic ${EXTRA_FLAGS} \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

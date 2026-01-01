@@ -3,7 +3,7 @@
 cd /build/frei0r
 mkdir -p build && cd build
 cmake -S .. -B . \
-    ${CMAKE_COMMON_ARG} | tee /ffmpeg_build.log
+    ${CMAKE_COMMON_ARG} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

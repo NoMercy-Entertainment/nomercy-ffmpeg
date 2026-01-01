@@ -8,7 +8,7 @@ fi
 cd /build/fftw3
 ./bootstrap.sh --prefix=${PREFIX} --enable-static --disable-shared --enable-maintainer-mode --disable-fortran \
     --disable-doc --with-our-malloc --enable-threads --with-combined-threads --with-incoming-stack-boundary=2 \
-    --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

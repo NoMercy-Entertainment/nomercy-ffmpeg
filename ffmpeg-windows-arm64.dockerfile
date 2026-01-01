@@ -103,6 +103,7 @@ RUN echo "[binaries]" > /build/cross_file.txt && \
     echo "windres = '${WINDRES}'" >> /build/cross_file.txt && \
     echo "dlltool = '${DLLTOOL}'" >> /build/cross_file.txt && \
     echo "pkgconfig = '${PKG_CONFIG}'" >> /build/cross_file.txt && \
+    echo "pkg-config = '${PKG_CONFIG}'" >> /build/cross_file.txt && \
     echo "" >> /build/cross_file.txt && \
     echo "[host_machine]" >> /build/cross_file.txt && \
     echo "system = 'windows'" >> /build/cross_file.txt && \
@@ -132,6 +133,12 @@ COPY ./scripts /scripts
 RUN touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_libflags.txt \
     && chmod +x /scripts/init/init.sh \
     && /scripts/init/init.sh \
+    || (echo "❌ FFmpeg build failed" ; exit 1)
+
+COPY ./dev /test
+RUN ls -la /test
+RUN chmod +x /test/init/dev.sh \
+    && /test/init/dev.sh \
     || (echo "❌ FFmpeg build failed" ; exit 1)
 
 # ffmpeg

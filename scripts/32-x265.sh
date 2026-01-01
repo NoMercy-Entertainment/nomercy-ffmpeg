@@ -13,9 +13,6 @@ if [[ "${TARGET_OS}" == "windows" ]]; then
     rm -rf build/windows/12bit build/windows/10bit build/windows/8bit
     mkdir -p build/windows/12bit build/windows/10bit build/windows/8bit
     cd build/windows/12bit
-# elif [[ "${ARCH}" == "aarch64" && "${TARGET_OS}" == "linux" ]]; then
-#     cp -r /build/libdavs2/build/linux /build/libdavs2/build/linux-aarch64
-#     cd /build/libdavs2/build/linux-aarch64
 elif [[ "${TARGET_OS}" == "darwin" ]]; then
     rm -rf build/windows/12bit build/windows/10bit build/windows/8bit
     mkdir -p build/windows/12bit build/windows/10bit build/windows/8bit

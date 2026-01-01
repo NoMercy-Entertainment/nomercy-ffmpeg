@@ -13,7 +13,7 @@ cd /build/fdk-aac
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared \
     --host=${CROSS_PREFIX%-} ${FDK_AAC_TARGET}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared \
-    --host=${CROSS_PREFIX%-} ${FDK_AAC_TARGET} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} ${FDK_AAC_TARGET} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

@@ -18,7 +18,7 @@ ENV ffmpeg_version=8.0 \
     fribidi_version=1.0.16 \
     libogg_version=1.3.5 \
     openssl_version=3.4.0 \
-    fontconfig_version=2.16.1 \
+    fontconfig_version=2.17.0 \
     libpciaccess_version=0.18.1 \
     xcbproto_version=1.17.0 \
     xorgproto_version=2024.1 \
@@ -121,11 +121,12 @@ RUN echo "------------------------------------------------------" \
     libssl-dev \
     libtool \
     libxext-dev \
-    meson \
     nasm \
+    ninja-build \
     nvidia-cuda-toolkit \
     pkg-config \
     python3 \
+    python3-pip \
     python3-dev \
     python3-venv \
     subversion \
@@ -137,6 +138,14 @@ RUN echo "------------------------------------------------------" \
     && apt-get upgrade -y >/dev/null 2>&1 && apt-get autoremove -y >/dev/null 2>&1 && apt-get autoclean -y >/dev/null 2>&1 && apt-get clean -y >/dev/null 2>&1 \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     && echo "✅ Installations completed successfully" \
+    && echo "------------------------------------------------------"
+
+# Install meson >= 1.4.0 via pip (required for glib 2.86+)
+RUN \
+    echo "------------------------------------------------------" \
+    && echo "🔄 Installing Meson via pip" \
+    && python3 -m pip install --no-cache-dir --break-system-packages meson>=1.4.0 >/dev/null 2>&1 \
+    && echo "✅ Meson installation completed successfully ($(meson --version))" \
     && echo "------------------------------------------------------"
 
 RUN git config --global user.email "builder@nomercy.tv" \

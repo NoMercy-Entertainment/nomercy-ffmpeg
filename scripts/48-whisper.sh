@@ -56,7 +56,7 @@ if [[ ${TARGET_OS} == "windows" ]]; then
         -DWHISPER_BUILD_SERVER=OFF \
         -DWHISPER_BUILD_TESTS=OFF \
         -DWHISPER_BUILD_EXAMPLES=OFF \
-        -DVERBOSE=ON | tee /ffmpeg_build.log
+        -DVERBOSE=ON | log
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         CFLAGS=${OLD_CFLAGS}
         CXXFLAGS=${OLD_CXXFLAGS}
@@ -64,7 +64,7 @@ if [[ ${TARGET_OS} == "windows" ]]; then
         exit 1
     fi
 
-    ninja -j${NPROC} -C build 2>&1 | tee -a /ffmpeg_build.log
+    ninja -j${NPROC} -C build 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         CFLAGS=${OLD_CFLAGS}
         CXXFLAGS=${OLD_CXXFLAGS}
@@ -72,7 +72,7 @@ if [[ ${TARGET_OS} == "windows" ]]; then
         exit 1
     fi
 
-    ninja -C build install 2>&1 | tee -a /ffmpeg_build.log
+    ninja -C build install 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         CFLAGS=${OLD_CFLAGS}
         CXXFLAGS=${OLD_CXXFLAGS}
@@ -98,19 +98,19 @@ else
         -DWHISPER_BUILD_TOOLS=OFF \
         -DWHISPER_BUILD_SERVER=OFF \
         -DWHISPER_BUILD_EXAMPLES=OFF \
-        -DWHISPER_BUILD_TESTS=OFF -DVERBOSE=ON | tee /ffmpeg_build.log
+        -DWHISPER_BUILD_TESTS=OFF -DVERBOSE=ON | log
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Error: Whisper configure failed" >> /ffmpeg_build.log
         exit 1
     fi
 
-    cmake --build . -j${NPROC} --config Release --verbose | tee -a /ffmpeg_build.log
+    cmake --build . -j${NPROC} --config Release --verbose | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Error: Whisper build failed" >> /ffmpeg_build.log
         exit 1
     fi
 
-    cmake --install . --config Release | tee -a /ffmpeg_build.log
+    cmake --install . --config Release | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Error: Whisper install failed" >> /ffmpeg_build.log
         exit 1
@@ -118,7 +118,7 @@ else
 fi
 
 if [[ ! -f "${PREFIX}/lib/pkgconfig/whisper.pc" ]]; then
-    echo "Error: whisper.pc not found" >>/ffmpeg_build.log
+    log "Error: whisper.pc not found"
     exit 1
 fi
 

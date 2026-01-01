@@ -105,6 +105,7 @@ RUN echo "[constants]" > /build/cross_file.txt && \
     echo "ranlib = '${RANLIB}'" >> /build/cross_file.txt && \
     echo "strip = '${STRIP}'" >> /build/cross_file.txt && \
     echo "pkgconfig = '${PKG_CONFIG}'" >> /build/cross_file.txt && \
+    echo "pkg-config = '${PKG_CONFIG}'" >> /build/cross_file.txt && \
     echo "" >> /build/cross_file.txt && \
     echo "[host_machine]" >> /build/cross_file.txt && \
     echo "system = 'darwin'" >> /build/cross_file.txt && \
@@ -154,6 +155,12 @@ RUN touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_li
     && /scripts/init/init.sh \
     || (echo "❌ FFmpeg build failed" ; exit 1)
 
+COPY ./dev /test
+
+RUN chmod +x /test/init/dev.sh \
+    && /test/init/dev.sh \
+    || (echo "❌ FFmpeg build failed" ; exit 1)
+
 # ffmpeg
 RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     && CFLAGS="${CFLAGS} $(cat /build/cflags.txt)" export CFLAGS \
@@ -187,7 +194,7 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --extra-cflags="-arch ${ARCH} -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}" \
     --extra-ldflags="-arch ${ARCH} -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}" \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
-    || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; false) \
+    || (cat "/ffmpeg_build.log" ; cat "ffbuild/config.log" ; echo "❌ FFmpeg build failed" ; false) \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
     && make -j$(nproc) >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \

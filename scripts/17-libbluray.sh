@@ -13,20 +13,20 @@ fi
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "libgpg-error configure failed" >>/ffmpeg_build.log
+    log "libgpg-error configure failed"
     exit 1
 fi
 
 make -j$(nproc) &>make.log || {
-    echo "$(cat make.log)" >>/ffmpeg_build.log
-    echo "Error: libgpg-error make failed." >>/ffmpeg_build.log
+    log "$(cat make.log)"
+    log "Error: libgpg-error make failed."
     exit 1
 }
 make install &>install.log || {
-    echo "$(cat install.log)" >>/ffmpeg_build.log
-    echo "Error: libgpg-error install failed." >>/ffmpeg_build.log
+    log "$(cat install.log)"
+    log "Error: libgpg-error install failed."
     exit 1
 }
 
@@ -66,20 +66,20 @@ fi
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc ${EXTRA_FLAGS} \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc ${EXTRA_FLAGS} \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "libgcrypt configure failed" >>/ffmpeg_build.log
+    log "libgcrypt configure failed"
     exit 1
 fi
 
 make -j$(nproc) &>make.log || {
-    echo "$(cat make.log)" >>/ffmpeg_build.log
-    echo "Error: libgcrypt make failed." >>/ffmpeg_build.log
+    log "$(cat make.log)"
+    log "Error: libgcrypt make failed."
     exit 1
 }
 make install &>install.log || {
-    echo "$(cat install.log)" >>/ffmpeg_build.log
-    echo "Error: libgcrypt install failed." >>/ffmpeg_build.log
+    log "$(cat install.log)"
+    log "Error: libgcrypt install failed."
     exit 1
 }
 
@@ -115,25 +115,25 @@ cd /build/libbdplus
 ./bootstrap --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "libbdplus configure failed" >>/ffmpeg_build.log
+    log "libbdplus configure failed"
     exit 1
 fi
 
 make -j$(nproc) &>make.log || {
-    echo "$(cat make.log)" >>/ffmpeg_build.log
-    echo "Error: libbdplus make failed." >>/ffmpeg_build.log
+    log "$(cat make.log)"
+    log "Error: libbdplus make failed."
     exit 1
 }
 make install &>install.log || {
-    echo "$(cat install.log)" >>/ffmpeg_build.log
-    echo "Error: libbdplus install failed." >>/ffmpeg_build.log
+    log "$(cat install.log)"
+    log "Error: libbdplus install failed."
     exit 1
 }
 
 if [[ ! -f "${PREFIX}/lib/pkgconfig/libbdplus.pc" ]]; then
-    echo "Error: ${PREFIX}/lib/pkgconfig/libbdplus.pc does not exist." >>/ffmpeg_build.log
+    log "Error: ${PREFIX}/lib/pkgconfig/libbdplus.pc does not exist."
     exit 1
 fi
 
@@ -169,9 +169,9 @@ fi
 ./bootstrap --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "libaacs configure failed" >>/ffmpeg_build.log
+    log "libaacs configure failed"
     exit 1
 fi
 
@@ -181,18 +181,18 @@ if [[ -f "src/file/keydb.c" ]]; then
 fi
 
 make -j$(nproc) &>make.log || {
-    echo "$(cat make.log)" >>/ffmpeg_build.log
-    echo "Error: libaacs make failed." >>/ffmpeg_build.log
+    log "$(cat make.log)"
+    log "Error: libaacs make failed."
     exit 1
 }
 make install &>install.log || {
-    echo "$(cat install.log)" >>/ffmpeg_build.log
-    echo "Error: libaacs install failed." >>/ffmpeg_build.log
+    log "$(cat install.log)"
+    log "Error: libaacs install failed."
     exit 1
 }
 
 if [[ ! -f "${PREFIX}/lib/pkgconfig/libaacs.pc" ]]; then
-    echo "Error: ${PREFIX}/lib/pkgconfig/libaacs.pc does not exist." >>/ffmpeg_build.log
+    log "Error: ${PREFIX}/lib/pkgconfig/libaacs.pc does not exist."
     exit 1
 fi
 
@@ -206,9 +206,9 @@ echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libaacs.pc
 cd /build/libbluray
 
 if pkg-config --cflags libaacs >/dev/null 2>&1; then
-    echo "libaacs is installed and configured correctly." >>/ffmpeg_build.log
+    log "libaacs is installed and configured correctly."
 else
-    echo "Error: libaacs not found or pkg-config is not configured properly." >>/ffmpeg_build.log
+    log "Error: libaacs not found or pkg-config is not configured properly."
     exit 1
 fi
 
@@ -246,30 +246,30 @@ fi
 ./configure --prefix=${PREFIX} --enable-static --enable-bdjava --disable-shared \
     --with-pic --with-libxml2 --with-libaacs --with-libbdplus --with-aacs --with-bdplus \
     --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-html --disable-doxygen-ps --disable-doxygen-pdf --disable-examples \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
 make -j$(nproc) &>make.log || {
-    echo "$(cat make.log)" >>/ffmpeg_build.log
-    echo "Error: libbluray make failed." >>/ffmpeg_build.log
+    log "$(cat make.log)"
+    log "Error: libbluray make failed."
     exit 1
 }
 
 make install &>install.log || {
-    echo "$(cat install.log)" >>/ffmpeg_build.log
-    echo "Error: libbluray install failed." >>/ffmpeg_build.log
+    log "$(cat install.log)"
+    log "Error: libbluray install failed."
     exit 1
 }
 
 if [[ ! -f "${PREFIX}/lib/libbluray.a" ]]; then
-    echo "Error: ${PREFIX}/lib/libbluray.a does not exist." >>/ffmpeg_build.log
+    log "Error: ${PREFIX}/lib/libbluray.a does not exist."
     exit 1
 fi
 
 if [[ ! -f "${PREFIX}/lib/pkgconfig/libbluray.pc" ]]; then
-    echo "Error: ${PREFIX}/lib/pkgconfig/libbluray.pc does not exist." >>/ffmpeg_build.log
+    log "Error: ${PREFIX}/lib/pkgconfig/libbluray.pc does not exist."
     exit 1
 fi
 

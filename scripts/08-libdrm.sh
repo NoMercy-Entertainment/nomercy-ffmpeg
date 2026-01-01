@@ -7,7 +7,7 @@ fi
 # libpciaccess
 cd /build/libpciaccess
 meson build --prefix=${PREFIX} --buildtype=release -Ddefault_library=static \
-    --cross-file="/build/cross_file.txt" | tee /ffmpeg_build.log
+    --cross-file="/build/cross_file.txt" | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -22,7 +22,7 @@ cd /build/xcbproto
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -37,7 +37,7 @@ cd /build/xproto
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -52,7 +52,7 @@ cd /build/libxtrans
 ./autogen.sh --prefix=${PREFIX} --without-xmlto --without-fop --without-xsltproc \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --without-xmlto --without-fop --without-xsltproc \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -67,7 +67,7 @@ cd /build/libxcb
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-devel-docs \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-devel-docs \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -85,7 +85,7 @@ cd /build/libx11
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
     --without-xmlto --without-fop --without-xsltproc --without-lint --disable-specs --enable-ipv6 \
     --host=${CROSS_PREFIX%-} \
-    --disable-malloc0returnsnull | tee /ffmpeg_build.log
+    --disable-malloc0returnsnull | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -100,7 +100,7 @@ cd /build/libxfixes
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -118,7 +118,7 @@ meson --prefix=${PREFIX} --buildtype=release \
     -Dvalgrind=disabled -Dexynos=disabled -Dfreedreno=disabled \
     -Domap=disabled -Detnaviv=disabled -Dintel=enabled \
     -Dnouveau=enabled -Dradeon=enabled -Damdgpu=enabled \
-    --cross-file="/build/cross_file.txt" .. | tee /ffmpeg_build.log
+    --cross-file="/build/cross_file.txt" .. | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

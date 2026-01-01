@@ -20,7 +20,7 @@ cd /build/libtheora
     --disable-vorbistest \
     --disable-spec \
     --disable-doc \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

@@ -36,7 +36,7 @@ RUN echo "------------------------------------------------------" \
     && echo "------------------------------------------------------" \
     && echo "🔧 Installing dependencies" \
     && apt-get install -y --no-install-recommends \
-    mingw-w64 mingw-w64-tools libgit2-dev zip openjdk-11-jdk ant >/dev/null 2>&1 \
+    mingw-w64 mingw-w64-tools mingw-w64-x86-64-dev mingw-w64-common libgit2-dev zip openjdk-11-jdk ant >/dev/null 2>&1 \
     && apt-get upgrade -y >/dev/null 2>&1 && apt-get autoremove -y >/dev/null 2>&1 && apt-get autoclean -y >/dev/null 2>&1 && apt-get clean -y >/dev/null 2>&1 \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     && echo "✅ Installations completed successfully" \
@@ -90,6 +90,7 @@ RUN echo "[binaries]" > /build/cross_file.txt && \
     echo "windres = '${WINDRES}'" >> /build/cross_file.txt && \
     echo "dlltool = '${DLLTOOL}'" >> /build/cross_file.txt && \
     echo "pkgconfig = '${PKG_CONFIG}'" >> /build/cross_file.txt && \
+    echo "pkg-config = '${PKG_CONFIG}'" >> /build/cross_file.txt && \
     echo "" >> /build/cross_file.txt && \
     echo "[host_machine]" >> /build/cross_file.txt && \
     echo "system = 'windows'" >> /build/cross_file.txt && \
@@ -113,6 +114,12 @@ COPY ./scripts /scripts
 RUN touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_libflags.txt \
     && chmod +x /scripts/init/init.sh \
     && /scripts/init/init.sh \
+    || (echo "❌ FFmpeg build failed" ; exit 1)
+
+COPY ./dev /test
+RUN ls -la /test
+RUN chmod +x /test/init/dev.sh \
+    && /test/init/dev.sh \
     || (echo "❌ FFmpeg build failed" ; exit 1)
 
 # ffmpeg

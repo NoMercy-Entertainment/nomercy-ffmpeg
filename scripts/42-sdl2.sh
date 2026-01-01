@@ -13,7 +13,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
     ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -27,7 +27,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
     ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -41,7 +41,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
     ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -55,7 +55,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
     ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -69,7 +69,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
     ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -83,7 +83,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
     ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -97,7 +97,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
     ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS} | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -110,7 +110,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     mkdir -p /build/libsamplerate/build && cd /build/libsamplerate/build
     cmake -S .. -B . \
         ${CMAKE_COMMON_ARG} \
-        -DBUILD_TESTING=OFF -DLIBSAMPLERATE_EXAMPLES=OFF -DLIBSAMPLERATE_INSTALL=ON | tee /ffmpeg_build.log
+        -DBUILD_TESTING=OFF -DLIBSAMPLERATE_EXAMPLES=OFF -DLIBSAMPLERATE_INSTALL=ON | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -138,7 +138,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
         -Dtests=false \
         -Dipv6=true \
         -Dopenssl=enabled \
-        --cross-file=/build/cross_file.txt .. | tee /ffmpeg_build.log
+        --cross-file=/build/cross_file.txt .. | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -164,7 +164,7 @@ else
     mkdir -p /build/libsamplerate/build && cd /build/libsamplerate/build
     cmake -S .. -B . \
         ${CMAKE_COMMON_ARG} \
-        -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DLIBSAMPLERATE_EXAMPLES=OFF -DLIBSAMPLERATE_INSTALL=ON | tee /ffmpeg_build.log
+        -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DLIBSAMPLERATE_EXAMPLES=OFF -DLIBSAMPLERATE_INSTALL=ON | log
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
@@ -200,7 +200,7 @@ cd /build/sdl2
 mkdir -p build && cd build
 cmake -S .. -B . \
     ${CMAKE_COMMON_ARG} \
-    ${CONFIG_ARG} | tee /ffmpeg_build.log
+    ${CONFIG_ARG} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

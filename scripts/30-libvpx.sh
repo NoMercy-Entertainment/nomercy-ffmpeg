@@ -15,7 +15,7 @@ cd /build/libvpx
 export CROSS=${CROSS_PREFIX}
 export DIST_DIR=${PREFIX}
 ./configure --prefix=${PREFIX} --enable-vp9-highbitdepth --enable-static --enable-pic \
-    --disable-shared --disable-examples --disable-tools --disable-docs --disable-unit-tests ${LIBVPX_TARGET} | tee /ffmpeg_build.log
+    --disable-shared --disable-examples --disable-tools --disable-docs --disable-unit-tests ${LIBVPX_TARGET} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

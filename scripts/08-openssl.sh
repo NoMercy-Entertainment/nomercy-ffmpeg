@@ -15,7 +15,7 @@ export CFLAGS="${CFLAGS} -fno-strict-aliasing"
 export CXXFLAGS="${CXXFLAGS} -fno-strict-aliasing"
 cd /build/openssl
 ./Configure threads zlib no-shared enable-camellia enable-ec enable-srp --prefix=${PREFIX} ${OPENSSL_TARGET} --libdir=${PREFIX}/lib \
-    --cross-compile-prefix='' | tee /ffmpeg_build.log
+    --cross-compile-prefix='' | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

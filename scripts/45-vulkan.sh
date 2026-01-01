@@ -9,7 +9,7 @@ find . -type f -name '*' -exec sed -i 's/-lshaderc_shared/-lshaderc_combined/' {
 mkdir build && cd build
 cmake -GNinja -S .. -B . \
     ${CMAKE_COMMON_ARG} \
-    -DBUILD_TESTING=OFF | tee /ffmpeg_build.log
+    -DBUILD_TESTING=OFF | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -39,7 +39,7 @@ cmake -GNinja -S .. -B . \
     -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DSHADERC_SKIP_COPYRIGHT_CHECK=ON \
     -DENABLE_EXCEPTIONS=ON -DENABLE_CTEST=OFF -DENABLE_GLSLANG_BINARIES=OFF -DSPIRV_SKIP_EXECUTABLES=ON \
     -DSPIRV_TOOLS_BUILD_STATIC=ON -DBUILD_SHARED_LIBS=OFF \
-    -DSHADERC_SKIP_TESTS=ON -DSHADERC_ENABLE_SHARED_CRT=ON | tee /ffmpeg_build.log
+    -DSHADERC_SKIP_TESTS=ON -DSHADERC_ENABLE_SHARED_CRT=ON | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -61,7 +61,7 @@ find . -type f -name '*' -exec sed -i 's/-lshaderc_shared/-lshaderc_combined/' {
 mkdir -p build && cd build
 cmake -S .. -B . \
     ${CMAKE_COMMON_ARG} \
-    -DSPIRV_CROSS_SHARED=OFF -DSPIRV_CROSS_STATIC=ON -DSPIRV_CROSS_CLI=OFF -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_FORCE_PIC=ON -DSPIRV_CROSS_ENABLE_CPP=OFF | tee /ffmpeg_build.log
+    -DSPIRV_CROSS_SHARED=OFF -DSPIRV_CROSS_STATIC=ON -DSPIRV_CROSS_CLI=OFF -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_FORCE_PIC=ON -DSPIRV_CROSS_ENABLE_CPP=OFF | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -102,7 +102,7 @@ meson --prefix=${PREFIX} \
     -Dtests=false \
     -Dbench=false \
     -Dfuzz=false \
-    --cross-file="/build/cross_file.txt" .. | tee /ffmpeg_build.log
+    --cross-file="/build/cross_file.txt" .. | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

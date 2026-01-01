@@ -11,7 +11,7 @@ cd /build/libsvtav1
 mkdir -p build && cd build
 cmake -S .. -B . \
     ${CMAKE_COMMON_ARG} \
-    -DBUILD_APPS=OFF -DBUILD_EXAMPLES=OFF -DENABLE_AVX512=ON ${EXTRA_CONFIGURE_ARGS} | tee /ffmpeg_build.log
+    -DBUILD_APPS=OFF -DBUILD_EXAMPLES=OFF -DENABLE_AVX512=ON ${EXTRA_CONFIGURE_ARGS} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

@@ -5,10 +5,10 @@ cd /build/jpeg
 
 # Configure and compile
 ./configure --disable-shared --enable-static \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Failed to build libjpeg" >>/ffmpeg_build.log
+    log "Failed to build libjpeg"
     exit 1
 fi
 
@@ -45,10 +45,10 @@ cmake -S .. -B . \
     -DBUILD_PKGCONFIG_FILES=ON \
     -DBUILD_CODEC=OFF \
     -DWITH_ASTYLE=OFF \
-    -DBUILD_TESTING=OFF | tee /ffmpeg_build.log
+    -DBUILD_TESTING=OFF | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Failed to build openjpeg" >>/ffmpeg_build.log
+    log "Failed to build openjpeg"
     exit 1
 fi
 

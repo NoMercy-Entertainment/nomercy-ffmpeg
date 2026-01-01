@@ -2,7 +2,7 @@
 
 cd /build/freetype
 ./configure --prefix=${PREFIX} --enable-static --disable-shared \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

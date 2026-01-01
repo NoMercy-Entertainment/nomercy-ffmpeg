@@ -11,7 +11,7 @@ if [[ ${TARGET_OS} == "darwin" ]]; then
     ./configure --prefix=${PREFIX} \
         --disable-cli --enable-static --enable-pic --disable-avs --disable-swscale --disable-lavf --disable-ffms --disable-gpac --disable-lsmash --extra-asflags="-w-macro-params-legacy" \
         --extra-cflags="-Wno-dev -Wno-typedef-redefinition -Wno-unused-but-set-variable -Wno-tautological-compare -Wno-format -Wno-incompatible-function-pointer-types" \
-        --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+        --host=${CROSS_PREFIX%-} | log
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
@@ -34,13 +34,13 @@ else
     ./configure --prefix=${PREFIX} \
         --disable-cli --enable-static --enable-pic --disable-avs --disable-swscale --disable-lavf --disable-ffms --disable-gpac --disable-lsmash --extra-asflags="-w-macro-params-legacy" \
         ${CONF_FLAGS} --host=${CROSS_PREFIX%-} \
-        --cross-prefix=${CROSS_PREFIX} | tee /ffmpeg_build.log
+        --cross-prefix=${CROSS_PREFIX} | log
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
 fi
 
-make -j$(nproc) && make install | tee /ffmpeg_build.log
+make -j$(nproc) && make install | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi

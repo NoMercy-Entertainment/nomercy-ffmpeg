@@ -12,9 +12,9 @@ cd /build/libpng
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
     CPPFLAGS="${CPPFLAGS} -I${PREFIX}/include" \
     LDFLAGS="${LDFLAGS} -L${PREFIX}/lib -lz" \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Failed to build libpng config" >>/ffmpeg_build.log
+    log "Failed to build libpng config"
     exit 1
 fi
 
@@ -23,23 +23,23 @@ make -j$(nproc)
 make install
 
 if [ ! -f ${PREFIX}/lib/libpng.a ]; then
-    echo "Failed to build libpng a " >>/ffmpeg_build.log
+    log "Failed to build libpng a "
     exit 1
 fi
 if [ ! -f ${PREFIX}/include/png.h ]; then
-    echo "Failed to build libpng h " >>/ffmpeg_build.log
+    log "Failed to build libpng h "
     exit 1
 fi
 if [ ! -f ${PREFIX}/include/pngconf.h ]; then
-    echo "Failed to build libpng c" >>/ffmpeg_build.log
+    log "Failed to build libpng c"
     exit 1
 fi
 if [ ! -f ${PREFIX}/include/pnglibconf.h ]; then
-    echo "Failed to build libpng ch" >>/ffmpeg_build.log
+    log "Failed to build libpng ch"
     exit 1
 fi
 if [ ! -f ${PREFIX}/lib/pkgconfig/libpng.pc ]; then
-    echo "Failed to build libpng p" >>/ffmpeg_build.log
+    log "Failed to build libpng p"
     exit 1
 fi
 if [[ ${TARGET_OS} != "linux" ]]; then
@@ -50,9 +50,9 @@ fi
 cd /build
 rm -rf /build/libpng
 if pkg-config --modversion libpng >/dev/null 2>&1; then
-    echo "libpng is installed." >>/ffmpeg_build.log
+    log "libpng is installed."
 else
-    echo "libpng is missing!" >>/ffmpeg_build.log
+    log "libpng is missing!"
     exit 1 # Optional: Exit script if libpng is not found
 fi
 # #endregion
@@ -69,28 +69,28 @@ if [[ ${TARGET_OS} != "windows" ]]; then
     fi
 
     make PREFIX=${PREFIX} || (
-        echo "Error: giflib make failed." >>/ffmpeg_build.log
+        log "Error: giflib make failed."
         exit 1
     )
 
     make PREFIX=${PREFIX} install || (
-        echo "Error: giflib install failed." >>/ffmpeg_build.log
+        log "Error: giflib install failed."
         exit 1
     )
 else
     make || (
-        echo "Error: giflib make failed." >>/ffmpeg_build.log
+        log "Error: giflib make failed."
         exit 1
     )
     make install || (
-        echo "Error: giflib install failed." >>/ffmpeg_build.log
+        log "Error: giflib install failed."
         exit 1
     )
     if [ ! -f ${PREFIX}/include/gif_lib.h ]; then
         if [ -f gif_lib.h ]; then
             cp gif_lib.h ${PREFIX}/include/gif_lib.h
         else
-            echo "Failed to build giflib 1" >>/ffmpeg_build.log
+            log "Failed to build giflib 1"
             exit 1
         fi
     fi
@@ -98,7 +98,7 @@ else
         if [ -f libgif.a ]; then
             cp libgif.a ${PREFIX}/lib/libgif.a
         else
-            echo "Failed to build giflib 2" >>/ffmpeg_build.log
+            log "Failed to build giflib 2"
             exit 1
         fi
     fi
@@ -124,7 +124,7 @@ if [ ! -f ${PREFIX}/lib/pkgconfig/giflib.pc ]; then
     fi
 fi
 if [ ! -f ${PREFIX}/lib/pkgconfig/giflib.pc ]; then
-    echo "Failed to build giflib 3" >>/ffmpeg_build.log
+    log "Failed to build giflib 3"
     exit 1
 fi
 if [[ ${TARGET_OS} != "linux" ]]; then
@@ -141,15 +141,15 @@ cd /build/libtiff
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Failed to build libtiff" >>/ffmpeg_build.log
+    log "Failed to build libtiff"
     exit 1
 fi
 make -j$(nproc) && make install
 if [ ! -f ${PREFIX}/lib/pkgconfig/libtiff-4.pc ]; then
-    echo "Failed to build libtiff" >>/ffmpeg_build.log
+    log "Failed to build libtiff"
     exit 1
 fi
 if [[ ${TARGET_OS} != "linux" ]]; then
@@ -184,10 +184,10 @@ cd /build/libwebp
     LIBS="-lpng16 -lz" \
     PNG_INCLUDES="${PREFIX}/include" \
     PNG_LIBS="${PREFIX}/lib" \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Failed to build libwebp" >>/ffmpeg_build.log
+    log "Failed to build libwebp"
     exit 1
 fi
 

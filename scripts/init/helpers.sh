@@ -139,3 +139,12 @@ check_enabled() {
         return 1
     fi
 }
+
+log() {
+	if [ -n "$1" ] && [ "$1" != "-a" ]; then
+		echo "$1" >> /ffmpeg_build.log
+	else
+		# "$@" stuurt alle opties die je aan 'log' geeft door naar 'tee'
+		tee "$@" /ffmpeg_build.log
+	fi
+}

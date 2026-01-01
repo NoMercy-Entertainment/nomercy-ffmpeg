@@ -6,7 +6,7 @@ cmake -S .. -B . \
     ${CMAKE_COMMON_ARG} \
     -DBUILD_TOOLS=OFF \
     -DBUILD_TESTS=OFF \
-    -DFFT_LIB=fftw3 | tee /ffmpeg_build.log
+    -DFFT_LIB=fftw3 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

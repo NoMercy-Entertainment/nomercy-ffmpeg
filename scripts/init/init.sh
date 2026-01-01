@@ -81,7 +81,7 @@ echo "⚙️ Registering helper functions"
 
 mkdir -p /logs
 . /scripts/init/helpers.sh
-export -f hr text_with_padding add_enable add_cflag add_ldflag add_extralib join_lines split_lines clean_whitespace apply_sed check_enabled
+export -f hr text_with_padding add_enable add_cflag add_ldflag add_extralib join_lines split_lines clean_whitespace apply_sed check_enabled log
 
 text_with_padding "✅ Helper functions registered" ""
 hr # Print a horizontal line
@@ -100,6 +100,13 @@ if [[ ${TARGET_OS} == "darwin" ]]; then
 elif [[ ${TARGET_OS} == "windows" ]]; then
     windows_extra_scripts=(/scripts/includes/windows/*.sh)
     for script in "${windows_extra_scripts[@]}"; do
+        if [[ -f "${script}" ]]; then
+            cp "${script}" /scripts/
+        fi
+    done
+else
+    linux_extra_scripts=(/scripts/includes/linux/*.sh)
+    for script in "${linux_extra_scripts[@]}"; do
         if [[ -f "${script}" ]]; then
             cp "${script}" /scripts/
         fi

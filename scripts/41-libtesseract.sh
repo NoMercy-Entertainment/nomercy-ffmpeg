@@ -9,17 +9,17 @@ cd /build/leptonica
 ./configure --prefix=${PREFIX} --enable-static --disable-shared \
     --disable-programs \
     --without-libopenjpeg \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Failed to build leptonica" >>/ffmpeg_build.log
+    log "Failed to build leptonica"
     exit 1
 fi
 
 make -j$(nproc) && make install
 
 if [ ! -f ${PREFIX}/lib/pkgconfig/lept.pc ]; then
-    echo "Failed to build leptonica" >>/ffmpeg_build.log
+    log "Failed to build leptonica"
     exit 1
 fi
 
@@ -64,10 +64,10 @@ fi
     --without-curl \
     --with-extra-includes=${PREFIX}/include \
     --with-extra-libraries=${PREFIX}/lib \
-    --host=${CROSS_PREFIX%-} | tee /ffmpeg_build.log
+    --host=${CROSS_PREFIX%-} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Failed to build libtesseract" >>/ffmpeg_build.log
+    log "Failed to build libtesseract"
     exit 1
 fi
 

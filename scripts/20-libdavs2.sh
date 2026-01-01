@@ -29,7 +29,7 @@ fi
 
 ./configure --prefix=${PREFIX} --disable-cli --enable-static --disable-shared --with-pic \
     --host=${CROSS_PREFIX%-} \
-    --cross-prefix=${CROSS_PREFIX} ${EXTRA_FLAGS} | tee /ffmpeg_build.log
+    --cross-prefix=${CROSS_PREFIX} ${EXTRA_FLAGS} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

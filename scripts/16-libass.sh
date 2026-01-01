@@ -12,7 +12,7 @@ fi
 
 cd /build/libass
 ./autogen.sh --prefix="${PREFIX}" --enable-static --disable-shared --with-pic ${CONFIG}
-./configure --prefix="${PREFIX}" --enable-static --disable-shared --with-pic ${CONFIG} | tee /ffmpeg_build.log
+./configure --prefix="${PREFIX}" --enable-static --disable-shared --with-pic ${CONFIG} | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
@@ -22,7 +22,7 @@ make -j$(nproc) && make install
 rm -rf /build/libass
 
 if [ ! -f "${PREFIX}/lib/pkgconfig/libass.pc" ]; then
-    echo "libass failed to build" >>/ffmpeg_build.log
+    log "libass failed to build"
     exit 1
 fi
 
