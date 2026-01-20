@@ -27,19 +27,19 @@ cmake -S .. -B . \
     -DUTEST_CHECK=OFF \
     -DVERBOSE=ON | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Error: OpenBLAS configure failed" >> /ffmpeg_build.log
+    log "Error: OpenBLAS configure failed"
     exit 1
 fi
 
 cmake --build . -j$(nproc) --config Release | log -a
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Error: OpenBLAS build failed" >> /ffmpeg_build.log
+    log "Error: OpenBLAS build failed"
     exit 1
 fi
 
 cmake --install . --config Release | log -a
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Error: OpenBLAS install failed" >> /ffmpeg_build.log
+    log "Error: OpenBLAS install failed"
     exit 1
 else 
     echo "OpenBLAS installed successfully" > /ffmpeg_build.log

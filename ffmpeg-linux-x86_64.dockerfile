@@ -95,12 +95,22 @@ ENV FFMPEG_ENABLES="" \
 # Copy the build scripts
 COPY ./scripts /scripts
 
+# Convert Windows line endings to Unix line endings
+RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} +
+
+# Initialize the build
 RUN touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_libflags.txt \
     && chmod +x /scripts/init/init.sh \
     && /scripts/init/init.sh \
     || (echo "❌ FFmpeg build failed" ; exit 1)
 
+# Copy the dev scripts
 COPY ./dev /test
+
+# Convert Windows line endings to Unix line endings
+RUN find /test -type f -name "*.sh" -exec sed -i 's/\r$//' {} +
+
+# Run the dev scripts to build dependencies
 RUN chmod +x /test/init/dev.sh \
     && /test/init/dev.sh \
     || (echo "❌ FFmpeg build failed" ; exit 1)

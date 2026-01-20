@@ -1,6 +1,6 @@
 #!/bin/bash
 
-whisper_version=1.7.6
+whisper_version=1.8.3
 
 rm -f /ffmpeg_build.log
 touch /ffmpeg_build.log
@@ -23,13 +23,13 @@ if check_enabled "sdl2"; then
     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DWHISPER_SDL2=ON"
 fi
 
-if check_enabled "cuda"; then
-    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_CUDA=ON -DCUDA_TOOLKIT_ROOT_DIR=${PREFIX}/lib -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc"
-fi
+# if check_enabled "cuda"; then
+#     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_CUDA=ON -DCUDA_TOOLKIT_ROOT_DIR=${PREFIX}/lib -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc"
+# fi
 
-if check_enabled "vulkan"; then
-    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_VULKAN=ON -DVulkan_LIBRARY=${PREFIX}/lib/libvulkan.a -DVulkan_INCLUDE_DIR=${PREFIX}/include"
-fi
+# if check_enabled "vulkan"; then
+#     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_VULKAN=ON -DVulkan_LIBRARY=${PREFIX}/lib/libvulkan.a -DVulkan_INCLUDE_DIR=${PREFIX}/include"
+# fi
 
 if [[ ${TARGET_OS} == "windows" ]]; then
     OLD_CFLAGS=${CFLAGS}
@@ -42,7 +42,7 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     find . -name '*.cpp' -exec sed -i 's|%lld|%llu|g' {} +
 
     # Disable the following functions that cause issues on Windows
-    sed -i '2369,2380s/^/\/\//' ggml/src/ggml-cpu/ggml-cpu.c
+    sed -i '2480,2491s/^/\/\//' ggml/src/ggml-cpu/ggml-cpu.c
 
     if [[ -f ${PREFIX}/lib/libopenblas.a ]]; then
         WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_BLAS=ON -DBLAS_VENDOR=OpenBLAS -DBLAS_LIBRARIES=${PREFIX}/lib/libopenblas.a -DBLAS_INCLUDE_DIRS=${PREFIX}/include/openblas"
@@ -56,7 +56,7 @@ if [[ ${TARGET_OS} == "windows" ]]; then
         -DWHISPER_BUILD_SERVER=OFF \
         -DWHISPER_BUILD_TESTS=OFF \
         -DWHISPER_BUILD_EXAMPLES=OFF \
-        -DVERBOSE=ON | log
+        -DVERBOSE=ON | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         CFLAGS=${OLD_CFLAGS}
         CXXFLAGS=${OLD_CXXFLAGS}
@@ -98,7 +98,7 @@ else
         -DWHISPER_BUILD_TOOLS=OFF \
         -DWHISPER_BUILD_SERVER=OFF \
         -DWHISPER_BUILD_EXAMPLES=OFF \
-        -DWHISPER_BUILD_TESTS=OFF -DVERBOSE=ON | log
+        -DWHISPER_BUILD_TESTS=OFF -DVERBOSE=ON | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Error: Whisper configure failed" >> /ffmpeg_build.log
         exit 1

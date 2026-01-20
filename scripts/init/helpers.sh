@@ -124,7 +124,7 @@ check_enabled() {
     fi
 
     # Het woord om te vinden wordt opgeslagen in een variabele
-    local search_word="--enable-$1"
+    local search_word="enable-$1"
     local FILE_PATH="/build/enable.txt"
 
     # Controleer of het bestand bestaat
@@ -133,7 +133,7 @@ check_enabled() {
     fi
 
     # Zoek naar het woord in het bestand
-    if grep -iqE "$search_word" "$FILE_PATH"; then
+    if grep -iq "$search_word" "$FILE_PATH"; then
         return 0
     else
         return 1

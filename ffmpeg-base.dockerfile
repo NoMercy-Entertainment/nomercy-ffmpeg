@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.6.3-devel-ubuntu24.04 AS ffmpeg-base
+FROM nvidia/cuda:12.9.1-devel-ubuntu24.04 AS ffmpeg-base
 
 LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.0"
@@ -140,6 +140,13 @@ RUN echo "------------------------------------------------------" \
     && echo "✅ Installations completed successfully" \
     && echo "------------------------------------------------------"
 
+WORKDIR /build
+
+# Configure git
+RUN git config --global user.email "builder@nomercy.tv" \
+    && git config --global user.name "Builder" \
+    && git config --global advice.detachedHead false
+
 # Install meson >= 1.4.0 via pip (required for glib 2.86+)
 RUN \
     echo "------------------------------------------------------" \
@@ -147,10 +154,6 @@ RUN \
     && python3 -m pip install --no-cache-dir --break-system-packages meson>=1.4.0 >/dev/null 2>&1 \
     && echo "✅ Meson installation completed successfully ($(meson --version))" \
     && echo "------------------------------------------------------"
-
-RUN git config --global user.email "builder@nomercy.tv" \
-    && git config --global user.name "Builder" \
-    && git config --global advice.detachedHead false
 
 # Install rust and cargo-c
 ENV CARGO_HOME="/opt/cargo" RUSTUP_HOME="/opt/rustup" PATH="/opt/cargo/bin:${PATH}"
@@ -161,8 +164,6 @@ RUN \
     && cargo install cargo-c >/dev/null 2>&1 && rm -rf "${CARGO_HOME}"/registry "${CARGO_HOME}"/git \
     && echo "✅ Installations completed successfully" \
     && echo "------------------------------------------------------"
-
-WORKDIR /build
 
 # Download iconv
 RUN \
