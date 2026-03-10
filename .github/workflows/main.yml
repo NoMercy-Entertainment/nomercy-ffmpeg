@@ -60,7 +60,7 @@ jobs:
   # Build the base image that others depend on
   build-base:
     needs: [detect-changes, cache-warmup]
-    if: needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true'
+    if: needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-base.dockerfile

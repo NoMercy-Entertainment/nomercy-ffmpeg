@@ -146,14 +146,14 @@ jobs:
           fetch-depth: 0
           ref: master
           token: ${{ secrets.PAT_TOKEN }}
-          repository: "NoMercy-Entertainment/FFMPEG-Secrets"
-          path: "${{ github.workspace }}/FFMPEG-Secrets"
-      
+          repository: "NoMercy-Entertainment/nomercy-ffmpeg-secrets"
+          path: "${{ github.workspace }}/nomercy-ffmpeg-secrets"
+
       - name: Copy Secrets
         if: ${{ inputs.secrets_repo }}
         run: |
-          cp -r FFMPEG-Secrets/* ${{ github.workspace }}/scripts/
-          rm -rf FFMPEG-Secrets
+          cp -r nomercy-ffmpeg-secrets/* ${{ github.workspace }}/scripts/
+          rm -rf nomercy-ffmpeg-secrets
 
       - name: Build and Push Docker Image with Retry
         run: |

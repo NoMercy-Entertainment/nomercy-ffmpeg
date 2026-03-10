@@ -2,8 +2,8 @@
 
 <div align="center">
 
-[![Build Status](https://github.com/NoMercy-Entertainment/NoMercyFFMpeg/workflows/CI/badge.svg)](https://github.com/NoMercy-Entertainment/NoMercyFFMpeg/actions)
-[![Security Scan](https://github.com/NoMercy-Entertainment/NoMercyFFMpeg/workflows/Test%20&%20Security/badge.svg)](https://github.com/NoMercy-Entertainment/NoMercyFFMpeg/actions)
+[![Build Status](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/workflows/CI/badge.svg)](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/actions)
+[![Security Scan](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/workflows/Test%20&%20Security/badge.svg)](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Internal Build Tool for NoMercy MediaServer**
@@ -79,8 +79,8 @@ graph TD
 ### Local Development
 ```bash
 # Clone the repository
-git clone https://github.com/NoMercy-Entertainment/NoMercyFFMpeg.git
-cd NoMercyFFMpeg
+git clone https://github.com/NoMercy-Entertainment/nomercy-ffmpeg.git
+cd nomercy-ffmpeg
 
 # Build for a specific platform
 docker build -f ffmpeg-linux-x86_64.dockerfile -t ffmpeg-linux .
