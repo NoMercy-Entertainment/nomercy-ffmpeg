@@ -1,0 +1,53 @@
+# Auto-detect and normalize
+* text=auto eol=lf
+
+# Dockerfiles
+Dockerfile      text
+Dockerfile.*    text
+*.dockerfile    text
+
+# Shell scripts (force LF — critical for CI)
+*.sh            text eol=lf
+*.bash          text eol=lf
+
+# Windows batch/PowerShell (force CRLF)
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# Config files
+*.conf          text
+*.ini           text
+*.cfg           text
+*.yml           text
+*.yaml          text
+*.json          text
+*.xml           text
+*.env           text
+*.toml          text
+
+# Source code
+*.php           text diff=php
+*.py            text diff=python
+*.c             text diff=cpp
+*.h             text diff=cpp
+*.js            text
+*.css           text
+*.html          text diff=html
+*.md            text diff=markdown
+*.txt           text
+*.service       text eol=lf
+
+# Binary
+*.png           binary
+*.ico           binary
+*.gz            binary
+*.tar           binary
+*.zip           binary
+
+# Misc
+*.lock          text -diff
+
+# Linguist
+Dockerfile      linguist-language=Dockerfile
+Dockerfile.*    linguist-language=Dockerfile
