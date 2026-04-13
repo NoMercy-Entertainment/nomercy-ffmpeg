@@ -234,6 +234,9 @@ run_test "libxml2" "-hide_banner -version | grep xml" "xml"
 run_test "libdav1d" "-hide_banner -decoders" "dav1d"
 run_test "librav1e" "-hide_banner -encoders" "rav1e"
 
+# OCR subtitle encoder
+run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
+
 # Print summary
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 text_with_padding "📊 Summary:" ""
