@@ -1,3 +1,13 @@
 output/*
 scripts/patches
 tmp/*
+# Environment
+.env
+.env.*
+
+# Claude Code artifacts
+.claude/settings.local.json
+.claude/superpowers/
+.claude/memories/
+.claude/scheduled_tasks.lock
+.superpowers/
