@@ -59,8 +59,8 @@ jobs:
 
   # Build the base image that others depend on
   build-base:
-    needs: [detect-changes, cache-warmup]
-    if: needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    needs: [detect-changes]
+    if: always() && !cancelled() && (needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-base.dockerfile
@@ -75,7 +75,7 @@ jobs:
   # Build platform-specific images using the reusable workflow
   build-linux-x86_64:
     needs: [detect-changes, build-base]
-    if: needs.detect-changes.outputs.linux-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    if: always() && !cancelled() && (needs.detect-changes.outputs.linux-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-linux-x86_64.dockerfile
@@ -89,7 +89,7 @@ jobs:
 
   build-linux-aarch64:
     needs: [detect-changes, build-base]
-    if: needs.detect-changes.outputs.linux-aarch64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    if: always() && !cancelled() && (needs.detect-changes.outputs.linux-aarch64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-linux-aarch64.dockerfile
@@ -103,7 +103,7 @@ jobs:
 
   build-windows-x86_64:
     needs: [detect-changes, build-base]
-    if: needs.detect-changes.outputs.windows-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    if: always() && !cancelled() && (needs.detect-changes.outputs.windows-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-windows-x86_64.dockerfile
@@ -117,7 +117,7 @@ jobs:
 
   build-darwin-x86_64:
     needs: [detect-changes, build-base]
-    if: needs.detect-changes.outputs.darwin-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    if: always() && !cancelled() && (needs.detect-changes.outputs.darwin-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-darwin-x86_64.dockerfile
@@ -131,7 +131,7 @@ jobs:
 
   build-darwin-arm64:
     needs: [detect-changes, build-base]
-    if: needs.detect-changes.outputs.darwin-arm64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild
+    if: always() && !cancelled() && (needs.detect-changes.outputs.darwin-arm64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-darwin-arm64.dockerfile
