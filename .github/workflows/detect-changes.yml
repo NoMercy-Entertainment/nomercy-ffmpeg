@@ -103,13 +103,17 @@ jobs:
           CHANGED_FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
           echo "Changed files: $CHANGED_FILES"
           
-          # Check each component
-          echo "base=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-base.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
-          echo "linux-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-linux-x86_64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
-          echo "linux-aarch64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-linux-aarch64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
-          echo "windows-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-windows-x86_64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
-          echo "darwin-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-darwin-x86_64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
-          echo "darwin-arm64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-darwin-arm64.dockerfile" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          # Changes to scripts/ or scripts/includes/ affect ALL platforms
+          # (Dockerfiles COPY and execute these during build)
+          SCRIPTS_CHANGED=$(echo "$CHANGED_FILES" | grep -qE "^scripts/" && echo "true" || echo "false")
+
+          # Check each component — Dockerfile change OR scripts change triggers rebuild
+          echo "base=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-base.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
+          echo "linux-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-linux-x86_64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
+          echo "linux-aarch64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-linux-aarch64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
+          echo "windows-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-windows-x86_64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
+          echo "darwin-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-darwin-x86_64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
+          echo "darwin-arm64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-darwin-arm64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
           echo "workflow=$(echo "$CHANGED_FILES" | grep -q ".github/workflows/" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
 
       - name: Set individual outputs
