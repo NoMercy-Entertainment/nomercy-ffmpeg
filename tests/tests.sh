@@ -218,6 +218,9 @@ run_test "vobsub_muxer" "-hide_banner -muxers" "vobsub"
 run_test "spritevtt_muxer" "-hide_banner -muxers" "spritevtt"
 run_test "chapters_vtt_muxer" "-hide_banner -muxers" "chapters_vtt"
 
+# Auto-create directories
+run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"
+
 # Hardware acceleration (may fail if no hardware support)
 run_test "NVENC" "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4" "nvenc"
 run_test "VPL" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4" "vpl"

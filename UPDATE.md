@@ -207,6 +207,49 @@ Act One
 
 00:15:47.890 --> 00:45:12.345
 Act Two
+
+---
+
+### v1.0.33 - April 13, 2026
+
+#### 📁 Added Auto-Create Output Directories
+
+**Problem**: When writing output files to paths with subdirectories that don't exist yet, FFmpeg fails with "No such file or directory". Users had to manually run `mkdir -p` before every FFmpeg command targeting nested output paths.
+
+#### What's New
+- **Automatic Directory Creation**: FFmpeg now creates parent directories automatically when writing output files
+- **Cross-Platform**: Works on Linux, Windows (MinGW), and macOS with proper path separator handling
+- **Protocol-Aware**: Skips URL-based paths (http://, rtmp://, etc.) — only creates directories for local file paths
+- **Write-Only**: Only triggers for output files (AVIO_FLAG_WRITE), never for input paths
+- **Silent Fallback**: If directory creation fails (permissions, etc.), the original FFmpeg error is preserved
+
+#### Technical Details
+- Patched file: `libavformat/aviobuf.c` (avio_open2 function)
+- Build script: `scripts/55-auto-create-dirs.sh`
+- Uses FFmpeg memory allocators (av_strndup/av_free)
+- Handles both `/` and `\` path separators
+
+#### Use Case
+This feature is essential for the NoMercy MediaServer's encoding pipeline:
+- HLS output with segment subdirectories (`output/stream_0/segment_%03d.ts`)
+- Organized transcoding output trees (`output/1080p/video.mp4`)
+- Batch processing with structured output paths
+- Any workflow where output paths include directories that may not exist yet
+
+#### Usage Examples
+```bash
+# Before: required manual mkdir
+mkdir -p /output/hls/stream_0
+ffmpeg -i input.mp4 -c copy /output/hls/stream_0/segment_%03d.ts
+
+# After: just works
+ffmpeg -i input.mp4 -c copy /output/hls/stream_0/segment_%03d.ts
+
+# Nested output paths work automatically
+ffmpeg -i input.mp4 -c:v libx264 /videos/2026/04/encoded/output.mp4
+
+# Network URLs are unaffected
+ffmpeg -i input.mp4 -f flv rtmp://server/live/stream
 ```
 
 ---
