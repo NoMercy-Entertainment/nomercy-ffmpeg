@@ -171,8 +171,6 @@ jobs:
               --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest \
               --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:${{ github.sha }} \
               --no-cache \
-              --cache-to type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache,mode=max \
-              --cache-to type=local,dest=~/.docker/buildx-cache-new,mode=max \
               --platform linux/amd64 \
               --build-arg BUILDKIT_INLINE_CACHE=1 \
               --build-arg DOCKER_BUILDKIT=1 \
