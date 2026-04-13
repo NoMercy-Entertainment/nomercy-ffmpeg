@@ -61,6 +61,97 @@ out.webp#xywh=160,0,160,90
 
 00:00:10.000 --> 00:00:15.000
 out.webp#xywh=320,0,160,90
+
+---
+
+### v1.0.31 - April 13, 2026
+
+#### 🔤 Added OCR Subtitle Encoder
+
+**New Feature: Bitmap-to-Text Subtitle Conversion via Tesseract OCR**
+
+Added a custom `ocr_subtitle` encoder that converts bitmap subtitles (DVD/Blu-ray) to text subtitles (WebVTT, SRT) entirely within FFmpeg, eliminating the need for external OCR processing pipelines.
+
+#### What's New
+- **OCR Subtitle Encoder**: Converts `dvd_subtitle` and `hdmv_pgs_subtitle` bitmap streams to text using Tesseract OCR
+- **Luminance-Weighted Conversion**: Smart grayscale preprocessing that separates bright text from dark outlines for optimal OCR accuracy
+- **3x Upscaling**: Nearest-neighbor upscale before OCR for better character and line detection (configurable via `-ocr_scale`)
+- **Music Note Fixups**: Optional post-processing (`-ocr_fixups 1`) that corrects common Tesseract misreads of ♪ symbols
+- **Language Support**: Auto-detects language from input stream metadata, falls back to English, overridable via `-ocr_language`
+- **Cross-Platform**: Available on all supported platforms (Linux x86_64/aarch64, Windows x86_64, macOS x86_64/ARM64)
+
+#### Technical Details
+- Encoder implementation: `libavcodec/ocr_subtitle_enc.c`
+- Build script: `scripts/52-ocr-subtitle-encoder.sh`
+- Codec ID: `AV_CODEC_ID_WEBVTT` (compatible with WebVTT and SRT muxers)
+- Dependency: libtesseract (already in build via `--enable-libtesseract`)
+- Patched `ffmpeg_mux_init.c` to allow bitmap→text subtitle transcoding
+
+#### Use Case
+This feature enables the NoMercy MediaServer to:
+- Convert DVD/Blu-ray bitmap subtitles to searchable text formats
+- Replace the fragile C# OCR parsing pipeline with a single FFmpeg command
+- Support any Tesseract language for international subtitle conversion
+- Produce WebVTT files directly consumable by the web video player
+
+#### Usage Example
+```bash
+# DVD subtitle → WebVTT (explicit encoder)
+ffmpeg -i movie.mkv -map 0:s:0 -c:s ocr_subtitle output.vtt
+
+# With French language
+ffmpeg -i movie.mkv -map 0:s:0 -c:s ocr_subtitle -ocr_language fra output.vtt
+
+# With music note fixups enabled
+ffmpeg -i movie.mkv -map 0:s:0 -c:s ocr_subtitle -ocr_fixups 1 output.vtt
+
+# Custom tessdata path and scale factor
+ffmpeg -i movie.mkv -map 0:s:0 -c:s ocr_subtitle -datapath /path/to/tessdata -ocr_scale 4 output.vtt
+```
+
+#### Encoder Options
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `ocr_language` | string | `eng` | Tesseract OCR language |
+| `datapath` | string | *(env)* | Path to tessdata directory (falls back to `TESSDATA_PREFIX`) |
+| `ocr_fixups` | bool | `false` | Fix common OCR misreads (♪ music notes) |
+| `ocr_scale` | int | `3` | Upscale factor for bitmap before OCR (1-8) |
+
+---
+
+### v1.0.30 - April 12, 2026
+
+#### 📀 Added VOBsub Muxer
+
+**New Feature: DVD Subtitle Extraction to .sub + .idx Pairs**
+
+Added a custom VOBsub muxer that enables FFmpeg to write proper VobSub (.sub + .idx) file pairs when extracting DVD bitmap subtitles, preserving the original bitmap data without re-encoding.
+
+#### What's New
+- **VOBsub Muxer**: Writes MPEG-2 PS packets to `.sub` and a VobSub v7 text index to `.idx`
+- **Palette Preservation**: Extracts and writes the DVD subtitle color palette to the index file
+- **Language Support**: Carries language metadata from the source stream to the index file
+- **Normalized Timestamps**: Proper timestamp handling for accurate subtitle timing
+- **Cross-Platform**: Available on all supported platforms (Linux x86_64/aarch64, Windows x86_64, macOS x86_64/ARM64)
+
+#### Technical Details
+- Muxer implementation: `libavformat/vobsubenc.c`
+- Build script: `scripts/51-vobsub-muxer.sh`
+- Output: paired `.idx` (text index) + `.sub` (MPEG-2 PS bitmap data)
+- Copy codec support: no re-encoding needed, preserves original bitmap data
+
+#### Use Case
+This feature enables the NoMercy MediaServer to:
+- Extract DVD subtitle streams as standalone VobSub files
+- Preserve original bitmap subtitle quality without transcoding
+- Support downstream OCR or subtitle editing workflows
+- Maintain compatibility with media players that expect VobSub format
+
+#### Usage Example
+```bash
+# Extract DVD subtitles to VobSub pair
+ffmpeg -i movie.mkv -map 0:s:0 -c:s copy output.idx
+# produces output.idx (text index) + output.sub (bitmap data)
 ```
 
 ---
