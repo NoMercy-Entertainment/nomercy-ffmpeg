@@ -45,6 +45,7 @@ jobs:
       fail-fast: false  # Don't cancel other builds if one fails
     steps:
       - name: Free Disk Space (Ubuntu)
+        if: ${{ !contains(inputs.labels, 'beast-unit') }}
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false

@@ -67,7 +67,7 @@ jobs:
       platform: base
       secrets_repo: false
       depends_on_base: false
-      labels: ubuntu-latest
+      labels: beast-unit
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -145,7 +145,7 @@ jobs:
 
   # Export artifacts from built images
   export-artifacts:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, beast-unit]
     needs: [detect-changes, build-linux-x86_64, build-linux-aarch64, build-windows-x86_64, build-darwin-x86_64, build-darwin-arm64]
     if: always() && (needs.detect-changes.outputs.any-changed == 'true' || inputs.force_rebuild) && (needs.build-linux-x86_64.result != 'failure' || needs.build-linux-aarch64.result != 'failure' || needs.build-windows-x86_64.result != 'failure' || needs.build-darwin-x86_64.result != 'failure' || needs.build-darwin-arm64.result != 'failure')
     steps:
