@@ -30,6 +30,11 @@ on:
         description: 'Labels for the self-hosted runner'
         required: true
         type: string
+      no_cache:
+        description: 'Skip Docker layer cache (force full rebuild)'
+        required: false
+        type: boolean
+        default: false
     secrets:
       DOCKER_USERNAME:
         required: true
@@ -160,19 +165,34 @@ jobs:
         run: |
           source error_handler.sh
           # Build configuration
-          BUILD_ARGS="--file ${{ inputs.dockerfile }} \
-            --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest \
-            --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:${{ github.sha }} \
-            --cache-from type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache \
-            --cache-from type=registry,ref=nomercyentertainment/ffmpeg-base:buildcache \
-            --cache-from type=local,src=~/.docker/buildx-cache \
-            --cache-to type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache,mode=max \
-            --cache-to type=local,dest=~/.docker/buildx-cache-new,mode=max \
-            --platform linux/amd64 \
-            --build-arg BUILDKIT_INLINE_CACHE=1 \
-            --build-arg DOCKER_BUILDKIT=1 \
-            --push \
-            ${{ inputs.context }}"
+          if [[ "${{ inputs.no_cache }}" == "true" ]]; then
+            echo "🔥 No-cache build: skipping all layer caches"
+            BUILD_ARGS="--file ${{ inputs.dockerfile }} \
+              --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest \
+              --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:${{ github.sha }} \
+              --no-cache \
+              --cache-to type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache,mode=max \
+              --cache-to type=local,dest=~/.docker/buildx-cache-new,mode=max \
+              --platform linux/amd64 \
+              --build-arg BUILDKIT_INLINE_CACHE=1 \
+              --build-arg DOCKER_BUILDKIT=1 \
+              --push \
+              ${{ inputs.context }}"
+          else
+            BUILD_ARGS="--file ${{ inputs.dockerfile }} \
+              --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest \
+              --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:${{ github.sha }} \
+              --cache-from type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache \
+              --cache-from type=registry,ref=nomercyentertainment/ffmpeg-base:buildcache \
+              --cache-from type=local,src=~/.docker/buildx-cache \
+              --cache-to type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache,mode=max \
+              --cache-to type=local,dest=~/.docker/buildx-cache-new,mode=max \
+              --platform linux/amd64 \
+              --build-arg BUILDKIT_INLINE_CACHE=1 \
+              --build-arg DOCKER_BUILDKIT=1 \
+              --push \
+              ${{ inputs.context }}"
+          fi
 
           # Retry build with error recovery
           MAX_BUILD_ATTEMPTS=2
