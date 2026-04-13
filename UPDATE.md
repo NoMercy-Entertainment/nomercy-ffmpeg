@@ -152,6 +152,61 @@ This feature enables the NoMercy MediaServer to:
 # Extract DVD subtitles to VobSub pair
 ffmpeg -i movie.mkv -map 0:s:0 -c:s copy output.idx
 # produces output.idx (text index) + output.sub (bitmap data)
+
+---
+
+### v1.0.32 - April 13, 2026
+
+#### 📑 Added Chapter VTT Muxer
+
+**New Feature: Direct Chapter-to-WebVTT Output**
+
+Added a custom `chapters_vtt` muxer that reads chapter metadata from input containers (MKV, MP4, etc.) and writes a standard WebVTT chapter file. This eliminates the need for ffprobe JSON parsing when extracting chapter information.
+
+#### What's New
+- **Chapter Extraction**: Reads chapter metadata directly from any container format FFmpeg supports
+- **WebVTT Output**: Produces spec-compliant WebVTT chapter files with proper timestamp formatting
+- **No Stream Mapping**: Works with `-f chapters_vtt` alone — no `-map` flags needed (AVFMT_NOSTREAMS)
+- **Graceful Fallback**: Uses "Chapter N" titles when chapters have no title metadata
+- **Cross-Platform**: Available on all supported platforms (Linux x86_64/aarch64, Windows x86_64/arm64, macOS x86_64/ARM64)
+
+#### Technical Details
+- Implementation: `libavformat/chaptervttenc.c`
+- Build script: `scripts/54-chapter-vtt-muxer.sh`
+- FFmpeg flags: `AVFMT_NOSTREAMS | AVFMT_NOTIMESTAMPS`
+- Symbol: `ff_chapters_vtt_muxer`
+- Registration: injected into `allformats.c` and `Makefile` at build time
+
+#### Use Case
+This feature enhances the NoMercy MediaServer's ability to:
+- Extract chapter markers from MKV and MP4 files into WebVTT for the video player
+- Provide chapter navigation in the web and native clients
+- Replace multi-step ffprobe JSON pipelines with a single FFmpeg command
+
+#### Usage Examples
+```bash
+# Extract chapters from an MKV to a WebVTT file
+ffmpeg -i input.mkv -f chapters_vtt chapters.vtt
+
+# Pipe chapter output to stdout
+ffmpeg -i input.mp4 -f chapters_vtt pipe:1
+
+# Verify the muxer is available
+ffmpeg -hide_banner -muxers | grep chapters_vtt
+```
+
+#### Example Output
+```
+WEBVTT
+
+00:00:00.000 --> 00:05:23.456
+Introduction
+
+00:05:23.456 --> 00:15:47.890
+Act One
+
+00:15:47.890 --> 00:45:12.345
+Act Two
 ```
 
 ---
