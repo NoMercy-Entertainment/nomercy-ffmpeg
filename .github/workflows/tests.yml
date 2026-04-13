@@ -1,5 +1,9 @@
 name: Test & Security
 
+concurrency:
+  group: test-security-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_run:
     workflows:
