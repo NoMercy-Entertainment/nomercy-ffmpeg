@@ -50,6 +50,23 @@ RUN echo "------------------------------------------------------" \
     && echo "✅ Installations completed successfully" \
     && echo "------------------------------------------------------"
 
+# Install ldid for ad-hoc code signing of cross-compiled Mach-O binaries
+# Required because: ld64 signs during linking, but strip invalidates the signature.
+# Future macOS versions may enforce signing for x86_64 too.
+RUN echo "------------------------------------------------------" \
+    && echo "🔏 Installing ldid for Mach-O code signing" \
+    && apt-get update >/dev/null 2>&1 \
+    && apt-get install -y --no-install-recommends libplist-dev libssl-dev >/dev/null 2>&1 \
+    && git clone --branch v2.1.5-procursus7 --depth 1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid >/dev/null 2>&1 \
+    && cd /tmp/ldid \
+    && make -j$(nproc) >/dev/null 2>&1 \
+    && cp ldid /usr/local/bin/ \
+    && cd / && rm -rf /tmp/ldid \
+    && apt-get clean -y >/dev/null 2>&1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "✅ ldid installed successfully" \
+    && echo "------------------------------------------------------"
+
 ENV PREFIX=/ffmpeg_build/darwin
 ENV MACOSX_DEPLOYMENT_TARGET=10.13.0
 ENV SDK_VERSION=15.1

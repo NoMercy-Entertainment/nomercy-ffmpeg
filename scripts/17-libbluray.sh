@@ -4,7 +4,12 @@
 cd /build/libgpg-error
 if [[ ${TARGET_OS} == "darwin" ]]; then
     if [[ ${ARCH} == "arm64" ]]; then
-        # cp src/syscfg/lock-obj-pub.${ARCH%64}-apple-darwin.h src/syscfg/lock-obj-pub.darwin24.1.h
+        # Two tools look up the lock object under different names:
+        #   configure (full triplet):  lock-obj-pub.aarch64-apple-darwin24.1.h
+        #   mkheader  (stripped arch): lock-obj-pub.darwin24.1.h
+        # Source ships "aarch64-apple-darwin" (no version). Copy to both targets.
+        cp src/syscfg/lock-obj-pub.aarch64-apple-darwin.h src/syscfg/lock-obj-pub.${CROSS_PREFIX%-}.h
+        cp src/syscfg/lock-obj-pub.aarch64-apple-darwin.h src/syscfg/lock-obj-pub.aarch64-apple-darwin24.1.h
         cp src/syscfg/lock-obj-pub.aarch64-apple-darwin.h src/syscfg/lock-obj-pub.darwin24.1.h
     else
         cp src/syscfg/lock-obj-pub.${ARCH}-apple-darwin.h src/syscfg/lock-obj-pub.${CROSS_PREFIX%-}.h

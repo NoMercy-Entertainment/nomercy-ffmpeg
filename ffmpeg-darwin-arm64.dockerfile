@@ -50,6 +50,23 @@ RUN echo "------------------------------------------------------" \
     && echo "✅ Installations completed successfully" \
     && echo "------------------------------------------------------"
 
+# Install ldid for ad-hoc code signing of cross-compiled Mach-O binaries
+# Required because: ld64 signs during linking, but strip invalidates the signature.
+# ARM64 binaries MUST have a valid signature to run on macOS 11+.
+RUN echo "------------------------------------------------------" \
+    && echo "🔏 Installing ldid for Mach-O code signing" \
+    && apt-get update >/dev/null 2>&1 \
+    && apt-get install -y --no-install-recommends libplist-dev libssl-dev >/dev/null 2>&1 \
+    && git clone --branch v2.1.5-procursus7 --depth 1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid >/dev/null 2>&1 \
+    && cd /tmp/ldid \
+    && make -j$(nproc) >/dev/null 2>&1 \
+    && cp ldid /usr/local/bin/ \
+    && cd / && rm -rf /tmp/ldid \
+    && apt-get clean -y >/dev/null 2>&1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "✅ ldid installed successfully" \
+    && echo "------------------------------------------------------"
+
 ENV PREFIX=/ffmpeg_build/darwin
 ENV MACOSX_DEPLOYMENT_TARGET=11.0.0
 ENV SDK_VERSION=15.1
@@ -90,7 +107,7 @@ ENV CFLAGS="-arch ${ARCH} -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET} -isys
 ENV CXXFLAGS="-arch ${ARCH} -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET} -isysroot ${SDK_PATH} -F${OSX_FRAMEWORKS} -I${SDK_PATH}/usr/include -stdlib=libc++ -I${PREFIX}/include -O2 -pipe -fPIC -DPIC -pthread"
 ENV LDFLAGS="-arch ${ARCH} -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET} -isysroot ${SDK_PATH} -F${OSX_FRAMEWORKS} -framework CoreFoundation -framework CoreVideo -framework IOSurface -framework VideoToolbox -framework OpenCL -framework Accelerate -framework DiskArbitration -framework IOKit -L${SDK_PATH}/usr/lib -stdlib=libc++ -L${PREFIX}/lib -Wl,-dead_strip_dylibs -pthread"
 
-ENV CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=${CC}
+ENV CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=${CC}
 
 # Create Meson cross file for darwin
 RUN echo "[constants]" > /build/cross_file.txt && \
