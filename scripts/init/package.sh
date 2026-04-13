@@ -29,6 +29,21 @@ find ${PREFIX} -name '*.jar' -exec cp {} /ffmpeg/${TARGET_OS}/${ARCH}/ \;
 text_with_padding "✅ FFmpeg binaries copied successfully" ""
 hr
 
+# Ad-hoc sign Darwin (macOS) binaries
+# ld64 applies a signature during linking, but strip invalidates it.
+# ARM64 binaries MUST have a valid signature to run on macOS 11+.
+if [[ ${TARGET_OS} == "darwin" ]] && command -v ldid &> /dev/null; then
+    text_with_padding "🔏 Ad-hoc signing Darwin binaries" ""
+    for bin in /ffmpeg/${TARGET_OS}/${ARCH}/*; do
+        if [ -f "$bin" ] && file "$bin" | grep -q "Mach-O"; then
+            ldid -S "$bin"
+            text_with_padding "  ✅ Signed $(basename $bin)" ""
+        fi
+    done
+    text_with_padding "✅ Darwin binaries signed" ""
+    hr
+fi
+
 # cleanup
 text_with_padding "🧹 Pre Cleaning up" ""
 rm -rf ${PREFIX} /build
