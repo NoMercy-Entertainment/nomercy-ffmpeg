@@ -2,6 +2,69 @@
 
 ## Version History
 
+### v1.0.34 - April 13, 2026
+
+#### 🖼️ Added Sprite Sheet Muxer with WebVTT Timeline
+
+**New Feature: Sprite Sheet + WebVTT Muxer (`spritevtt`)**
+
+Added a custom FFmpeg muxer that generates tiled sprite sheet images (PNG or WebP) with companion WebVTT files mapping timestamps to sprite regions using the W3C Media Fragments `#xywh=` standard. This replaces the C# sprite generation pipeline with a single FFmpeg command.
+
+#### What's New
+- **Sprite Sheet Generation**: Assembles video thumbnails into a single tiled grid image
+- **WebVTT Companion**: Automatically generates a `.vtt` file with `#xywh=` fragment identifiers for each thumbnail region
+- **Auto Square Grid**: When `sprite_columns` is 0 (default), calculates the optimal square grid layout via `ceil(sqrt(n))`
+- **Dimension Validation**: Validates sprite sheet dimensions against WebP maximum (16383x16383), with clear error messages suggesting alternatives
+- **PNG & WebP Support**: Output format determined by file extension — `.png` for PNG, `.webp` for WebP
+- **Pixel Format Conversion**: Automatic conversion via swscale when input pixel format doesn't match encoder requirements
+
+#### Technical Details
+- Implementation: `scripts/includes/spritevttenc.c`
+- Build script: `scripts/53-sprite-sheet-muxer.sh`
+- Output: Single sprite sheet image + companion `.vtt` file with W3C Media Fragments `#xywh=` cue payloads
+- Frame buffering: All frames held in memory until `write_trailer`, where the grid is assembled and encoded
+- Cross-format: Handles planar (YUV420P) and packed (RGB24) pixel formats correctly via `av_pix_fmt_desc_get()`
+
+#### Use Case
+This feature enables the NoMercy MediaServer to generate video player seek preview thumbnails (timeline hover previews) entirely within FFmpeg, replacing the previous multi-step C# pipeline. The VTT file is directly consumable by HTML5 video players and the NoMercy video player.
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `sprite_columns` | int | 0 (auto) | Number of columns in the sprite grid. 0 = auto square grid |
+| `vtt_filename` | string | null | Override the companion VTT filename |
+| `relative_path` | bool | true | Use relative filename in VTT cues |
+
+#### Usage Examples
+```bash
+# Generate sprite sheet from video (one thumbnail every 5 seconds, 160x90)
+ffmpeg -i input.mp4 -vf "fps=1/5,scale=160:90" -f spritevtt out.webp
+# Produces: out.webp + out.vtt
+
+# PNG output with custom column count
+ffmpeg -i input.mp4 -vf "fps=1/10,scale=160:90" -f spritevtt -sprite_columns 10 out.png
+
+# Custom VTT filename
+ffmpeg -i input.mp4 -vf "fps=1/5,scale=160:90" -f spritevtt -vtt_filename thumbnails.vtt out.webp
+```
+
+#### Example VTT Output
+```
+WEBVTT
+
+00:00:00.000 --> 00:00:05.000
+out.webp#xywh=0,0,160,90
+
+00:00:05.000 --> 00:00:10.000
+out.webp#xywh=160,0,160,90
+
+00:00:10.000 --> 00:00:15.000
+out.webp#xywh=320,0,160,90
+```
+
+---
+
 ### v1.0.29 - December 27, 2025
 
 #### 📺 Added Teletext & Closed Caption Support

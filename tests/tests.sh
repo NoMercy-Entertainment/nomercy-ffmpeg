@@ -215,6 +215,7 @@ run_test "libopenjpeg" "-y -i ${SampleImage} -c:v libopenjpeg ${TestRoot}/test_j
 # Subtitle codecs
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
 run_test "vobsub_muxer" "-hide_banner -muxers" "vobsub"
+run_test "spritevtt_muxer" "-hide_banner -muxers" "spritevtt"
 
 # Hardware acceleration (may fail if no hardware support)
 run_test "NVENC" "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4" "nvenc"
