@@ -48,8 +48,6 @@ typedef struct VOBSubMuxContext {
     AVIOContext *companion_pb;  /* companion file (.sub or .idx) */
     AVIOContext *idx_pb;        /* points to whichever pb is the .idx */
     AVIOContext *sub_pb;        /* points to whichever pb is the .sub */
-    int64_t first_pts;
-    int first_pts_set;
 } VOBSubMuxContext;
 
 /**
@@ -161,7 +159,6 @@ static av_cold int vobsub_write_header(AVFormatContext *s)
     avio_printf(vs->idx_pb, "id: %s, index: 0\n",
                 (lang && lang->value) ? lang->value : "und");
 
-    vs->first_pts_set = 0;
     return 0;
 }
 
@@ -176,14 +173,6 @@ static int vobsub_write_packet(AVFormatContext *s, AVPacket *pkt)
 
     pts = pkt->pts;
     if (pts == AV_NOPTS_VALUE)
-        pts = 0;
-
-    if (!vs->first_pts_set) {
-        vs->first_pts     = pts;
-        vs->first_pts_set = 1;
-    }
-    pts -= vs->first_pts;
-    if (pts < 0)
         pts = 0;
 
     pes_size = 9 + pkt->size;
