@@ -469,17 +469,27 @@ static int spritevtt_write_trailer(AVFormatContext *s)
         goto cleanup;
     }
 
-    ret = avcodec_receive_packet(enc_ctx, out_pkt);
-    if (ret < 0) {
-        av_log(s, AV_LOG_ERROR,
-               "Error receiving packet from encoder: %s\n",
-               av_err2str(ret));
-        goto cleanup;
-    }
+    /* Flush encoder — signal end of stream so buffered encoders
+     * (libwebp_anim) produce output. Without this, receive_packet
+     * returns EAGAIN because the encoder is waiting for more frames. */
+    avcodec_send_frame(enc_ctx, NULL);
 
-    /* Write encoded sprite sheet image to primary output */
-    avio_write(s->pb, out_pkt->data, out_pkt->size);
+    /* Drain all encoded packets */
+    while (1) {
+        ret = avcodec_receive_packet(enc_ctx, out_pkt);
+        if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN))
+            break;
+        if (ret < 0) {
+            av_log(s, AV_LOG_ERROR,
+                   "Error receiving packet from encoder: %s\n",
+                   av_err2str(ret));
+            goto cleanup;
+        }
+        avio_write(s->pb, out_pkt->data, out_pkt->size);
+        av_packet_unref(out_pkt);
+    }
     avio_flush(s->pb);
+    ret = 0;
 
 write_vtt:
     /* Determine VTT filename */
