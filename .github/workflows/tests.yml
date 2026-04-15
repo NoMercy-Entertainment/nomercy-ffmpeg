@@ -160,17 +160,16 @@ jobs:
             Write-Host "FFmpeg binary not found, skipping tests"
             exit 0
           }
-          
+
           # Check if test script exists
           if (-not (Test-Path "${{ github.workspace }}\tests\tests.ps1")) {
             Write-Host "Test script not found, skipping tests"
             exit 0
           }
-          
+
           Write-Host "Running tests for ${{ matrix.platform }}-${{ matrix.arch }}"
-          try {
-            & "${{ github.workspace }}\tests\tests.ps1" "${{ github.workspace }}"
-          } catch {
+          & "${{ github.workspace }}\tests\tests.ps1" "${{ github.workspace }}"
+          if ($LASTEXITCODE -ne 0) {
             Write-Host "Tests failed, but continuing..."
             exit 0
           }
