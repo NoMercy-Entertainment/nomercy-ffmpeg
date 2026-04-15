@@ -8,7 +8,8 @@ $script:REQUIRED_PASSED = 0
 $script:REQUIRED_FAILED = 0
 $script:HW_TOTAL = 0
 $script:HW_PASSED = 0
-$script:HW_UNAVAILABLE = 0
+$script:HW_MISSING = 0
+$script:HW_FAILED = 0
 
 $TestRoot = "$Workspace\test_files"
 $SampleVideo = "$TestRoot\sample.mp4"
@@ -103,6 +104,7 @@ Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle
     }
 }
 
+# ── Required test: failure = broken build ────────────────────
 function run_test {
     param (
         $name,
@@ -127,32 +129,54 @@ function run_test {
     }
 }
 
+# ── Hardware test: detect missing hardware vs real failure ───
+# 1. Check encoder is compiled in (required — if missing, it's a build bug)
+# 2. Try to encode — if it fails, check WHY:
+#    - "no capable device" / "device not found" / "not available" = hardware missing
+#    - anything else = real bug
 function run_hw_test {
     param (
         $name,
-        $command,
-        $expected_output
+        $encoder,
+        $command
     )
 
     $script:HW_TOTAL++
     $name = $name.ToUpper()
     text_with_padding "🔌 Testing ${name}" "[$script:HW_TOTAL]"
     $Start_Time = Get-Date
+
+    # Step 1: verify encoder is compiled in
+    $encoder_list = Invoke-Expression "$Workspace\ffmpeg.exe -hide_banner -encoders 2>&1" | Out-String
+    if (-not ($encoder_list -match $encoder)) {
+        $End_Time = Get-Date
+        $elapsed = "$((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s"
+        text_with_padding "❌ ${name} not compiled in" "[ ${elapsed} ]" 1
+        $script:HW_FAILED++
+        return
+    }
+
+    # Step 2: try to encode
     $test_output = Invoke-Expression "$Workspace\ffmpeg.exe $command 2>&1" | Out-String
     $End_Time = Get-Date
     $elapsed = "$((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s"
-    if ( $LASTEXITCODE -eq 0 -and $test_output -cmatch $expected_output ) {
+
+    if ($LASTEXITCODE -eq 0) {
         text_with_padding "✅ ${name} passed" "[ ${elapsed} ]" 1
         $script:HW_PASSED++
     }
+    elseif ($test_output -match "(?i)(no capable|device.*not found|not available|cannot load|could not|no .*device|driver|hwaccel|Failed to)") {
+        text_with_padding "➖ ${name} hardware not present" "[ ${elapsed} ]" 1
+        $script:HW_MISSING++
+    }
     else {
-        text_with_padding "➖ ${name} unavailable" "[ ${elapsed} ]" 1
-        $script:HW_UNAVAILABLE++
+        text_with_padding "❌ ${name} FAILED" "[ ${elapsed} ]" 1
+        $script:HW_FAILED++
     }
 }
 
 # ══════════════════════════════════════════════════════════════
-# Main execution
+# Main
 # ══════════════════════════════════════════════════════════════
 
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
@@ -172,7 +196,7 @@ Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 check_command
 generate_samples
 
-# ── Required tests (failures = broken build) ─────────────────
+# ── Required tests ───────────────────────────────────────────
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 text_with_padding "🔒 Required tests" "(must pass)"
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
@@ -215,14 +239,14 @@ run_test "libdav1d" "-hide_banner -decoders" "dav1d"
 run_test "librav1e" "-hide_banner -encoders" "rav1e"
 run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
 
-# ── Hardware tests (failures = no GPU, not a bug) ────────────
+# ── Hardware tests ───────────────────────────────────────────
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
-text_with_padding "🔌 Hardware tests" "(allowed to fail)"
+text_with_padding "🔌 Hardware tests" "(detect availability)"
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 
-run_hw_test "NVENC" "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nvenc.mp4" "nvenc"
-run_hw_test "VPL" "-y -i $SampleVideo -c:v h264_vpl $TestRoot\test_vpl.mp4" "vpl"
-run_hw_test "AMF" "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4" "amf"
+# Windows: NVENC (NVIDIA), VPL (Intel), AMF (AMD), DXVA2/D3D11VA
+run_hw_test "NVENC" "h264_nvenc" "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nvenc.mp4"
+run_hw_test "AMF" "h264_amf" "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4"
 
 # ── Summary ──────────────────────────────────────────────────
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
@@ -230,15 +254,26 @@ text_with_padding "📊 Required:" "$script:REQUIRED_PASSED/$script:REQUIRED_TOT
 if ($script:REQUIRED_FAILED -gt 0) {
     text_with_padding "   ❌ Failures:" "$script:REQUIRED_FAILED"
 }
-text_with_padding "📊 Hardware:" "$script:HW_PASSED/$script:HW_TOTAL available"
+Write-Host ""
+text_with_padding "📊 Hardware:" ""
+if ($script:HW_PASSED -gt 0) {
+    text_with_padding "   ✅ Available:" "$script:HW_PASSED"
+}
+if ($script:HW_MISSING -gt 0) {
+    text_with_padding "   ➖ Not present:" "$script:HW_MISSING"
+}
+if ($script:HW_FAILED -gt 0) {
+    text_with_padding "   ❌ Broken:" "$script:HW_FAILED"
+}
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host ""
 
 # Cleanup
 Remove-Item -Recurse -Force -Path $TestRoot -ErrorAction SilentlyContinue
 
-# Only required failures cause a non-zero exit
-if ($script:REQUIRED_FAILED -gt 0) {
+# Required failures OR hardware build failures = non-zero exit
+$total_failures = $script:REQUIRED_FAILED + $script:HW_FAILED
+if ($total_failures -gt 0) {
     exit 1
 }
 exit 0

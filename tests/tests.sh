@@ -18,7 +18,8 @@ REQUIRED_PASSED=0
 REQUIRED_FAILED=0
 HW_TOTAL=0
 HW_PASSED=0
-HW_UNAVAILABLE=0
+HW_MISSING=0
+HW_FAILED=0
 
 TestRoot="${Workspace}/test_files"
 SampleVideo="${TestRoot}/sample.mp4"
@@ -131,7 +132,7 @@ generate_samples() {
     fi
 }
 
-# Required test — failure = broken build
+# ── Required test: failure = broken build ────────────────────
 run_test() {
     local name=$1
     local command=$2
@@ -158,11 +159,16 @@ run_test() {
     fi
 }
 
-# Hardware test — failure = no GPU, not a bug
+# ── Hardware test: detect missing hardware vs real failure ───
+# 1. Verify encoder is compiled in (if not = build bug)
+# 2. Try to encode:
+#    - success = hardware works
+#    - fail + "device/hardware/driver" in error = hardware not present
+#    - fail + other error = real bug
 run_hw_test() {
     local name=$1
-    local command=$2
-    local expected_output=$3
+    local encoder=$2
+    local command=$3
     local test_output exit_code
 
     HW_TOTAL=$((HW_TOTAL + 1))
@@ -171,22 +177,36 @@ run_hw_test() {
     text_with_padding "🔌 Testing ${name}" "[${HW_TOTAL}]" 1
     Start_Time=$(date +%s)
 
+    # Step 1: verify encoder is compiled in
+    local encoder_list
+    encoder_list=$(eval "${Workspace}/ffmpeg -hide_banner -encoders" 2>&1)
+    if ! echo "$encoder_list" | grep -q "$encoder"; then
+        End_Time=$(date +%s)
+        text_with_padding "❌ ${name} not compiled in" "[$((End_Time - Start_Time))s]" 1
+        HW_FAILED=$((HW_FAILED + 1))
+        return
+    fi
+
+    # Step 2: try to encode
     test_output=$(eval "${Workspace}/ffmpeg $command" 2>&1)
     exit_code=$?
     End_Time=$(date +%s)
     local elapsed="$((End_Time - Start_Time))s"
 
-    if [[ $exit_code -eq 0 ]] && echo "$test_output" | grep -q "$expected_output"; then
+    if [[ $exit_code -eq 0 ]]; then
         text_with_padding "✅ ${name} passed" "[${elapsed}]" 1
         HW_PASSED=$((HW_PASSED + 1))
+    elif echo "$test_output" | grep -qiE "(no capable|device.*not found|not available|cannot load|could not|no .*device|driver|hwaccel|Failed to)"; then
+        text_with_padding "➖ ${name} hardware not present" "[${elapsed}]" 1
+        HW_MISSING=$((HW_MISSING + 1))
     else
-        text_with_padding "➖ ${name} unavailable" "[${elapsed}]" 1
-        HW_UNAVAILABLE=$((HW_UNAVAILABLE + 1))
+        text_with_padding "❌ ${name} FAILED" "[${elapsed}]" 1
+        HW_FAILED=$((HW_FAILED + 1))
     fi
 }
 
 # ══════════════════════════════════════════════════════════════
-# Main execution
+# Main
 # ══════════════════════════════════════════════════════════════
 
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
@@ -206,7 +226,7 @@ printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
 check_command
 generate_samples
 
-# ── Required tests (failures = broken build) ─────────────────
+# ── Required tests ───────────────────────────────────────────
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
 text_with_padding "🔒 Required tests" "(must pass)"
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
@@ -249,14 +269,24 @@ run_test "libdav1d" "-hide_banner -decoders" "dav1d"
 run_test "librav1e" "-hide_banner -encoders" "rav1e"
 run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
 
-# ── Hardware tests (failures = no GPU, not a bug) ────────────
+# ── Hardware tests ───────────────────────────────────────────
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
-text_with_padding "🔌 Hardware tests" "(allowed to fail)"
+text_with_padding "🔌 Hardware tests" "(detect availability)"
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
 
-run_hw_test "NVENC" "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4" "nvenc"
-run_hw_test "VPL" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4" "vpl"
-run_hw_test "AMF" "-y -i ${SampleVideo} -c:v h264_amf ${TestRoot}/test_amf.mp4" "amf"
+# Platform-specific hardware tests
+OS_TYPE="$(uname -s)"
+case "$OS_TYPE" in
+    Darwin)
+        run_hw_test "VideoToolbox H264" "h264_videotoolbox" "-y -i ${SampleVideo} -c:v h264_videotoolbox ${TestRoot}/test_vtb_h264.mp4"
+        run_hw_test "VideoToolbox HEVC" "hevc_videotoolbox" "-y -i ${SampleVideo} -c:v hevc_videotoolbox ${TestRoot}/test_vtb_hevc.mp4"
+        ;;
+    Linux)
+        run_hw_test "NVENC" "h264_nvenc" "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4"
+        run_hw_test "VPL" "h264_vpl" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4"
+        run_hw_test "AMF" "h264_amf" "-y -i ${SampleVideo} -c:v h264_amf ${TestRoot}/test_amf.mp4"
+        ;;
+esac
 
 # ── Summary ──────────────────────────────────────────────────
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
@@ -264,15 +294,26 @@ text_with_padding "📊 Required:" "${REQUIRED_PASSED}/${REQUIRED_TOTAL} passed"
 if [ ${REQUIRED_FAILED} -gt 0 ]; then
     text_with_padding "   ❌ Failures:" "${REQUIRED_FAILED}"
 fi
-text_with_padding "📊 Hardware:" "${HW_PASSED}/${HW_TOTAL} available"
+echo ""
+text_with_padding "📊 Hardware:" ""
+if [ ${HW_PASSED} -gt 0 ]; then
+    text_with_padding "   ✅ Available:" "${HW_PASSED}"
+fi
+if [ ${HW_MISSING} -gt 0 ]; then
+    text_with_padding "   ➖ Not present:" "${HW_MISSING}"
+fi
+if [ ${HW_FAILED} -gt 0 ]; then
+    text_with_padding "   ❌ Broken:" "${HW_FAILED}"
+fi
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
 echo ""
 
 # cleanup
 rm -rf "${TestRoot}"
 
-# Only required failures cause a non-zero exit
-if [ "${REQUIRED_FAILED}" -gt 0 ]; then
+# Required failures OR hardware build failures = non-zero exit
+TOTAL_FAILURES=$((REQUIRED_FAILED + HW_FAILED))
+if [ "${TOTAL_FAILURES}" -gt 0 ]; then
     exit 1
 fi
 exit 0

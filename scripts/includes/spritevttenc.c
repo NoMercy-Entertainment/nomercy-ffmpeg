@@ -617,7 +617,7 @@ static void spritevtt_deinit(AVFormatContext *s)
 const FFOutputFormat ff_spritevtt_muxer = {
     .p.name           = "spritevtt",
     .p.long_name      = NULL_IF_CONFIG_SMALL("Sprite sheet with WebVTT timeline"),
-    .p.extensions     = "png,webp",
+    .p.extensions     = "spritevtt",
     .p.video_codec    = AV_CODEC_ID_RAWVIDEO,
     .p.audio_codec    = AV_CODEC_ID_NONE,
     .p.subtitle_codec = AV_CODEC_ID_NONE,

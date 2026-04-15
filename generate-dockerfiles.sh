@@ -7,9 +7,15 @@
 # the monolithic "COPY scripts + RUN init.sh" with individual
 # COPY+RUN pairs per build script.
 #
-# This enables Docker layer caching per dependency:
-#   - Change script 53 → only scripts 53-55 + FFmpeg rebuild
-#   - Scripts 01-52 remain cached
+# Layer strategy:
+#   - Init helpers at the top (rarely change)
+#   - Platform 00-scripts with only the resources they need
+#   - Scripts 01-48 as individual layers
+#   - C source files + resources right before scripts 49+ that use them
+#   - Scripts 49-55 (custom FFmpeg patches)
+#
+# Result: changing spritevttenc.c only rebuilds 49-55 + FFmpeg,
+# not the entire dependency chain.
 #
 # Usage: bash generate-dockerfiles.sh
 # ──────────────────────────────────────────────────────────────
@@ -27,38 +33,55 @@ fi
 
 echo "Found ${#SCRIPTS[@]} build scripts"
 
+# ── Collect C source files from includes ──────────────────────
+mapfile -t C_SOURCES < <(ls scripts/includes/*.c 2>/dev/null | sort | xargs -I{} basename {})
+echo "Found ${#C_SOURCES[@]} C source files"
+
 # ── Extract header from a Dockerfile ─────────────────────────
-# Everything before the line "# Copy the build scripts"
 extract_header() {
     local file="$1"
-    awk '/^# Copy the build scripts$/{exit} {print}' "$file"
+    # Stop at either the original marker or the generated marker
+    awk '/^# Copy the build scripts$/{exit} /^# ═{3,}/{exit} {print}' "$file"
 }
 
 # ── Extract footer from a Dockerfile ─────────────────────────
-# Everything from "# Copy the dev scripts" to end of file
 extract_footer() {
     local file="$1"
     awk '/^# Copy the dev scripts$/{found=1} found{print}' "$file"
 }
 
+# ── Map C source files to the scripts that use them ──────────
+# Each C file is copied right before the script that needs it.
+# Changing one C file only invalidates that script + later ones.
+declare -A C_FILE_FOR_SCRIPT=(
+    [49-beatdetect.sh]="af_beatdetect.c"
+    [51-vobsub-muxer.sh]="vobsubenc.c"
+    [52-ocr-subtitle-encoder.sh]="ocr_subtitle_enc.c"
+    [53-sprite-sheet-muxer.sh]="spritevttenc.c"
+    [54-chapter-vtt-muxer.sh]="chaptervttenc.c"
+)
+
+# ── Map resource files to scripts that use them ──────────────
+declare -A RESOURCE_FOR_SCRIPT=(
+    [00-rcinfo.sh]="fftools.ico"
+)
+
 # ── Generate per-script build section ─────────────────────────
 generate_build_steps() {
     local os="$1"  # linux, windows, darwin
 
-    # Infrastructure: init scripts, includes, C sources
     cat <<'BLOCK'
 
 # ══════════════════════════════════════════════════════════════
 # Per-dependency cached build layers
 #
-# Each script gets its own COPY+RUN so Docker can cache individual
-# dependency builds. Changing one script only invalidates that
-# layer and everything after it — earlier deps stay cached.
+# Every file is copied individually, right before the script
+# that uses it. Changing one file only invalidates that script
+# and everything after it — nothing before is affected.
 # ══════════════════════════════════════════════════════════════
 
-# ── Build infrastructure (helpers, platform includes, C sources)
+# ── Build infrastructure (helpers only) ──────────────────────
 COPY ./scripts/init/ /scripts/init/
-COPY ./scripts/includes/ /scripts/includes/
 RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} + \
     && chmod +x /scripts/init/*.sh \
     && mkdir -p ${PREFIX}/lib ${PREFIX}/lib/pkgconfig ${PREFIX}/include ${PREFIX}/bin \
@@ -66,51 +89,47 @@ RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} + \
 
 BLOCK
 
-    # Platform-specific 00-scripts (run before numbered scripts)
+    # Platform-specific 00-scripts with their individual dependencies
     if [ "$os" = "darwin" ]; then
         cat <<'BLOCK'
-# ── Darwin: platform version helper ──────────────────────────
 COPY ./scripts/includes/darwin/00-platformversion.sh /scripts/00-platformversion.sh
 RUN /scripts/init/run-step.sh 00-platformversion.sh
 
 BLOCK
     elif [ "$os" = "windows" ]; then
         cat <<'BLOCK'
-# ── Windows: resource info ───────────────────────────────────
 COPY ./scripts/includes/windows/00-rcinfo.sh /scripts/00-rcinfo.sh
+COPY ./scripts/resources/fftools.ico /scripts/resources/fftools.ico
 RUN /scripts/init/run-step.sh 00-rcinfo.sh
 
 BLOCK
     fi
 
     # Per-script layers
-    echo "# ── Dependency build steps ─────────────────────────────────"
     for script in "${SCRIPTS[@]}"; do
         local src="./scripts/${script}"
 
-        # Windows: insert openblas before whisper (same number group)
+        # Windows: insert openblas before whisper
         if [ "$os" = "windows" ] && [ "$script" = "48-whisper.sh" ]; then
-            echo ""
-            echo "# Windows: OpenBLAS for Whisper acceleration"
             echo "COPY ./scripts/includes/windows/48-openblas.sh /scripts/48-openblas.sh"
             echo "RUN /scripts/init/run-step.sh 48-openblas.sh"
+            echo ""
         fi
 
         # Darwin: use platform-specific librsvg
         if [ "$os" = "darwin" ] && [ "$script" = "50-librsvg.sh" ]; then
             src="./scripts/includes/darwin/50-librsvg.sh"
-            echo ""
-            echo "# Darwin: platform-specific librsvg (replaces default)"
-            echo "COPY ${src} /scripts/${script}"
-            echo "RUN /scripts/init/run-step.sh ${script}"
-            continue
         fi
 
-        echo ""
+        # Copy the C source file this script needs (if any)
+        if [[ -n "${C_FILE_FOR_SCRIPT[$script]+x}" ]]; then
+            echo "COPY ./scripts/includes/${C_FILE_FOR_SCRIPT[$script]} /scripts/includes/${C_FILE_FOR_SCRIPT[$script]}"
+        fi
+
         echo "COPY ${src} /scripts/${script}"
         echo "RUN /scripts/init/run-step.sh ${script}"
+        echo ""
     done
-    echo ""
 }
 
 # ── Process each Dockerfile ──────────────────────────────────
@@ -124,19 +143,16 @@ process_dockerfile() {
         return
     fi
 
-    # Determine OS from platform name
     local os="${platform%%-*}"
 
     echo "Generating ${dockerfile} (${os})..."
 
     local outfile="${dockerfile}.new"
 
-    # Combine: header + per-script layers + footer
     extract_header "$dockerfile"       >  "$outfile"
     generate_build_steps "$os"         >> "$outfile"
     extract_footer "$dockerfile"       >> "$outfile"
 
-    # Replace original with generated version
     mv "$outfile" "$dockerfile"
     echo "✅ ${dockerfile}"
 }
@@ -152,10 +168,6 @@ process_dockerfile "darwin-arm64"   "ffmpeg-darwin-arm64.dockerfile"
 echo ""
 echo "All Dockerfiles updated with per-script caching layers."
 echo ""
-echo "To test locally:"
-echo "  docker buildx build -f ffmpeg-linux-x86_64.dockerfile --progress=plain ."
-echo ""
-echo "To verify caching:"
-echo "  1. Build once (cold build)"
-echo "  2. Change a late script (e.g. scripts/53-sprite-sheet-muxer.sh)"
-echo "  3. Rebuild — scripts 01-52 show CACHED, only 53+ rebuild"
+echo "Layer strategy:"
+echo "  init/ helpers → 00-scripts → 01-48 deps → C sources → 49-55 custom"
+echo "  Changing a .c file only rebuilds 49-55 + FFmpeg, not 01-48"

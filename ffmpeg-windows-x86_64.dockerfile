@@ -112,24 +112,21 @@ ENV FFMPEG_ENABLES="" \
 # ══════════════════════════════════════════════════════════════
 # Per-dependency cached build layers
 #
-# Each script gets its own COPY+RUN so Docker can cache individual
-# dependency builds. Changing one script only invalidates that
-# layer and everything after it — earlier deps stay cached.
+# Every file is copied individually, right before the script
+# that uses it. Changing one file only invalidates that script
+# and everything after it — nothing before is affected.
 # ══════════════════════════════════════════════════════════════
 
-# ── Build infrastructure (helpers, platform includes, C sources)
+# ── Build infrastructure (helpers only) ──────────────────────
 COPY ./scripts/init/ /scripts/init/
-COPY ./scripts/includes/ /scripts/includes/
 RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} + \
     && chmod +x /scripts/init/*.sh \
     && mkdir -p ${PREFIX}/lib ${PREFIX}/lib/pkgconfig ${PREFIX}/include ${PREFIX}/bin \
     && touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_libflags.txt
 
-# ── Windows: resource info ───────────────────────────────────
 COPY ./scripts/includes/windows/00-rcinfo.sh /scripts/00-rcinfo.sh
+COPY ./scripts/resources/fftools.ico /scripts/resources/fftools.ico
 RUN /scripts/init/run-step.sh 00-rcinfo.sh
-
-# ── Dependency build steps ─────────────────────────────────
 
 COPY ./scripts/01-iconv.sh /scripts/01-iconv.sh
 RUN /scripts/init/run-step.sh 01-iconv.sh
@@ -281,13 +278,13 @@ RUN /scripts/init/run-step.sh 46-opencl.sh
 COPY ./scripts/47-dxva.sh /scripts/47-dxva.sh
 RUN /scripts/init/run-step.sh 47-dxva.sh
 
-# Windows: OpenBLAS for Whisper acceleration
 COPY ./scripts/includes/windows/48-openblas.sh /scripts/48-openblas.sh
 RUN /scripts/init/run-step.sh 48-openblas.sh
 
 COPY ./scripts/48-whisper.sh /scripts/48-whisper.sh
 RUN /scripts/init/run-step.sh 48-whisper.sh
 
+COPY ./scripts/includes/af_beatdetect.c /scripts/includes/af_beatdetect.c
 COPY ./scripts/49-beatdetect.sh /scripts/49-beatdetect.sh
 RUN /scripts/init/run-step.sh 49-beatdetect.sh
 
@@ -297,15 +294,19 @@ RUN /scripts/init/run-step.sh 49-libzvbi.sh
 COPY ./scripts/50-librsvg.sh /scripts/50-librsvg.sh
 RUN /scripts/init/run-step.sh 50-librsvg.sh
 
+COPY ./scripts/includes/vobsubenc.c /scripts/includes/vobsubenc.c
 COPY ./scripts/51-vobsub-muxer.sh /scripts/51-vobsub-muxer.sh
 RUN /scripts/init/run-step.sh 51-vobsub-muxer.sh
 
+COPY ./scripts/includes/ocr_subtitle_enc.c /scripts/includes/ocr_subtitle_enc.c
 COPY ./scripts/52-ocr-subtitle-encoder.sh /scripts/52-ocr-subtitle-encoder.sh
 RUN /scripts/init/run-step.sh 52-ocr-subtitle-encoder.sh
 
+COPY ./scripts/includes/spritevttenc.c /scripts/includes/spritevttenc.c
 COPY ./scripts/53-sprite-sheet-muxer.sh /scripts/53-sprite-sheet-muxer.sh
 RUN /scripts/init/run-step.sh 53-sprite-sheet-muxer.sh
 
+COPY ./scripts/includes/chaptervttenc.c /scripts/includes/chaptervttenc.c
 COPY ./scripts/54-chapter-vtt-muxer.sh /scripts/54-chapter-vtt-muxer.sh
 RUN /scripts/init/run-step.sh 54-chapter-vtt-muxer.sh
 
