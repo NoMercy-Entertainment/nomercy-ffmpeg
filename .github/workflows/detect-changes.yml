@@ -84,7 +84,7 @@ jobs:
         id: check-files
         run: |
           git config --global --add safe.directory ${{ github.workspace }}
-          
+
           # Check if force rebuild is enabled
           FORCE_REBUILD="${{ inputs.force_rebuild }}"
           if [[ "$FORCE_REBUILD" == "true" ]]; then
@@ -98,23 +98,56 @@ jobs:
             echo "workflow=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
+
           # Get changed files since last commit
           CHANGED_FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
-          echo "Changed files: $CHANGED_FILES"
-          
-          # Changes to scripts/ or scripts/includes/ affect ALL platforms
-          # (Dockerfiles COPY and execute these during build)
-          SCRIPTS_CHANGED=$(echo "$CHANGED_FILES" | grep -qE "^scripts/" && echo "true" || echo "false")
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
 
-          # Check each component — Dockerfile change OR scripts change triggers rebuild
-          echo "base=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-base.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
-          echo "linux-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-linux-x86_64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
-          echo "linux-aarch64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-linux-aarch64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
-          echo "windows-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-windows-x86_64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
-          echo "darwin-x86_64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-darwin-x86_64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
-          echo "darwin-arm64=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-darwin-arm64.dockerfile" && echo "true" || echo "$SCRIPTS_CHANGED")" >> $GITHUB_OUTPUT
-          echo "workflow=$(echo "$CHANGED_FILES" | grep -q ".github/workflows/" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          # Shared scripts/dev affect ALL platforms:
+          #   scripts/*.sh, scripts/init/*, scripts/patches/*, scripts/resources/*
+          #   scripts/includes/*.c (custom source files patched into FFmpeg)
+          #   dev/init/*
+          # (Dockerfiles COPY these dirs and execute them during build)
+          SHARED_CHANGED="false"
+          if echo "$CHANGED_FILES" | grep -qE "^scripts/(init/|patches/|resources/|[^/]+\.sh$)"; then
+            SHARED_CHANGED="true"
+          elif echo "$CHANGED_FILES" | grep -qE "^(scripts|dev)/includes/[^/]+$"; then
+            SHARED_CHANGED="true"
+          elif echo "$CHANGED_FILES" | grep -qE "^dev/init/"; then
+            SHARED_CHANGED="true"
+          fi
+
+          # Platform-specific scripts only trigger their platform:
+          #   scripts/includes/<platform>/* and dev/includes/<platform>/*
+          DARWIN_SCRIPTS="false"
+          echo "$CHANGED_FILES" | grep -qE "^(scripts|dev)/includes/darwin/" && DARWIN_SCRIPTS="true"
+
+          LINUX_SCRIPTS="false"
+          echo "$CHANGED_FILES" | grep -qE "^(scripts|dev)/includes/linux/" && LINUX_SCRIPTS="true"
+
+          WINDOWS_SCRIPTS="false"
+          echo "$CHANGED_FILES" | grep -qE "^(scripts|dev)/includes/windows/" && WINDOWS_SCRIPTS="true"
+
+          echo "Detection: shared=$SHARED_CHANGED darwin=$DARWIN_SCRIPTS linux=$LINUX_SCRIPTS windows=$WINDOWS_SCRIPTS"
+
+          # Each platform: its Dockerfile OR shared scripts OR its platform-specific scripts
+          check_platform() {
+            local dockerfile="$1" platform_scripts="$2"
+            if echo "$CHANGED_FILES" | grep -q "$dockerfile"; then echo "true"
+            elif [[ "$SHARED_CHANGED" == "true" ]]; then echo "true"
+            elif [[ "$platform_scripts" == "true" ]]; then echo "true"
+            else echo "false"; fi
+          }
+
+          # Base image only rebuilds on its own Dockerfile or shared script changes
+          echo "base=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-base.dockerfile" && echo "true" || echo "$SHARED_CHANGED")" >> $GITHUB_OUTPUT
+          echo "linux-x86_64=$(check_platform "ffmpeg-linux-x86_64.dockerfile" "$LINUX_SCRIPTS")" >> $GITHUB_OUTPUT
+          echo "linux-aarch64=$(check_platform "ffmpeg-linux-aarch64.dockerfile" "$LINUX_SCRIPTS")" >> $GITHUB_OUTPUT
+          echo "windows-x86_64=$(check_platform "ffmpeg-windows-x86_64.dockerfile" "$WINDOWS_SCRIPTS")" >> $GITHUB_OUTPUT
+          echo "darwin-x86_64=$(check_platform "ffmpeg-darwin-x86_64.dockerfile" "$DARWIN_SCRIPTS")" >> $GITHUB_OUTPUT
+          echo "darwin-arm64=$(check_platform "ffmpeg-darwin-arm64.dockerfile" "$DARWIN_SCRIPTS")" >> $GITHUB_OUTPUT
+          echo "workflow=$(echo "$CHANGED_FILES" | grep -q "^\.github/workflows/" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
 
       - name: Set individual outputs
         id: check-base
