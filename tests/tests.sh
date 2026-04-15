@@ -13,9 +13,12 @@ if [[ -L "$Workspace" ]]; then
 fi
 
 TOTAL_WIDTH_TEXT=54
-TOTAL_TESTS=0
-PASSED_TESTS=0
-FAILED_TESTS=0
+REQUIRED_TOTAL=0
+REQUIRED_PASSED=0
+REQUIRED_FAILED=0
+HW_TOTAL=0
+HW_PASSED=0
+HW_UNAVAILABLE=0
 
 TestRoot="${Workspace}/test_files"
 SampleVideo="${TestRoot}/sample.mp4"
@@ -27,41 +30,41 @@ SampleSubs="${TestRoot}/test.ass"
 rm -rf "${TestRoot}"
 mkdir -p "${TestRoot}"
 
-get_test_runs_count() {
-    local searchString="$1"
-    local filePath="$0"
-    local fileContent
-    local matches
-    local m_count
-    fileContent=$(<"$filePath")
-    _matches=$(grep -o "$searchString" <<<"$fileContent")
-    matches_count=$(echo "$_matches" | wc -l)
-    if [ "$matches_count" -gt 0 ]; then
-        matches_count=$((matches_count - 1))
-    fi
-    echo "$matches_count"
+text_with_padding() {
+    local text_before=$1
+    local text_after=$2
+    local extra_padding=${3:-0}
+    local text_length=$((${#text_before} + ${#text_after}))
+    local padding=$((TOTAL_WIDTH_TEXT - text_length - extra_padding))
+    if [ $padding -lt 1 ]; then padding=1; fi
+    printf "%s%*s%s\n" "$text_before" "$padding" " " "$text_after"
 }
 
-TOTAL_RUNS=$(get_test_runs_count 'run_test "')
+check_command() {
+    if [[ ! -f ${Workspace}/ffmpeg ]]; then
+        printf "%s\n" "❌ FFmpeg executable not found in current directory"
+        exit 1
+    fi
+    if [[ ! -x ${Workspace}/ffmpeg ]]; then
+        chmod +x ${Workspace}/ffmpeg
+    fi
+}
 
 generate_samples() {
     local Total_Count=0
     local Current_Count=0
     local Start_Time End_Time
 
-    # Count needed samples
     [[ ! -f "$SampleVideo" ]] && ((Total_Count++))
     [[ ! -f "$SampleAudio" ]] && ((Total_Count++))
     [[ ! -f "$SampleImage" ]] && ((Total_Count++))
     [[ ! -f "$SampleSubs" ]] && ((Total_Count++))
 
-    # Generate samples
     if [[ ! -f "$SampleVideo" ]]; then
         Start_Time=$(date +%s)
         Current_Count=$((Current_Count + 1))
         text_with_padding "📹 Generating sample video" "[$Current_Count/$Total_Count]" 1
-        ffmpeg_command="-hide_banner -y -f lavfi -i \"testsrc=duration=10:size=1280x720:rate=30\" -c:v libx264 -crf 23 \"$SampleVideo\""
-        output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
+        output=$(eval "${Workspace}/ffmpeg -hide_banner -y -f lavfi -i \"testsrc=duration=10:size=1280x720:rate=30\" -c:v libx264 -crf 23 \"$SampleVideo\"" 2>&1)
         exit_code=$?
         End_Time=$(date +%s)
         if [[ $exit_code -ne 0 ]]; then
@@ -76,8 +79,7 @@ generate_samples() {
         Start_Time=$(date +%s)
         Current_Count=$((Current_Count + 1))
         text_with_padding "🔊 Generating sample audio" "[$Current_Count/$Total_Count]" 1
-        ffmpeg_command="-hide_banner -y -f lavfi -i \"sine=frequency=1000:duration=10\" -c:a pcm_s16le \"$SampleAudio\""
-        output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
+        output=$(eval "${Workspace}/ffmpeg -hide_banner -y -f lavfi -i \"sine=frequency=1000:duration=10\" -c:a pcm_s16le \"$SampleAudio\"" 2>&1)
         exit_code=$?
         End_Time=$(date +%s)
         if [[ $exit_code -ne 0 ]]; then
@@ -92,8 +94,7 @@ generate_samples() {
         Start_Time=$(date +%s)
         Current_Count=$((Current_Count + 1))
         text_with_padding "🖼️ Generating sample image" "[$Current_Count/$Total_Count]"
-        ffmpeg_command="-hide_banner -y -f lavfi -i \"testsrc=duration=1:size=640x480:rate=1\" -frames:v 1 \"$SampleImage\""
-        output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
+        output=$(eval "${Workspace}/ffmpeg -hide_banner -y -f lavfi -i \"testsrc=duration=1:size=640x480:rate=1\" -frames:v 1 \"$SampleImage\"" 2>&1)
         exit_code=$?
         End_Time=$(date +%s)
         if [[ $exit_code -ne 0 ]]; then
@@ -126,57 +127,69 @@ generate_samples() {
     fi
 
     if [ $Total_Count -gt 0 ]; then
-        printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
+        printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
     fi
 }
 
-text_with_padding() {
-    local text_before=$1
-    local text_after=$2
-    local extra_padding=${3:-0}
-    local text_length=$((${#text_before} + ${#text_after}))
-    local padding=$((TOTAL_WIDTH_TEXT - text_length - extra_padding))
-    printf "%s%*s%s\n" "$text_before" "$padding" " " "$text_after"
-}
-
-check_command() {
-    if [[ ! -f ${Workspace}/ffmpeg ]]; then
-        printf "%s\n" "❌ FFmpeg executable not found in current directory"
-        exit 1
-    fi
-    if [[ ! -x ${Workspace}/ffmpeg ]]; then
-        chmod +x ${Workspace}/ffmpeg
-    fi
-}
-
+# Required test — failure = broken build
 run_test() {
     local name=$1
     local command=$2
     local expected_output=$3
-    local test_output
-    local exit_code
+    local test_output exit_code
 
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    REQUIRED_TOTAL=$((REQUIRED_TOTAL + 1))
     name=$(echo $name | tr '[:lower:]' '[:upper:]')
 
-    text_with_padding "🧪 Testing ${name}" "[${TOTAL_TESTS}/${TOTAL_RUNS}]" 1
+    text_with_padding "🧪 Testing ${name}" "[${REQUIRED_TOTAL}]" 1
     Start_Time=$(date +%s)
 
     test_output=$(eval "${Workspace}/ffmpeg $command" 2>&1)
     exit_code=$?
+    End_Time=$(date +%s)
+    local elapsed="$((End_Time - Start_Time))s"
+
     if [[ $exit_code -eq 0 ]] && echo "$test_output" | grep -q "$expected_output"; then
-        End_Time=$(date +%s)
-        text_with_padding "✅ ${name} test passed" "[$((End_Time - Start_Time))s]" 1
-        PASSED_TESTS=$((PASSED_TESTS + 1))
+        text_with_padding "✅ ${name} passed" "[${elapsed}]" 1
+        REQUIRED_PASSED=$((REQUIRED_PASSED + 1))
     else
-        End_Time=$(date +%s)
-        text_with_padding "❌ ${name} test failed" "[$((End_Time - Start_Time))s]" 1
-        FAILED_TESTS=$((FAILED_TESTS + 1))
+        text_with_padding "❌ ${name} FAILED" "[${elapsed}]" 1
+        REQUIRED_FAILED=$((REQUIRED_FAILED + 1))
     fi
 }
 
+# Hardware test — failure = no GPU, not a bug
+run_hw_test() {
+    local name=$1
+    local command=$2
+    local expected_output=$3
+    local test_output exit_code
+
+    HW_TOTAL=$((HW_TOTAL + 1))
+    name=$(echo $name | tr '[:lower:]' '[:upper:]')
+
+    text_with_padding "🔌 Testing ${name}" "[${HW_TOTAL}]" 1
+    Start_Time=$(date +%s)
+
+    test_output=$(eval "${Workspace}/ffmpeg $command" 2>&1)
+    exit_code=$?
+    End_Time=$(date +%s)
+    local elapsed="$((End_Time - Start_Time))s"
+
+    if [[ $exit_code -eq 0 ]] && echo "$test_output" | grep -q "$expected_output"; then
+        text_with_padding "✅ ${name} passed" "[${elapsed}]" 1
+        HW_PASSED=$((HW_PASSED + 1))
+    else
+        text_with_padding "➖ ${name} unavailable" "[${elapsed}]" 1
+        HW_UNAVAILABLE=$((HW_UNAVAILABLE + 1))
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════
 # Main execution
-printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
+# ══════════════════════════════════════════════════════════════
+
+printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
 printf "%s\n" "        _   _       __  __                      "
 printf "%s\n" "       | \ | | ___ |  \/  | ___ _ __ ___ _   _  "
 printf "%s\n" "       |  \| |/ _ \| |\/| |/ _ \ '__/ __| | | | "
@@ -188,12 +201,16 @@ printf "%s\n" "        | |_  | |_  | |\/| | |_) |  _|| |  _    "
 printf "%s\n" "        |  _| |  _| | |  | |  __/| |__| |_| |   "
 printf "%s\n" "        |_|   |_|   |_|  |_|_|   |_____\____|   "
 printf "%s\n" ""
-printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
+printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
 
 check_command
 generate_samples
 
-# Basic tests
+# ── Required tests (failures = broken build) ─────────────────
+printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
+text_with_padding "🔒 Required tests" "(must pass)"
+printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
+
 run_test "version" "-version" "ffmpeg version"
 
 # Video codecs
@@ -221,40 +238,41 @@ run_test "chapters_vtt_muxer" "-hide_banner -muxers" "chapters_vtt"
 # Auto-create directories
 run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"
 
-# Hardware acceleration (may fail if no hardware support)
-run_test "NVENC" "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4" "nvenc"
-run_test "VPL" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4" "vpl"
-run_test "AMF" "-y -i ${SampleVideo} -c:v h264_amf ${TestRoot}/test_amf.mp4" "amf"
-
-# Additional format tests
+# Library presence
 run_test "libbluray" "-hide_banner -protocols | grep bluray" "bluray"
 run_test "libdvdread" "-hide_banner -version | grep dvdread" "dvdread"
 run_test "libcdio" "-hide_banner -version | grep cdio" "cdio"
 run_test "libfribidi" "-hide_banner -version | grep fribidi" "fribidi"
 run_test "libsrt" "-hide_banner -version | grep srt" "srt"
 run_test "libxml2" "-hide_banner -version | grep xml" "xml"
-
-# AV1 codec tests
 run_test "libdav1d" "-hide_banner -decoders" "dav1d"
 run_test "librav1e" "-hide_banner -encoders" "rav1e"
-
-# OCR subtitle encoder
 run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
 
-# Print summary
-printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
-text_with_padding "📊 Summary:" ""
-text_with_padding "Total tests:" "${TOTAL_TESTS}"
-text_with_padding "Passed tests:" "${PASSED_TESTS}"
-text_with_padding "Failed tests:" "${FAILED_TESTS}"
-printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
+# ── Hardware tests (failures = no GPU, not a bug) ────────────
+printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
+text_with_padding "🔌 Hardware tests" "(allowed to fail)"
+printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
+
+run_hw_test "NVENC" "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4" "nvenc"
+run_hw_test "VPL" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4" "vpl"
+run_hw_test "AMF" "-y -i ${SampleVideo} -c:v h264_amf ${TestRoot}/test_amf.mp4" "amf"
+
+# ── Summary ──────────────────────────────────────────────────
+printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
+text_with_padding "📊 Required:" "${REQUIRED_PASSED}/${REQUIRED_TOTAL} passed"
+if [ ${REQUIRED_FAILED} -gt 0 ]; then
+    text_with_padding "   ❌ Failures:" "${REQUIRED_FAILED}"
+fi
+text_with_padding "📊 Hardware:" "${HW_PASSED}/${HW_TOTAL} available"
+printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-'
 echo ""
 
 # cleanup
 rm -rf "${TestRoot}"
 
-# Exit with failure if any tests failed
-if [ "${FAILED_TESTS}" -gt 0 ]; then
-    exit $FAILED_TESTS
+# Only required failures cause a non-zero exit
+if [ "${REQUIRED_FAILED}" -gt 0 ]; then
+    exit 1
 fi
 exit 0

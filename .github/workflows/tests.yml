@@ -146,10 +146,7 @@ jobs:
           
           echo "Running tests for ${{ matrix.platform }}-${{ matrix.arch }}"
           chmod +x "${{ github.workspace }}/tests/tests.sh"
-          "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}" || {
-            echo "Tests failed, but continuing..."
-            exit 0
-          }
+          "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}"
 
       - name: Run Tests (Windows)
         if: matrix.platform == 'windows'
@@ -169,10 +166,7 @@ jobs:
 
           Write-Host "Running tests for ${{ matrix.platform }}-${{ matrix.arch }}"
           & "${{ github.workspace }}\tests\tests.ps1" "${{ github.workspace }}"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Tests failed, but continuing..."
-            exit 0
-          }
+          exit $LASTEXITCODE
 
       - name: Run Tests (Darwin)
         if: matrix.platform == 'darwin'
@@ -183,19 +177,16 @@ jobs:
             echo "FFmpeg binary not found, skipping tests"
             exit 0
           fi
-          
+
           # Check if test script exists
           if [ ! -f "${{ github.workspace }}/tests/tests.sh" ]; then
             echo "Test script not found, skipping tests"
             exit 0
           fi
-          
+
           echo "Running tests for ${{ matrix.platform }}-${{ matrix.arch }}"
           chmod +x "${{ github.workspace }}/tests/tests.sh"
-          "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}" || {
-            echo "Tests failed, but continuing..."
-            exit 0
-          }
+          "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}"
 
   # Security scanning for Docker images
   security-scans:

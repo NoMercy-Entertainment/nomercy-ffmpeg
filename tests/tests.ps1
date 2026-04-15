@@ -3,9 +3,12 @@ param (
 )
 
 $TOTAL_WIDTH_TEXT = 54
-$script:TOTAL_TESTS = 0
-$script:PASSED_TESTS = 0
-$script:FAILED_TESTS = 0
+$script:REQUIRED_TOTAL = 0
+$script:REQUIRED_PASSED = 0
+$script:REQUIRED_FAILED = 0
+$script:HW_TOTAL = 0
+$script:HW_PASSED = 0
+$script:HW_UNAVAILABLE = 0
 
 $TestRoot = "$Workspace\test_files"
 $SampleVideo = "$TestRoot\sample.mp4"
@@ -17,35 +20,36 @@ $SampleSubs = "$TestRoot\test.ass"
 Remove-Item -Recurse -Force -Path $TestRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out-Null
 
-function get_test_runs_count {
+function text_with_padding {
     param (
-        [string]$searchString
+        $text_before,
+        $text_after,
+        $extra_padding = 0
     )
-    $filePath = $PSCommandPath
-    $fileContent = Get-Content -Path $filePath -Raw
-    $_matches = [regex]::Matches($fileContent, [regex]::Escape($searchString))
-    $matches_count = $_matches.Count
-    if ( $matches_count -gt 0 ) {
-        $matches_count--
-    }
-    return $matches_count
+    $text_length = $text_before.Length + $text_after.Length
+    $padding = $TOTAL_WIDTH_TEXT - $text_length - $extra_padding
+    if ($padding -lt 1) { $padding = 1 }
+    Write-Host -NoNewline $text_before
+    Write-Host -NoNewline (" " * $padding)
+    Write-Host $text_after
 }
 
-$TOTAL_RUNS = get_test_runs_count -searchString 'run_test "'
+function check_command {
+    if (-Not (Test-Path "$Workspace\ffmpeg.exe")) {
+        Write-Host "❌ FFmpeg executable not found in current directory"
+        exit 1
+    }
+}
 
 function generate_samples {
     $Total_Count = 0
     $Current_Count = 0
-    $Start_Time = $null
-    $End_Time = $null
 
-    # Count needed samples
     if (-Not (Test-Path $SampleVideo)) { $Total_Count++ }
     if (-Not (Test-Path $SampleAudio)) { $Total_Count++ }
     if (-Not (Test-Path $SampleImage)) { $Total_Count++ }
     if (-Not (Test-Path $SampleSubs)) { $Total_Count++ }
 
-    # Generate samples
     if (-Not (Test-Path $SampleVideo)) {
         $Start_Time = Get-Date
         $Current_Count++
@@ -99,26 +103,6 @@ Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle
     }
 }
 
-function text_with_padding {
-    param (
-        $text_before,
-        $text_after,
-        $extra_padding = 0
-    )
-    $text_length = $text_before.Length + $text_after.Length
-    $padding = $TOTAL_WIDTH_TEXT - $text_length - $extra_padding
-    Write-Host -NoNewline $text_before
-    Write-Host -NoNewline (" " * $padding)
-    Write-Host $text_after
-}
-
-function check_command {
-    if (-Not (Test-Path "$Workspace\ffmpeg.exe")) {
-        Write-Host "❌ FFmpeg executable not found in current directory"
-        exit 1
-    }
-}
-
 function run_test {
     param (
         $name,
@@ -126,24 +110,51 @@ function run_test {
         $expected_output
     )
 
-    $script:TOTAL_TESTS++
+    $script:REQUIRED_TOTAL++
     $name = $name.ToUpper()
-    text_with_padding "🧪 Testing ${name}" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+    text_with_padding "🧪 Testing ${name}" "[$script:REQUIRED_TOTAL]"
     $Start_Time = Get-Date
     $test_output = Invoke-Expression "$Workspace\ffmpeg.exe $command 2>&1" | Out-String
+    $End_Time = Get-Date
+    $elapsed = "$((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s"
     if ( $LASTEXITCODE -eq 0 -and $test_output -cmatch $expected_output ) {
-        $End_Time = Get-Date
-        text_with_padding "✅ ${name} test passed" "[ $((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s ]" 1
-        $script:PASSED_TESTS++
+        text_with_padding "✅ ${name} passed" "[ ${elapsed} ]" 1
+        $script:REQUIRED_PASSED++
     }
     else {
-        $End_Time = Get-Date
-        text_with_padding "❌ ${name} test failed" "[ $((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s ]" 1               
-        $script:FAILED_TESTS++
+        text_with_padding "❌ ${name} FAILED" "[ ${elapsed} ]" 1
+        $script:REQUIRED_FAILED++
     }
 }
 
+function run_hw_test {
+    param (
+        $name,
+        $command,
+        $expected_output
+    )
+
+    $script:HW_TOTAL++
+    $name = $name.ToUpper()
+    text_with_padding "🔌 Testing ${name}" "[$script:HW_TOTAL]"
+    $Start_Time = Get-Date
+    $test_output = Invoke-Expression "$Workspace\ffmpeg.exe $command 2>&1" | Out-String
+    $End_Time = Get-Date
+    $elapsed = "$((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s"
+    if ( $LASTEXITCODE -eq 0 -and $test_output -cmatch $expected_output ) {
+        text_with_padding "✅ ${name} passed" "[ ${elapsed} ]" 1
+        $script:HW_PASSED++
+    }
+    else {
+        text_with_padding "➖ ${name} unavailable" "[ ${elapsed} ]" 1
+        $script:HW_UNAVAILABLE++
+    }
+}
+
+# ══════════════════════════════════════════════════════════════
 # Main execution
+# ══════════════════════════════════════════════════════════════
+
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host "        _   _       __  __                      "
 Write-Host "       | \ | | ___ |  \/  | ___ _ __ ___ _   _  "
@@ -161,7 +172,11 @@ Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 check_command
 generate_samples
 
-# Basic tests
+# ── Required tests (failures = broken build) ─────────────────
+Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
+text_with_padding "🔒 Required tests" "(must pass)"
+Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
+
 run_test "version" "-version" "ffmpeg version"
 
 # Video codecs
@@ -189,40 +204,41 @@ run_test "chapters_vtt_muxer" "-hide_banner -muxers" "chapters_vtt"
 # Auto-create directories
 run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"
 
-# Hardware acceleration (may fail if no hardware support)
-run_test "NVENC" "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nvenc.mp4" "nvenc"
-run_test "VPL" "-y -i $SampleVideo -c:v h264_vpl $TestRoot\test_vpl.mp4" "vpl"
-run_test "AMF" "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4" "amf"
-
-# Additional format tests
+# Library presence
 run_test "libbluray" "-hide_banner -protocols | findstr bluray" "bluray"
 run_test "libdvdread" "-hide_banner -version | findstr dvdread" "dvdread"
 run_test "libcdio" "-hide_banner -version | findstr cdio" "cdio"
 run_test "libfribidi" "-hide_banner -version | findstr fribidi" "fribidi"
 run_test "libsrt" "-hide_banner -version | findstr srt" "srt"
 run_test "libxml2" "-hide_banner -version | findstr xml" "xml"
-
-# AV1 codec tests
 run_test "libdav1d" "-hide_banner -decoders" "dav1d"
 run_test "librav1e" "-hide_banner -encoders" "rav1e"
-
-# OCR subtitle encoder
 run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
 
-# Print summary
+# ── Hardware tests (failures = no GPU, not a bug) ────────────
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
-text_with_padding "📊 Summary:" ""
-text_with_padding "Total tests:" "$script:TOTAL_TESTS"
-text_with_padding "Passed tests:" "$script:PASSED_TESTS"
-text_with_padding "Failed tests:" "$script:FAILED_TESTS"
+text_with_padding "🔌 Hardware tests" "(allowed to fail)"
+Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
+
+run_hw_test "NVENC" "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nvenc.mp4" "nvenc"
+run_hw_test "VPL" "-y -i $SampleVideo -c:v h264_vpl $TestRoot\test_vpl.mp4" "vpl"
+run_hw_test "AMF" "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4" "amf"
+
+# ── Summary ──────────────────────────────────────────────────
+Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
+text_with_padding "📊 Required:" "$script:REQUIRED_PASSED/$script:REQUIRED_TOTAL passed"
+if ($script:REQUIRED_FAILED -gt 0) {
+    text_with_padding "   ❌ Failures:" "$script:REQUIRED_FAILED"
+}
+text_with_padding "📊 Hardware:" "$script:HW_PASSED/$script:HW_TOTAL available"
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host ""
 
 # Cleanup
 Remove-Item -Recurse -Force -Path $TestRoot -ErrorAction SilentlyContinue
 
-# Exit with failure if any tests failed
-if ($FAILED_TESTS -gt 0) {
-    exit $FAILED_TESTS
+# Only required failures cause a non-zero exit
+if ($script:REQUIRED_FAILED -gt 0) {
+    exit 1
 }
 exit 0
