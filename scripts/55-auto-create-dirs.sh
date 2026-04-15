@@ -70,7 +70,8 @@ if ! grep -q "ff_ensure_dir_exists" "$AVIO_FILE"; then
  */
 static void ff_ensure_dir_exists(const char *path, int flags)
 {
-    char *tmp, *sep;
+    char *tmp;
+    const char *sep;
 
     /* Only create dirs for output files */
     if (!(flags & AVIO_FLAG_WRITE))
@@ -84,7 +85,7 @@ static void ff_ensure_dir_exists(const char *path, int flags)
     sep = NULL;
     for (const char *p = path; *p; p++) {
         if (*p == '/' || *p == '\\')
-            sep = (char *)p;
+            sep = p;
     }
 
     /* No directory component — file is in current dir */
@@ -95,8 +96,22 @@ static void ff_ensure_dir_exists(const char *path, int flags)
     if (!tmp)
         return;
 
-    /* Recursively create directories, ignoring EEXIST */
-    for (char *p = tmp + 1; *p; p++) {
+    /* Recursively create directories, ignoring EEXIST.
+     * Skip root prefixes so we don't try to mkdir "C:" or "\\server". */
+    char *start = tmp + 1;
+#ifdef _WIN32
+    /* Drive letter prefix: skip past "C:\\" */
+    if (((tmp[0] >= 'A' && tmp[0] <= 'Z') || (tmp[0] >= 'a' && tmp[0] <= 'z'))
+        && tmp[1] == ':' && (tmp[2] == '/' || tmp[2] == '\\'))
+        start = tmp + 3;
+    /* UNC prefix: skip past "\\server\share" */
+    else if ((tmp[0] == '/' || tmp[0] == '\\') && tmp[0] == tmp[1]) {
+        int slashes = 0;
+        for (start = tmp + 2; *start && slashes < 2; start++)
+            if (*start == '/' || *start == '\\') slashes++;
+    }
+#endif
+    for (char *p = start; *p; p++) {
         if (*p == '/' || *p == '\\') {
             char saved = *p;
             *p = '\0';

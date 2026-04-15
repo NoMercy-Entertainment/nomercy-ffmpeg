@@ -1,6 +1,6 @@
 #!/bin/bash
 
-if [[ ${DEBUG} == false || ${DEBUG} == "false" ]]; then
+if [[ ${DEBUG} == "false" ]]; then
 	exit 0
 fi
 
