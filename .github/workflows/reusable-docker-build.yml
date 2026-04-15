@@ -105,11 +105,16 @@ jobs:
           chmod +x error_handler.sh
           source error_handler.sh
 
-      - name: Set up Docker Buildx with Retry
+      - name: Set up Docker Buildx
         run: |
-          source error_handler.sh
-          docker_retry "docker buildx create --use --driver docker-container --driver-opt network=host || true"
-          docker_retry "docker buildx inspect --bootstrap"
+          # Use a per-platform named builder to reuse across runs and avoid random buildkit containers
+          BUILDER_NAME="builder-${{ inputs.platform }}"
+          if docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
+            docker buildx use "$BUILDER_NAME"
+          else
+            docker buildx create --use --name "$BUILDER_NAME" --driver docker-container --driver-opt network=host
+          fi
+          docker buildx inspect --bootstrap
 
       - name: Create Cache Directories
         run: |
@@ -266,7 +271,8 @@ jobs:
         run: |
           echo "🧹 Cleaning up build artifacts..."
           docker system prune -af --volumes || true
-          docker builder prune -af || true
+          # Only prune build cache, not the builder itself (avoids recreating the buildkit container each run)
+          docker buildx prune -af || true
           rm -rf ~/.docker/buildx-cache-new || true
           echo "✅ Cleanup completed"
 
