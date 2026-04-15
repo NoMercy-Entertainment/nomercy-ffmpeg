@@ -116,35 +116,6 @@ jobs:
           fi
           docker buildx inspect --bootstrap
 
-      - name: Create Cache Directories
-        run: |
-          mkdir -p ~/.docker/buildx-cache
-          mkdir -p ~/.cache/pip
-          mkdir -p ~/.cache/npm
-
-      - name: Cache Docker Buildx
-        uses: actions/cache@v4
-        with:
-          path: ~/.docker/buildx-cache
-          key: ${{ runner.os }}-buildx-${{ inputs.platform }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-${{ inputs.platform }}-
-            ${{ runner.os }}-buildx-
-
-      - name: Cache Build Dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            ~/.cache/npm
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.ccache
-          key: ${{ runner.os }}-deps-${{ inputs.platform }}-${{ hashFiles('scripts/**') }}
-          restore-keys: |
-            ${{ runner.os }}-deps-${{ inputs.platform }}-
-            ${{ runner.os }}-deps-
-
       - name: Login to DockerHub with Retry
         run: |
           source error_handler.sh
@@ -187,9 +158,7 @@ jobs:
               --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:${{ github.sha }} \
               --cache-from type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache \
               --cache-from type=registry,ref=nomercyentertainment/ffmpeg-base:buildcache \
-              --cache-from type=local,src=~/.docker/buildx-cache \
               --cache-to type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache,mode=max \
-              --cache-to type=local,dest=~/.docker/buildx-cache-new,mode=max \
               --platform linux/amd64 \
               --build-arg BUILDKIT_INLINE_CACHE=1 \
               --build-arg DOCKER_BUILDKIT=1 \
@@ -198,10 +167,16 @@ jobs:
           fi
 
           # Retry build with error recovery
+          # Filter output: show build results + cache hits, not full RUN command echoes
           MAX_BUILD_ATTEMPTS=2
           for attempt in $(seq 1 $MAX_BUILD_ATTEMPTS); do
             echo "🔄 Build attempt $attempt/$MAX_BUILD_ATTEMPTS"
-            if docker buildx build $BUILD_ARGS; then
+            set +e
+            docker buildx build --progress=plain $BUILD_ARGS 2>&1 \
+              | grep -E "^#[0-9]+ [0-9]+\.|^#[0-9]+ (DONE|CACHED)|^#[0-9]+ \[|error|ERROR|FAIL"
+            BUILD_EXIT=${PIPESTATUS[0]}
+            set -e
+            if [ $BUILD_EXIT -eq 0 ]; then
               echo "✅ Build succeeded on attempt $attempt"
               break
             else
@@ -209,7 +184,6 @@ jobs:
               if [ $attempt -lt $MAX_BUILD_ATTEMPTS ]; then
                 echo "🧹 Cleaning up before retry..."
                 docker system prune -af --volumes || true
-                docker builder prune -af || true
                 rm -rf /tmp/* || true
                 echo "⏰ Waiting 30 seconds before retry..."
                 sleep 30
@@ -240,16 +214,6 @@ jobs:
           path: build-failure-report.md
           retention-days: 7
 
-      - name: Optimize Cache
-        if: success()
-        run: |
-          # Move cache to avoid cache bloat
-          if [ -d ~/.docker/buildx-cache-new ]; then
-            rm -rf ~/.docker/buildx-cache
-            mv ~/.docker/buildx-cache-new ~/.docker/buildx-cache
-            echo "✅ Cache optimized"
-          fi
-
       - name: Verify Build Output
         if: success()
         run: |
@@ -269,11 +233,11 @@ jobs:
       - name: Clean up build artifacts
         if: always()
         run: |
-          echo "🧹 Cleaning up build artifacts..."
-          docker system prune -af --volumes || true
-          # Only prune build cache, not the builder itself (avoids recreating the buildkit container each run)
-          docker buildx prune -af || true
-          rm -rf ~/.docker/buildx-cache-new || true
+          echo "🧹 Cleaning up containers and dangling images..."
+          # Remove stopped containers and dangling images, but KEEP the buildx cache
+          # The named builder (builder-$platform) retains its cache across runs
+          docker container prune -f || true
+          docker image prune -f || true
           echo "✅ Cleanup completed"
 
       - name: Send Success Notification
