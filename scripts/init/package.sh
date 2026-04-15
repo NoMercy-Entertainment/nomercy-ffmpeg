@@ -32,11 +32,13 @@ hr
 # Ad-hoc sign Darwin (macOS) binaries
 # ld64 applies a signature during linking, but strip invalidates it.
 # ARM64 binaries MUST have a valid signature to run on macOS 11+.
-if [[ ${TARGET_OS} == "darwin" ]] && command -v ldid &> /dev/null; then
+# rcodesign produces proper code directory signatures that satisfy
+# macOS kernel enforcement for ARM64 binaries.
+if [[ ${TARGET_OS} == "darwin" ]] && command -v rcodesign &> /dev/null; then
     text_with_padding "🔏 Ad-hoc signing Darwin binaries" ""
     for bin in /ffmpeg/${TARGET_OS}/${ARCH}/*; do
         if [ -f "$bin" ] && file "$bin" | grep -q "Mach-O"; then
-            ldid -S "$bin"
+            rcodesign sign "$bin"
             text_with_padding "  ✅ Signed $(basename $bin)" ""
         fi
     done
