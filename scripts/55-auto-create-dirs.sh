@@ -5,142 +5,158 @@
 #/*  create output directories         */#
 #/**************************************/#
 
-# Patch avio_open2 in aviobuf.c to auto-create parent directories
-# when opening files for writing. This eliminates "No such file or
-# directory" errors when output paths include subdirectories.
-
-log "Step 1: Adding mkdir_p helper to aviobuf.c"
-
-# Add the necessary includes and helper function at the top of aviobuf.c,
-# after the existing #include block.
+# Patch io_open_default in libavformat/options.c to auto-create parent
+# directories when opening files for writing. This is the actual entry
+# point used by muxers (image2, mp4, mkv, etc.) — NOT avio_open2.
 #
-# The helper:
-# - Only acts on local file paths (skips URLs with "://")
-# - Only acts when AVIO_FLAG_WRITE is set
-# - Creates parent directories recursively
-# - Cross-platform: uses _mkdir on Windows, mkdir on Unix
-# - Handles both / and \ separators
+# Works cross-platform: uses _mkdir on Windows, mkdir on Unix.
 
-# Check if already patched
-if ! grep -q "ff_ensure_dir_exists" /build/ffmpeg/libavformat/aviobuf.c; then
+OPTIONS_FILE="/build/ffmpeg/libavformat/options.c"
 
-    # First, add the includes and helper function after the last #include
+if [ ! -f "$OPTIONS_FILE" ]; then
+    log "  ERROR: $OPTIONS_FILE not found"
+    exit 1
+fi
+
+log "  Patching: $OPTIONS_FILE"
+
+# --- Step 1: Add ff_ensure_dir_exists helper function ---
+log "Step 1: Adding ff_ensure_dir_exists helper"
+
+if ! grep -q "ff_ensure_dir_exists" "$OPTIONS_FILE"; then
+
     cat > /tmp/mkdir_patch.c << 'MKDIRPATCH'
 
 /* --- NoMercy: auto-create output directories --- */
 #include <sys/stat.h>
+#include <errno.h>
 #ifdef _WIN32
-#include <direct.h>
-#define ff_local_mkdir(p) _mkdir(p)
+#  include <direct.h>
+#  define ff_local_mkdir(p) _mkdir(p)
 #else
-#define ff_local_mkdir(p) mkdir(p, 0755)
+#  define ff_local_mkdir(p) mkdir(p, 0755)
 #endif
 
 /**
  * Recursively create parent directories for a file path.
  * Only operates on local file paths (no protocol prefix).
+ * Safe to call when directories already exist (ignores EEXIST).
  */
-static void ff_ensure_dir_exists(const char *path, int flags)
+static void ff_ensure_dir_exists(const char *url, int flags)
 {
-    char *tmp, *sep;
+    char *tmp;
+    const char *sep;
 
     /* Only create dirs for output files */
     if (!(flags & AVIO_FLAG_WRITE))
         return;
 
     /* Skip non-local paths (URLs with protocol) */
-    if (!path || strstr(path, "://"))
+    if (!url || strstr(url, "://"))
         return;
 
     /* Find the last directory separator */
     sep = NULL;
-    for (char *p = (char *)path; *p; p++) {
+    for (const char *p = url; *p; p++) {
         if (*p == '/' || *p == '\\')
             sep = p;
     }
 
     /* No directory component — file is in current dir */
-    if (!sep || sep == path)
+    if (!sep || sep == url)
         return;
 
-    tmp = av_strndup(path, sep - path);
+    tmp = av_strndup(url, sep - url);
     if (!tmp)
         return;
 
-    /* Recursively create directories */
-    for (char *p = tmp + 1; *p; p++) {
+    /* Recursively create directories, ignoring EEXIST.
+     * Skip root prefixes so we don't try to mkdir "C:" or "\\server". */
+    char *start = tmp + 1;
+#ifdef _WIN32
+    /* Drive letter prefix: skip past "C:\\" */
+    if (((tmp[0] >= 'A' && tmp[0] <= 'Z') || (tmp[0] >= 'a' && tmp[0] <= 'z'))
+        && tmp[1] == ':' && (tmp[2] == '/' || tmp[2] == '\\'))
+        start = tmp + 3;
+    /* UNC prefix: skip past "\\server\share" */
+    else if ((tmp[0] == '/' || tmp[0] == '\\') && tmp[0] == tmp[1]) {
+        int slashes = 0;
+        for (start = tmp + 2; *start && slashes < 2; start++)
+            if (*start == '/' || *start == '\\') slashes++;
+    }
+#endif
+    for (char *p = start; *p; p++) {
         if (*p == '/' || *p == '\\') {
             char saved = *p;
             *p = '\0';
-            ff_local_mkdir(tmp);
+            if (ff_local_mkdir(tmp) != 0 && errno != EEXIST) {
+                av_free(tmp);
+                return;
+            }
             *p = saved;
         }
     }
-    ff_local_mkdir(tmp);
+    if (ff_local_mkdir(tmp) != 0 && errno != EEXIST) {
+        /* best-effort: don't fail the open */
+    }
     av_free(tmp);
 }
 /* --- End NoMercy patch --- */
 MKDIRPATCH
 
-    # Find the last #include line in aviobuf.c and insert after it
-    last_include_line=$(grep -n '^#include' /build/ffmpeg/libavformat/aviobuf.c | tail -1 | cut -d: -f1)
+    # Insert after the last #include in options.c
+    last_include_line=$(grep -n '^#include' "$OPTIONS_FILE" | tail -1 | cut -d: -f1)
 
     if [ -z "$last_include_line" ]; then
-        log "  ERROR: Could not find #include lines in aviobuf.c"
+        log "  ERROR: Could not find #include lines in options.c"
         exit 1
     fi
 
-    # Insert the helper function after the last #include
-    sed -i "${last_include_line}r /tmp/mkdir_patch.c" /build/ffmpeg/libavformat/aviobuf.c
-
+    sed -i "${last_include_line}r /tmp/mkdir_patch.c" "$OPTIONS_FILE"
     rm -f /tmp/mkdir_patch.c
-    log "  Added mkdir_p helper function"
+    log "  Added ff_ensure_dir_exists helper"
 else
-    log "  Helper function already exists"
+    log "  Helper already exists"
 fi
 
 # Verify helper was added
-if grep -q "ff_ensure_dir_exists" /build/ffmpeg/libavformat/aviobuf.c; then
-    log "  Verified helper function in aviobuf.c"
-else
+if ! grep -q "ff_ensure_dir_exists" "$OPTIONS_FILE"; then
     log "  ERROR: Helper function verification failed!"
     exit 1
 fi
 
-# Step 2: Patch avio_open2 to call the helper
-log "Step 2: Patching avio_open2 to auto-create directories"
+# --- Step 2: Patch io_open_default to call the helper ---
+log "Step 2: Patching io_open_default"
 
-if ! grep -q "ff_ensure_dir_exists(filename, flags)" /build/ffmpeg/libavformat/aviobuf.c; then
-    # We need to find the avio_open2 function body and add the call
-    # at the very beginning of the function, after the opening brace.
-    # The function signature is:
-    #   int avio_open2(AVIOContext **s, const char *filename, int flags,
-    #                  const AVIOInterruptCB *int_cb, AVDictionary **options)
-
-    # Add the call right after the opening brace of avio_open2
-    # Use awk to find the function and insert after {
+if ! grep -q "ff_ensure_dir_exists(url, flags)" "$OPTIONS_FILE"; then
     awk '
-    /^int avio_open2\(/ { in_func=1 }
+    /static int io_open_default\(/ { in_func=1 }
     in_func && /\{/ {
         print
-        print "    ff_ensure_dir_exists(filename, flags);"
+        print "    ff_ensure_dir_exists(url, flags);"
         in_func=0
         next
     }
     { print }
-    ' /build/ffmpeg/libavformat/aviobuf.c > /tmp/aviobuf_patched.c \
-        && mv /tmp/aviobuf_patched.c /build/ffmpeg/libavformat/aviobuf.c
+    ' "$OPTIONS_FILE" > /tmp/options_patched.c
 
-    log "  Patched avio_open2"
+    if [ -s /tmp/options_patched.c ] && grep -q "ff_ensure_dir_exists(url, flags);" /tmp/options_patched.c; then
+        mv /tmp/options_patched.c "$OPTIONS_FILE"
+        log "  Patched io_open_default"
+    else
+        rm -f /tmp/options_patched.c
+        log "  ERROR: awk failed to patch io_open_default"
+        exit 1
+    fi
 else
-    log "  avio_open2 already patched"
+    log "  io_open_default already patched"
 fi
 
 # Verify the patch
-if grep -A5 "avio_open2" /build/ffmpeg/libavformat/aviobuf.c | grep -q "ff_ensure_dir_exists"; then
-    log "  Verified avio_open2 patch"
+if grep -A5 "io_open_default" "$OPTIONS_FILE" | grep -q "ff_ensure_dir_exists"; then
+    log "  Verified io_open_default patch"
 else
-    log "  ERROR: avio_open2 patch verification failed!"
+    log "  ERROR: io_open_default patch verification failed!"
     exit 1
 fi
 
