@@ -107,14 +107,10 @@ jobs:
 
       - name: Set up Docker Buildx
         run: |
-          # Use a per-platform named builder to reuse across runs and avoid random buildkit containers
-          BUILDER_NAME="builder-${{ inputs.platform }}"
-          if docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
-            docker buildx use "$BUILDER_NAME"
-          else
-            docker buildx create --use --name "$BUILDER_NAME" --driver docker-container --driver-opt network=host
-          fi
-          docker buildx inspect --bootstrap
+          # Use default docker driver — no nested buildkit container,
+          # avoids overlay-on-overlay issues in DinD runners
+          docker buildx use default
+          docker buildx inspect
 
       - name: Create Cache Directories
         run: |
@@ -166,38 +162,26 @@ jobs:
           cp -r nomercy-ffmpeg-secrets/* ${{ github.workspace }}/scripts/
           rm -rf nomercy-ffmpeg-secrets
 
-      - name: Build and Push Docker Image with Retry
+      - name: Build Docker Image with Retry
         run: |
           source error_handler.sh
-          # Build configuration
+          IMAGE="nomercyentertainment/ffmpeg-${{ inputs.platform }}"
+
+          NO_CACHE_FLAG=""
           if [[ "${{ inputs.no_cache }}" == "true" ]]; then
-            echo "🔥 No-cache build: skipping all layer caches"
-            BUILD_ARGS="--file ${{ inputs.dockerfile }} \
-              --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest \
-              --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:${{ github.sha }} \
-              --no-cache \
-              --platform linux/amd64 \
-              --build-arg BUILDKIT_INLINE_CACHE=1 \
-              --build-arg DOCKER_BUILDKIT=1 \
-              --push \
-              ${{ inputs.context }}"
-          else
-            BUILD_ARGS="--file ${{ inputs.dockerfile }} \
-              --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:latest \
-              --tag nomercyentertainment/ffmpeg-${{ inputs.platform }}:${{ github.sha }} \
-              --cache-from type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache \
-              --cache-from type=registry,ref=nomercyentertainment/ffmpeg-base:buildcache \
-              --cache-from type=local,src=~/.docker/buildx-cache \
-              --cache-to type=registry,ref=nomercyentertainment/ffmpeg-${{ inputs.platform }}:buildcache,mode=max \
-              --cache-to type=local,dest=~/.docker/buildx-cache-new,mode=max \
-              --platform linux/amd64 \
-              --build-arg BUILDKIT_INLINE_CACHE=1 \
-              --build-arg DOCKER_BUILDKIT=1 \
-              --push \
-              ${{ inputs.context }}"
+            echo "🔥 No-cache build"
+            NO_CACHE_FLAG="--no-cache"
           fi
 
-          # Retry build with error recovery
+          # docker driver = host dockerd builder, no nested container
+          # Build + load locally, then push separately
+          BUILD_ARGS="--file ${{ inputs.dockerfile }} \
+            --tag ${IMAGE}:latest \
+            --tag ${IMAGE}:${{ github.sha }} \
+            ${NO_CACHE_FLAG} \
+            --load \
+            ${{ inputs.context }}"
+
           MAX_BUILD_ATTEMPTS=2
           for attempt in $(seq 1 $MAX_BUILD_ATTEMPTS); do
             echo "🔄 Build attempt $attempt/$MAX_BUILD_ATTEMPTS"
@@ -231,6 +215,14 @@ jobs:
             fi
           done
         timeout-minutes: 180  # 3 hour timeout for builds
+
+      - name: Push to DockerHub
+        if: success()
+        run: |
+          source error_handler.sh
+          IMAGE="nomercyentertainment/ffmpeg-${{ inputs.platform }}"
+          docker_retry "docker push ${IMAGE}:latest"
+          docker_retry "docker push ${IMAGE}:${{ github.sha }}"
 
       - name: Upload Build Failure Report
         if: failure()
