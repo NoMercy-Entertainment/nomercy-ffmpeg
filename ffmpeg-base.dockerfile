@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
-ENV ffmpeg_version=8.1 \
+ENV ffmpeg_version=8.0 \
     iconv_version=1.18 \
     libxml2_version=2.13 \
     zlib_version=1.3.1 \
@@ -724,6 +724,12 @@ RUN \
     && git clone --branch release https://code.videolan.org/videolan/libplacebo.git libplacebo >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
+
+# FFmpeg version is overridden late so that bumping it only invalidates
+# the FFmpeg fetch+build layers — all dependency compile layers above
+# stay cached. The earlier ENV must be left byte-identical to historical
+# values so the registry buildcache hash still matches.
+ENV ffmpeg_version=8.1
 
 # Download ffmpeg
 RUN \
