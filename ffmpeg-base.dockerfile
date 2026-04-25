@@ -725,6 +725,12 @@ RUN \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
+# FFmpeg version is overridden late so that bumping it only invalidates
+# the FFmpeg fetch+build layers — all dependency compile layers above
+# stay cached. The earlier ENV must be left byte-identical to historical
+# values so the registry buildcache hash still matches.
+ENV ffmpeg_version=8.1
+
 # Download ffmpeg
 RUN \
     echo "------------------------------------------------------" \

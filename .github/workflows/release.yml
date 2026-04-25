@@ -129,57 +129,57 @@ jobs:
       # Upload platform-specific release assets
       - name: Upload Linux x86_64 Asset
         uses: actions/upload-release-asset@v1
-        if: hashFiles('downloads/ffmpeg-8.0-linux-x86_64.tar.gz') != ''
+        if: hashFiles('downloads/ffmpeg-8.1-linux-x86_64.tar.gz') != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-8.0-linux-x86_64.tar.gz
-          asset_name: ffmpeg-8.0-linux-x86_64-${{ needs.check-prerequisites.outputs.version }}.tar.gz
+          asset_path: downloads/ffmpeg-8.1-linux-x86_64.tar.gz
+          asset_name: ffmpeg-8.1-linux-x86_64-${{ needs.check-prerequisites.outputs.version }}.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload Linux Aarch64 Asset
         uses: actions/upload-release-asset@v1
-        if: hashFiles('downloads/ffmpeg-8.0-linux-aarch64.tar.gz') != ''
+        if: hashFiles('downloads/ffmpeg-8.1-linux-aarch64.tar.gz') != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-8.0-linux-aarch64.tar.gz
-          asset_name: ffmpeg-8.0-linux-aarch64-${{ needs.check-prerequisites.outputs.version }}.tar.gz
+          asset_path: downloads/ffmpeg-8.1-linux-aarch64.tar.gz
+          asset_name: ffmpeg-8.1-linux-aarch64-${{ needs.check-prerequisites.outputs.version }}.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload Windows x86_64 Asset
         uses: actions/upload-release-asset@v1
-        if: hashFiles('downloads/ffmpeg-8.0-windows-x86_64.zip') != ''
+        if: hashFiles('downloads/ffmpeg-8.1-windows-x86_64.zip') != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-8.0-windows-x86_64.zip
-          asset_name: ffmpeg-8.0-windows-x86_64-${{ needs.check-prerequisites.outputs.version }}.zip
+          asset_path: downloads/ffmpeg-8.1-windows-x86_64.zip
+          asset_name: ffmpeg-8.1-windows-x86_64-${{ needs.check-prerequisites.outputs.version }}.zip
           asset_content_type: application/zip
 
       - name: Upload Darwin x86_64 Asset
         uses: actions/upload-release-asset@v1
-        if: hashFiles('downloads/ffmpeg-8.0-darwin-x86_64.tar.gz') != ''
+        if: hashFiles('downloads/ffmpeg-8.1-darwin-x86_64.tar.gz') != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-8.0-darwin-x86_64.tar.gz
-          asset_name: ffmpeg-8.0-darwin-x86_64-${{ needs.check-prerequisites.outputs.version }}.tar.gz
+          asset_path: downloads/ffmpeg-8.1-darwin-x86_64.tar.gz
+          asset_name: ffmpeg-8.1-darwin-x86_64-${{ needs.check-prerequisites.outputs.version }}.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload Darwin ARM64 Asset
         uses: actions/upload-release-asset@v1
-        if: hashFiles('downloads/ffmpeg-8.0-darwin-arm64.tar.gz') != ''
+        if: hashFiles('downloads/ffmpeg-8.1-darwin-arm64.tar.gz') != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: downloads/ffmpeg-8.0-darwin-arm64.tar.gz
-          asset_name: ffmpeg-8.0-darwin-arm64-${{ needs.check-prerequisites.outputs.version }}.tar.gz
+          asset_path: downloads/ffmpeg-8.1-darwin-arm64.tar.gz
+          asset_name: ffmpeg-8.1-darwin-arm64-${{ needs.check-prerequisites.outputs.version }}.tar.gz
           asset_content_type: application/gzip
 
       # Notify relevant services (could be Slack, Discord, etc.)

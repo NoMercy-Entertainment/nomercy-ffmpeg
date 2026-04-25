@@ -81,9 +81,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.platform }}" == "linux" ] && [ "${{ matrix.arch }}" == "aarch64" ]; then
-            FILE_NAME="downloads/ffmpeg-8.0-linux-aarch64.tar.gz"
+            FILE_NAME="downloads/ffmpeg-8.1-linux-aarch64.tar.gz"
           else
-            FILE_NAME="downloads/ffmpeg-8.0-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz"
+            FILE_NAME="downloads/ffmpeg-8.1-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz"
           fi
           
           echo "Looking for file: $FILE_NAME"
@@ -109,7 +109,7 @@ jobs:
         if: matrix.platform == 'windows'
         shell: bash
         run: |
-          FILE_NAME="downloads/ffmpeg-8.0-windows-${{ matrix.arch }}.zip"
+          FILE_NAME="downloads/ffmpeg-8.1-windows-${{ matrix.arch }}.zip"
           echo "Looking for file: $FILE_NAME"
           if [ -f "$FILE_NAME" ]; then
             echo "Found $FILE_NAME, extracting..."

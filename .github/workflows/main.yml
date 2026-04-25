@@ -157,9 +157,9 @@ jobs:
             echo "🚀 Exporting $platform..."
             if docker pull nomercyentertainment/ffmpeg-${platform}:latest; then
               docker create --name ${platform}-container nomercyentertainment/ffmpeg-${platform}:latest
-              if docker cp ${platform}-container:/build/ffmpeg-8.0-${platform}.${platforms[$platform]} downloads/ffmpeg-8.0-${platform}.${platforms[$platform]}; then
+              if docker cp ${platform}-container:/build/ffmpeg-8.1-${platform}.${platforms[$platform]} downloads/ffmpeg-8.1-${platform}.${platforms[$platform]}; then
                 echo "✅ Successfully exported $platform"
-                ls -lh downloads/ffmpeg-8.0-${platform}.${platforms[$platform]}
+                ls -lh downloads/ffmpeg-8.1-${platform}.${platforms[$platform]}
               else
                 echo "⚠️ Artifact not found for $platform"
               fi
