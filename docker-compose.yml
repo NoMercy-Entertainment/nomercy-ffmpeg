@@ -20,7 +20,7 @@ services:
     build:
       context: .
       args:
-        DEBUG: "true"
+        DEBUG: "false"
       dockerfile: ffmpeg-linux-x86_64.dockerfile
     depends_on:
       - ffmpeg-base
@@ -34,7 +34,7 @@ services:
     build:
       context: .
       args:
-        DEBUG: "true"
+        DEBUG: "false"
       dockerfile: ffmpeg-linux-aarch64.dockerfile
     depends_on:
       - ffmpeg-base
@@ -48,7 +48,7 @@ services:
     build:
       context: .
       args:
-        DEBUG: "true"
+        DEBUG: "false"
       dockerfile: ffmpeg-windows-x86_64.dockerfile
     depends_on:
       - ffmpeg-base
@@ -62,7 +62,7 @@ services:
   #   build:
   #     context: .
   #     args:
-  #       DEBUG: "true"
+  #       DEBUG: "false"
   #     dockerfile: ffmpeg-windows-arm64.dockerfile
   #   depends_on:
   #     - ffmpeg-base
@@ -76,7 +76,7 @@ services:
     build:
       context: .
       args:
-        DEBUG: "true"
+        DEBUG: "false"
       dockerfile: ffmpeg-darwin-x86_64.dockerfile
     depends_on:
       - ffmpeg-base
@@ -90,7 +90,7 @@ services:
     build:
       context: .
       args:
-        DEBUG: "true"
+        DEBUG: "false"
       dockerfile: ffmpeg-darwin-arm64.dockerfile
     depends_on:
       - ffmpeg-base
