@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
-ENV ffmpeg_version=8.0 \
+ENV ffmpeg_version=8.1.1 \
     iconv_version=1.18 \
     libxml2_version=2.13 \
     zlib_version=1.3.1 \
@@ -93,6 +93,8 @@ RUN echo "------------------------------------------------------" \
     && echo "------------------------------------------------------" \
     && echo "🔧 Start downloading and installing dependencies" \
     && echo "------------------------------------------------------"\
+    && echo "🔄 Swapping apt mirror to Leaseweb NL for speed" \
+    && sed -i 's|http://archive.ubuntu.com|http://mirror.nl.leaseweb.net|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true \
     && echo "🔄 Checking for updates" \
     && apt-get update >/dev/null 2>&1 \
     && echo "✅ Updating completed successfully" \

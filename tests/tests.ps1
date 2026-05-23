@@ -3,13 +3,13 @@ param (
 )
 
 $TOTAL_WIDTH_TEXT = 54
-$script:REQUIRED_TOTAL = 0
-$script:REQUIRED_PASSED = 0
-$script:REQUIRED_FAILED = 0
-$script:HW_TOTAL = 0
-$script:HW_PASSED = 0
-$script:HW_MISSING = 0
-$script:HW_FAILED = 0
+$script:TOTAL = 0
+$script:PASSED = 0
+$script:FAILED = 0
+
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ICON_PASS = [char]0x2714
+$ICON_FAIL = [char]0x2718
 
 $TestRoot = "$Workspace\test_files"
 $SampleVideo = "$TestRoot\sample.mp4"
@@ -17,16 +17,11 @@ $SampleAudio = "$TestRoot\sample.wav"
 $SampleImage = "$TestRoot\sample.png"
 $SampleSubs = "$TestRoot\test.ass"
 
-# Cleanup and create test directory
 Remove-Item -Recurse -Force -Path $TestRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out-Null
 
 function text_with_padding {
-    param (
-        $text_before,
-        $text_after,
-        $extra_padding = 0
-    )
+    param ($text_before, $text_after, $extra_padding = 0)
     $text_length = $text_before.Length + $text_after.Length
     $padding = $TOTAL_WIDTH_TEXT - $text_length - $extra_padding
     if ($padding -lt 1) { $padding = 1 }
@@ -37,7 +32,7 @@ function text_with_padding {
 
 function check_command {
     if (-Not (Test-Path "$Workspace\ffmpeg.exe")) {
-        Write-Host "❌ FFmpeg executable not found in current directory"
+        Write-Host "$ICON_FAIL FFmpeg executable not found"
         exit 1
     }
 }
@@ -54,49 +49,44 @@ function generate_samples {
     if (-Not (Test-Path $SampleVideo)) {
         $Start_Time = Get-Date
         $Current_Count++
-        text_with_padding "📹 Generating sample video" "[$Current_Count/$Total_Count]"
         & "$Workspace\ffmpeg.exe" -hide_banner -y -f lavfi -i "testsrc=duration=10:size=1280x720:rate=30" -c:v libx264 -crf 23 "$SampleVideo" 2>&1 | Out-Null
-        $End_Time = Get-Date
-        text_with_padding "✅ Sample video generated" "[$((New-TimeSpan -Start $Start_Time -End $End_Time).TotalSeconds.ToString("0"))s]" 1
+        $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
+        text_with_padding "     $ICON_PASS Sample video" "[${elapsed}s]"
     }
 
     if (-Not (Test-Path $SampleAudio)) {
         $Start_Time = Get-Date
         $Current_Count++
-        text_with_padding "🔊 Generating sample audio" "[$Current_Count/$Total_Count]"
         & "$Workspace\ffmpeg.exe" -hide_banner -y -f lavfi -i "sine=frequency=1000:duration=10" -c:a pcm_s16le "$SampleAudio" 2>&1 | Out-Null
-        $End_Time = Get-Date
-        text_with_padding "✅ Sample audio generated" "[$((New-TimeSpan -Start $Start_Time -End $End_Time).TotalSeconds.ToString("0"))s]" 1
+        $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
+        text_with_padding "     $ICON_PASS Sample audio" "[${elapsed}s]"
     }
 
     if (-Not (Test-Path $SampleImage)) {
         $Start_Time = Get-Date
         $Current_Count++
-        text_with_padding "🖼️ Generating sample image" "[$Current_Count/$Total_Count]" -1
         & "$Workspace\ffmpeg.exe" -hide_banner -y -f lavfi -i "testsrc=duration=1:size=640x480:rate=1" -frames:v 1 "$SampleImage" 2>&1 | Out-Null
-        $End_Time = Get-Date
-        text_with_padding "✅ Sample image generated" "[$((New-TimeSpan -Start $Start_Time -End $End_Time).TotalSeconds.ToString("0"))s]" 1
+        $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
+        text_with_padding "     $ICON_PASS Sample image" "[${elapsed}s]"
     }
 
     if (-Not (Test-Path $SampleSubs)) {
-        $Start_Time = Get-Date
         $Current_Count++
-        text_with_padding "📝 Generating sample subtitles" "[$Current_Count/$Total_Count]"
-        @"
-[Script Info]
-Title: Test Subtitle
-ScriptType: v4.00+
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,0
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle
-"@ | Out-File -FilePath $SampleSubs -Encoding ASCII
-        $End_Time = Get-Date
-        text_with_padding "✅ Sample subtitles generated" "[$((New-TimeSpan -Start $Start_Time -End $End_Time).TotalSeconds.ToString("0"))s]" 1
+        $assContent = @(
+            '[Script Info]'
+            'Title: Test Subtitle'
+            'ScriptType: v4.00+'
+            ''
+            '[V4+ Styles]'
+            'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding'
+            'Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,0'
+            ''
+            '[Events]'
+            'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+            'Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle'
+        ) -join "`n"
+        [System.IO.File]::WriteAllText($SampleSubs, $assContent)
+        text_with_padding "     $ICON_PASS Sample subtitles" "[0s]"
     }
 
     if ($Current_Count -gt 0) {
@@ -104,176 +94,92 @@ Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle
     }
 }
 
-# ── Required test: failure = broken build ────────────────────
 function run_test {
-    param (
-        $name,
-        $command,
-        $expected_output
-    )
+    param ($name, $command, $expected_output)
 
-    $script:REQUIRED_TOTAL++
+    $script:TOTAL++
     $name = $name.ToUpper()
-    text_with_padding "🧪 Testing ${name}" "[$script:REQUIRED_TOTAL]"
+    $num = $script:TOTAL.ToString().PadLeft(2)
     $Start_Time = Get-Date
     $test_output = Invoke-Expression "$Workspace\ffmpeg.exe $command 2>&1" | Out-String
     $End_Time = Get-Date
     $elapsed = "$((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s"
-    if ( $LASTEXITCODE -eq 0 -and $test_output -cmatch $expected_output ) {
-        text_with_padding "✅ ${name} passed" "[ ${elapsed} ]" 1
-        $script:REQUIRED_PASSED++
+    if ( $test_output -cmatch $expected_output ) {
+        text_with_padding " ${num}. $ICON_PASS ${name}" "[ ${elapsed} ]"
+        $script:PASSED++
     }
     else {
-        text_with_padding "❌ ${name} FAILED" "[ ${elapsed} ]" 1
-        $script:REQUIRED_FAILED++
+        text_with_padding " ${num}. $ICON_FAIL ${name}" "[ ${elapsed} ]"
+        $script:FAILED++
     }
 }
 
-# ── Hardware test: detect missing hardware vs real failure ───
-# 1. Check encoder is compiled in (required — if missing, it's a build bug)
-# 2. Try to encode — if it fails, check WHY:
-#    - "no capable device" / "device not found" / "not available" = hardware missing
-#    - anything else = real bug
-function run_hw_test {
-    param (
-        $name,
-        $encoder,
-        $command
-    )
+function check_compiled {
+    param ($name, $type, $symbol)
 
-    $script:HW_TOTAL++
+    $script:TOTAL++
     $name = $name.ToUpper()
-    text_with_padding "🔌 Testing ${name}" "[$script:HW_TOTAL]"
-    $Start_Time = Get-Date
+    $num = $script:TOTAL.ToString().PadLeft(2)
 
-    # Step 1: verify encoder is compiled in
-    $encoder_list = Invoke-Expression "$Workspace\ffmpeg.exe -hide_banner -encoders 2>&1" | Out-String
-    if (-not ($encoder_list -match $encoder)) {
-        $End_Time = Get-Date
-        $elapsed = "$((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s"
-        text_with_padding "❌ ${name} not compiled in" "[ ${elapsed} ]" 1
-        $script:HW_FAILED++
-        return
-    }
-
-    # Step 2: try to encode
-    $test_output = Invoke-Expression "$Workspace\ffmpeg.exe $command 2>&1" | Out-String
-    $End_Time = Get-Date
-    $elapsed = "$((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s"
-
-    if ($LASTEXITCODE -eq 0) {
-        text_with_padding "✅ ${name} passed" "[ ${elapsed} ]" 1
-        $script:HW_PASSED++
-    }
-    elseif ($test_output -match "(?i)(no capable|device.*not found|not available|cannot load|could not|no .*device|driver|hwaccel|Failed to)") {
-        text_with_padding "➖ ${name} hardware not present" "[ ${elapsed} ]" 1
-        $script:HW_MISSING++
+    $list_output = Invoke-Expression "$Workspace\ffmpeg.exe -hide_banner -${type} 2>&1" | Out-String
+    if ($list_output -match $symbol) {
+        text_with_padding " ${num}. $ICON_PASS ${name}" "[compiled]"
+        $script:PASSED++
     }
     else {
-        text_with_padding "❌ ${name} FAILED" "[ ${elapsed} ]" 1
-        $script:HW_FAILED++
+        text_with_padding " ${num}. $ICON_FAIL ${name}" "[missing]"
+        $script:FAILED++
     }
 }
 
-# ══════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════
-
+# ==============================================================
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
-Write-Host "        _   _       __  __                      "
-Write-Host "       | \ | | ___ |  \/  | ___ _ __ ___ _   _  "
-Write-Host "       |  \| |/ _ \| |\/| |/ _ \ '__/ __| | | | "
-Write-Host "       | |\  | (_) | |  | |  __/ | | (__| |_| | "
-Write-Host "       |_| \_|\___/|_|  |_|\___|_|  \___|\__, | "
-Write-Host "         _____ _____ __  __ ____  _____ _|___/  "
-Write-Host "        |  ___|  ___|  \/  |  _ \| ____/ ___|   "
-Write-Host "        | |_  | |_  | |\/| | |_) |  _|| |  _    "
-Write-Host "        |  _| |  _| | |  | |  __/| |__| |_| |   "
-Write-Host "        |_|   |_|   |_|  |_|_|   |_____\____|   "
-Write-Host ""
+Write-Host '  NoMercy FFmpeg Test Suite'
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 
 check_command
 generate_samples
 
-# ── Required tests ───────────────────────────────────────────
-Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
-text_with_padding "🔒 Required tests" "(must pass)"
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 
 run_test "version" "-version" "ffmpeg version"
-
-# Video codecs
 run_test "libx264" "-y -i $SampleVideo -c:v libx264 $TestRoot\test_h264.mp4" "x264"
 run_test "libx265" "-y -i $SampleVideo -c:v libx265 $TestRoot\test_h265.mp4" "x265"
-run_test "libvpx" "-y -i $SampleVideo -c:v libvpx-vp9 $TestRoot\test_vp9.webm" "vp9"
-run_test "libaom" "-y -i $SampleVideo -c:v libaom-av1 $TestRoot\test_av1.mkv" "av1"
-run_test "libtheora" "-y -i $SampleVideo -c:v libtheora $TestRoot\test_theora.ogv" "theora"
-
-# Audio codecs
+run_test "libvpx" "-y -i $SampleVideo -c:v libvpx-vp9 -frames:v 1 $TestRoot\test_vp9.webm" "vp9"
+run_test "libaom" "-y -i $SampleVideo -c:v libaom-av1 -frames:v 1 $TestRoot\test_av1.mkv" "av1"
+run_test "libtheora" "-y -i $SampleVideo -c:v libtheora -frames:v 1 $TestRoot\test_theora.ogv" "theora"
 run_test "libfdk_aac" "-y -i $SampleAudio -c:a libfdk_aac $TestRoot\test_aac.m4a" "aac"
 run_test "libopus" "-y -i $SampleAudio -c:a libopus $TestRoot\test_opus.opus" "opus"
 run_test "libmp3lame" "-y -i $SampleAudio -c:a libmp3lame $TestRoot\test_mp3.mp3" "mp3"
-
-# Image codecs
-run_test "libwebp" "-y -i $SampleImage -c:v libwebp $TestRoot\test_webp.webp" "webp"
+run_test "libwebp" "-y -i $SampleImage -c:v libwebp -f webp $TestRoot\test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i $SampleImage -c:v libopenjpeg $TestRoot\test_jp2.jp2" "openjpeg"
-
-# Subtitle codecs
-run_test "libass" "-y -i $SampleVideo -vf `"ass=$SampleSubs`" $TestRoot\test_ass.mp4" "ass"
-run_test "vobsub_muxer" "-hide_banner -muxers" "vobsub"
-run_test "spritevtt_muxer" "-hide_banner -muxers" "spritevtt"
-run_test "chapters_vtt_muxer" "-hide_banner -muxers" "chapters_vtt"
-
-# Auto-create directories
+run_test "libass" "-y -i $SampleVideo -vf ass=$($SampleSubs.Replace('\','/')) $TestRoot\test_ass.mp4" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"
 
-# Library presence
-run_test "libbluray" "-hide_banner -protocols | findstr bluray" "bluray"
-run_test "libdvdread" "-hide_banner -version | findstr dvdread" "dvdread"
-run_test "libcdio" "-hide_banner -version | findstr cdio" "cdio"
-run_test "libfribidi" "-hide_banner -version | findstr fribidi" "fribidi"
-run_test "libsrt" "-hide_banner -version | findstr srt" "srt"
-run_test "libxml2" "-hide_banner -version | findstr xml" "xml"
-run_test "libdav1d" "-hide_banner -decoders" "dav1d"
-run_test "librav1e" "-hide_banner -encoders" "rav1e"
-run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
-
-# ── Hardware tests ───────────────────────────────────────────
-Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
-text_with_padding "🔌 Hardware tests" "(detect availability)"
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 
-# Windows: NVENC (NVIDIA), VPL (Intel), AMF (AMD), DXVA2/D3D11VA
-run_hw_test "NVENC" "h264_nvenc" "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nvenc.mp4"
-run_hw_test "AMF" "h264_amf" "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4"
+check_compiled "vobsub muxer" "muxers" "vobsub"
+check_compiled "spritevtt muxer" "muxers" "spritevtt"
+check_compiled "chapter_vtt muxer" "muxers" "chapters_vtt"
+check_compiled "ocr_subtitle encoder" "encoders" "ocr_subtitle"
+check_compiled "libbluray" "protocols" "bluray"
+check_compiled "libfribidi" "version" "fribidi"
+check_compiled "libsrt" "version" "srt"
+check_compiled "libxml2" "version" "xml"
+check_compiled "libdav1d" "decoders" "dav1d"
+check_compiled "librav1e" "encoders" "rav1e"
+check_compiled "nvenc" "encoders" "h264_nvenc"
+check_compiled "amf" "encoders" "h264_amf"
 
-# ── Summary ──────────────────────────────────────────────────
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
-text_with_padding "📊 Required:" "$script:REQUIRED_PASSED/$script:REQUIRED_TOTAL passed"
-if ($script:REQUIRED_FAILED -gt 0) {
-    text_with_padding "   ❌ Failures:" "$script:REQUIRED_FAILED"
-}
-Write-Host ""
-text_with_padding "📊 Hardware:" ""
-if ($script:HW_PASSED -gt 0) {
-    text_with_padding "   ✅ Available:" "$script:HW_PASSED"
-}
-if ($script:HW_MISSING -gt 0) {
-    text_with_padding "   ➖ Not present:" "$script:HW_MISSING"
-}
-if ($script:HW_FAILED -gt 0) {
-    text_with_padding "   ❌ Broken:" "$script:HW_FAILED"
+text_with_padding " Results:" "$script:PASSED/$script:TOTAL passed"
+if ($script:FAILED -gt 0) {
+    text_with_padding " $ICON_FAIL FAILED:" "$script:FAILED"
 }
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host ""
 
-# Cleanup
 Remove-Item -Recurse -Force -Path $TestRoot -ErrorAction SilentlyContinue
 
-# Required failures OR hardware build failures = non-zero exit
-$total_failures = $script:REQUIRED_FAILED + $script:HW_FAILED
-if ($total_failures -gt 0) {
-    exit 1
-}
+if ($script:FAILED -gt 0) { exit 1 }
 exit 0

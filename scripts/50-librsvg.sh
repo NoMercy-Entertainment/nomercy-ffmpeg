@@ -157,7 +157,14 @@ cd /build
 # Download glib
 if [ ! -d "/build/glib" ]; then
 	echo "Downloading glib..."
-	git clone --branch ${LIBGLIB_VERSION} https://gitlab.gnome.org/GNOME/glib.git glib >/dev/null 2>&1
+	git clone --branch ${LIBGLIB_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/glib.git /build/glib
+	# Pre-clone gvdb subproject — meson wrap-git fails inside Docker
+	if [ -f "/build/glib/subprojects/gvdb.wrap" ] && [ ! -d "/build/glib/subprojects/gvdb" ]; then
+		gvdb_url=$(grep 'url=' /build/glib/subprojects/gvdb.wrap | head -1 | cut -d= -f2)
+		gvdb_rev=$(grep 'revision=' /build/glib/subprojects/gvdb.wrap | head -1 | cut -d= -f2)
+		git clone "${gvdb_url}" /build/glib/subprojects/gvdb
+		cd /build/glib/subprojects/gvdb && git checkout "${gvdb_rev}" 2>/dev/null
+	fi
 fi
 
 cd /build/glib

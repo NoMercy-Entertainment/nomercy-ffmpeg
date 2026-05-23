@@ -5,51 +5,25 @@
 #/*  create output directories         */#
 #/**************************************/#
 
-# Patch avio_open2 in libavformat to auto-create parent directories
-# when opening files for writing. This eliminates "No such file or
-# directory" errors when output paths include subdirectories.
+# Patch io_open_default in libavformat/options.c to auto-create parent
+# directories when opening files for writing. This is the actual entry
+# point used by muxers (image2, mp4, mkv, etc.) — NOT avio_open2.
 #
 # Works cross-platform: uses _mkdir on Windows, mkdir on Unix.
-# The target file varies by FFmpeg version (avio.c or aviobuf.c),
-# so we locate it dynamically.
 
-# --- Locate the file containing avio_open2 ---
-AVIO_FILE=""
-for candidate in /build/ffmpeg/libavformat/avio.c /build/ffmpeg/libavformat/aviobuf.c; do
-    if [ -f "$candidate" ] && grep -q '^int avio_open2' "$candidate"; then
-        AVIO_FILE="$candidate"
-        break
-    fi
-done
+OPTIONS_FILE="/build/ffmpeg/libavformat/options.c"
 
-# Fallback: broader search if the strict anchor didn't match
-if [ -z "$AVIO_FILE" ]; then
-    for candidate in /build/ffmpeg/libavformat/avio.c /build/ffmpeg/libavformat/aviobuf.c; do
-        if [ -f "$candidate" ] && grep -q 'int avio_open2' "$candidate"; then
-            AVIO_FILE="$candidate"
-            break
-        fi
-    done
-fi
-
-if [ -z "$AVIO_FILE" ]; then
-    log "  ERROR: Could not find avio_open2 in any libavformat source file"
+if [ ! -f "$OPTIONS_FILE" ]; then
+    log "  ERROR: $OPTIONS_FILE not found"
     exit 1
 fi
 
-log "  Found avio_open2 in: $AVIO_FILE"
+log "  Patching: $OPTIONS_FILE"
 
-# --- Step 1: Add mkdir_p helper function ---
-log "Step 1: Adding ff_ensure_dir_exists helper to $(basename "$AVIO_FILE")"
+# --- Step 1: Add ff_ensure_dir_exists helper function ---
+log "Step 1: Adding ff_ensure_dir_exists helper"
 
-# The helper:
-# - Only acts on local file paths (skips URLs with "://")
-# - Only acts when AVIO_FLAG_WRITE is set
-# - Creates parent directories recursively
-# - Cross-platform: uses _mkdir on Windows, mkdir on Unix
-# - Handles both / and \ separators
-
-if ! grep -q "ff_ensure_dir_exists" "$AVIO_FILE"; then
+if ! grep -q "ff_ensure_dir_exists" "$OPTIONS_FILE"; then
 
     cat > /tmp/mkdir_patch.c << 'MKDIRPATCH'
 
@@ -68,7 +42,7 @@ if ! grep -q "ff_ensure_dir_exists" "$AVIO_FILE"; then
  * Only operates on local file paths (no protocol prefix).
  * Safe to call when directories already exist (ignores EEXIST).
  */
-static void ff_ensure_dir_exists(const char *path, int flags)
+static void ff_ensure_dir_exists(const char *url, int flags)
 {
     char *tmp;
     const char *sep;
@@ -78,21 +52,21 @@ static void ff_ensure_dir_exists(const char *path, int flags)
         return;
 
     /* Skip non-local paths (URLs with protocol) */
-    if (!path || strstr(path, "://"))
+    if (!url || strstr(url, "://"))
         return;
 
     /* Find the last directory separator */
     sep = NULL;
-    for (const char *p = path; *p; p++) {
+    for (const char *p = url; *p; p++) {
         if (*p == '/' || *p == '\\')
             sep = p;
     }
 
     /* No directory component — file is in current dir */
-    if (!sep || sep == path)
+    if (!sep || sep == url)
         return;
 
-    tmp = av_strndup(path, sep - path);
+    tmp = av_strndup(url, sep - url);
     if (!tmp)
         return;
 
@@ -130,64 +104,59 @@ static void ff_ensure_dir_exists(const char *path, int flags)
 /* --- End NoMercy patch --- */
 MKDIRPATCH
 
-    # Find the last #include line and insert after it
-    last_include_line=$(grep -n '^#include' "$AVIO_FILE" | tail -1 | cut -d: -f1)
+    # Insert after the last #include in options.c
+    last_include_line=$(grep -n '^#include' "$OPTIONS_FILE" | tail -1 | cut -d: -f1)
 
     if [ -z "$last_include_line" ]; then
-        log "  ERROR: Could not find #include lines in $(basename "$AVIO_FILE")"
+        log "  ERROR: Could not find #include lines in options.c"
         exit 1
     fi
 
-    sed -i "${last_include_line}r /tmp/mkdir_patch.c" "$AVIO_FILE"
+    sed -i "${last_include_line}r /tmp/mkdir_patch.c" "$OPTIONS_FILE"
     rm -f /tmp/mkdir_patch.c
-    log "  Added ff_ensure_dir_exists helper function"
+    log "  Added ff_ensure_dir_exists helper"
 else
-    log "  Helper function already exists"
+    log "  Helper already exists"
 fi
 
 # Verify helper was added
-if grep -q "ff_ensure_dir_exists" "$AVIO_FILE"; then
-    log "  Verified helper function in $(basename "$AVIO_FILE")"
-else
+if ! grep -q "ff_ensure_dir_exists" "$OPTIONS_FILE"; then
     log "  ERROR: Helper function verification failed!"
     exit 1
 fi
 
-# --- Step 2: Patch avio_open2 to call the helper ---
-log "Step 2: Patching avio_open2 to auto-create directories"
+# --- Step 2: Patch io_open_default to call the helper ---
+log "Step 2: Patching io_open_default"
 
-if ! grep -q "ff_ensure_dir_exists(filename, flags)" "$AVIO_FILE"; then
-    # Find the avio_open2 function and insert the call after the opening brace.
-    # Use a flexible pattern that matches regardless of qualifiers or formatting.
+if ! grep -q "ff_ensure_dir_exists(url, flags)" "$OPTIONS_FILE"; then
     awk '
-    /int avio_open2\(/ { in_func=1 }
+    /static int io_open_default\(/ { in_func=1 }
     in_func && /\{/ {
         print
-        print "    ff_ensure_dir_exists(filename, flags);"
+        print "    ff_ensure_dir_exists(url, flags);"
         in_func=0
         next
     }
     { print }
-    ' "$AVIO_FILE" > /tmp/avio_patched.c
+    ' "$OPTIONS_FILE" > /tmp/options_patched.c
 
-    # Verify the awk output is non-empty and contains the patch
-    if [ -s /tmp/avio_patched.c ] && grep -q "ff_ensure_dir_exists(filename, flags);" /tmp/avio_patched.c; then
-        mv /tmp/avio_patched.c "$AVIO_FILE"
-        log "  Patched avio_open2"
+    if [ -s /tmp/options_patched.c ] && grep -q "ff_ensure_dir_exists(url, flags);" /tmp/options_patched.c; then
+        mv /tmp/options_patched.c "$OPTIONS_FILE"
+        log "  Patched io_open_default"
     else
-        rm -f /tmp/avio_patched.c
-        log "  ERROR: awk failed to patch avio_open2 — function signature may have changed"
+        rm -f /tmp/options_patched.c
+        log "  ERROR: awk failed to patch io_open_default"
         exit 1
     fi
 else
-    log "  avio_open2 already patched"
+    log "  io_open_default already patched"
 fi
 
 # Verify the patch
-if grep -A5 "avio_open2" "$AVIO_FILE" | grep -q "ff_ensure_dir_exists"; then
-    log "  Verified avio_open2 patch"
+if grep -A5 "io_open_default" "$OPTIONS_FILE" | grep -q "ff_ensure_dir_exists"; then
+    log "  Verified io_open_default patch"
 else
-    log "  ERROR: avio_open2 patch verification failed!"
+    log "  ERROR: io_open_default patch verification failed!"
     exit 1
 fi
 

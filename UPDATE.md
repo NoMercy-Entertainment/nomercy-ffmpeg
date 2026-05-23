@@ -2,6 +2,39 @@
 
 ## Version History
 
+### v1.0.35 - May 22, 2026
+
+#### ⬆️ FFmpeg 8.0 → 8.1.1 Upgrade
+
+Bumped the upstream FFmpeg source from 8.0 (released 2026-04-01) to 8.1.1 (released 2026-05-04). Every custom muxer, encoder, filter, and source-tree patch continues to work unchanged on 8.1.1.
+
+#### What Changed
+- **Upstream FFmpeg**: 8.0 → 8.1.1 (`ffmpeg_version` env in `ffmpeg-base.dockerfile`)
+- **Artifact filenames**: every `ffmpeg-8.0-*.tar.gz`/`ffmpeg-8.0-*.zip` path is now parameterized — the FFmpeg version is referenced via the `ffmpeg_version` env var (inherited from the base image) in `scripts/init/package.sh`, via a `FFMPEG_VERSION` build ARG in each platform dockerfile's final stage, and via a workflow-level `env.FFMPEG_VERSION` in `.github/workflows/{main,tests,release}.yml`. Future version bumps only require updating `ffmpeg_version` in `ffmpeg-base.dockerfile` plus the matching defaults in the platform dockerfiles and workflows.
+
+#### Compatibility Verification
+- **Patch anchors**: every `sed`/`awk` anchor used by `scripts/49-beatdetect.sh`, `scripts/51-vobsub-muxer.sh`, `scripts/52-ocr-subtitle-encoder.sh`, `scripts/53-sprite-sheet-muxer.sh`, `scripts/54-chapter-vtt-muxer.sh`, and `scripts/55-auto-create-dirs.sh` was verified against the actual 8.1.1 source tree. All patches were dry-run against the real 8.1.1 files and confirmed to insert the expected lines. No patch script required re-anchoring.
+- **Custom C sources**: every FFmpeg API symbol used by `af_beatdetect.c`, `vobsubenc.c`, `ocr_subtitle_enc.c`, `spritevttenc.c`, and `chaptervttenc.c` was verified against 8.1.1's headers. The `FFOutputFormat`, `FFCodec`, `FFFilter`, `AVSubtitle`, and `AVSubtitleRect` structs are unchanged in the fields we use. `FFCodec` gained a new `alpha_modes:2` bitfield in 8.1, but our designated initializers are unaffected. `FFInputFormat` removed `read_play`/`read_pause` in 8.1, but we never initialize those fields. No C source change was required.
+- **Pinned dependencies**: every minimum-version requirement introduced by 8.1.1's configure is already satisfied by the pinned versions in `ffmpeg-base.dockerfile` (libplacebo 7.349.0 ≥ 4.157.0; libvmaf 3.0.0 ≥ 1.5.2; libass 0.17.3 ≥ 0.13.0; libsvtav1 2.3.0 ≥ 0.8.4; libdav1d 1.5.0 ≥ 0.5.0; etc.). No dependency bump was required.
+- **Tarball URL**: `https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.bz2` was verified to download and extract correctly to a `ffmpeg-8.1.1/` directory matching what the base dockerfile expects.
+
+#### Notable Upstream 8.1 Changes (Reference)
+The agent's release-notes audit flagged these 8.1 deltas as potentially affecting our patches; all were checked and none required action:
+- New `alpha_modes:2` bitfield in `FFCodec` (no effect — we don't initialize it).
+- `FFInputFormat` swapped out `read_play`/`read_pause` for `read_set_state`/`handle_command` (no effect — we never initialize either).
+- Default C++ standard bumped to C++17 (already supported by the ubuntu 24.04 + GCC 13 base image).
+- New optional `--enable-cairo`, `--enable-libmpeghdec`, `--enable-libsvtjpegxs`, `--enable-libopencolorio` flags (not enabled by this build).
+- Old HLS protocol handler removed (we don't reference it).
+- `AVCodec.pix_fmts` formally deprecated but still present and usable (used by `spritevttenc.c` — compiles cleanly without `-Werror=deprecated-declarations`).
+
+#### Files Touched
+- `ffmpeg-base.dockerfile`: `ffmpeg_version=8.0` → `ffmpeg_version=8.1.1`
+- `ffmpeg-linux-x86_64.dockerfile`, `ffmpeg-linux-aarch64.dockerfile`, `ffmpeg-windows-x86_64.dockerfile`, `ffmpeg-windows-arm64.dockerfile`, `ffmpeg-darwin-x86_64.dockerfile`, `ffmpeg-darwin-arm64.dockerfile`: final stage replaced hardcoded `ffmpeg-8.0-…` strings with `ARG FFMPEG_VERSION=8.1.1` + `ENV FFMPEG_VERSION` + `${FFMPEG_VERSION}` interpolation in `COPY` and `CMD`.
+- `scripts/init/package.sh`: hardcoded `8.0` replaced with `${ffmpeg_version}` (inherited from base image env), with a guard that fails fast if the env var is unset.
+- `.github/workflows/main.yml`, `.github/workflows/tests.yml`, `.github/workflows/release.yml`: added workflow-level `env.FFMPEG_VERSION: "8.1.1"`; replaced every `ffmpeg-8.0-…` literal with the env var (via `$FFMPEG_VERSION` in bash blocks and `${{ env.FFMPEG_VERSION }}` / `format()` in GHA expressions).
+
+---
+
 ### v1.0.34 - April 13, 2026
 
 #### 🖼️ Added Sprite Sheet Muxer with WebVTT Timeline

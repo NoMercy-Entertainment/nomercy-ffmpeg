@@ -1,5 +1,10 @@
 name: CI/CD Pipeline
 
+# Single source of truth for the FFmpeg version produced by this build.
+# Must track `ffmpeg_version` in ffmpeg-base.dockerfile — bump both together.
+env:
+  FFMPEG_VERSION: "8.1.1"
+
 concurrency:
   group: cicd-${{ github.ref }}
   cancel-in-progress: true
@@ -122,7 +127,7 @@ jobs:
   export-artifacts:
     runs-on: [self-hosted, beast-unit]
     needs: [detect-changes, build-linux-x86_64, build-linux-aarch64, build-windows-x86_64, build-darwin-x86_64, build-darwin-arm64]
-    if: always() && (needs.detect-changes.outputs.any-changed == 'true' || inputs.force_rebuild) && (needs.build-linux-x86_64.result != 'failure' || needs.build-linux-aarch64.result != 'failure' || needs.build-windows-x86_64.result != 'failure' || needs.build-darwin-x86_64.result != 'failure' || needs.build-darwin-arm64.result != 'failure')
+    if: always() && (needs.detect-changes.outputs.any-changed == 'true' || inputs.force_rebuild) && needs.build-linux-x86_64.result == 'success' && needs.build-linux-aarch64.result == 'success' && needs.build-windows-x86_64.result == 'success' && needs.build-darwin-x86_64.result == 'success' && needs.build-darwin-arm64.result == 'success'
     steps:
       - name: Cache Downloaded Artifacts
         uses: actions/cache@v4
@@ -157,9 +162,9 @@ jobs:
             echo "🚀 Exporting $platform..."
             if docker pull nomercyentertainment/ffmpeg-${platform}:latest; then
               docker create --name ${platform}-container nomercyentertainment/ffmpeg-${platform}:latest
-              if docker cp ${platform}-container:/build/ffmpeg-8.0-${platform}.${platforms[$platform]} downloads/ffmpeg-8.0-${platform}.${platforms[$platform]}; then
+              if docker cp ${platform}-container:/build/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]} downloads/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]}; then
                 echo "✅ Successfully exported $platform"
-                ls -lh downloads/ffmpeg-8.0-${platform}.${platforms[$platform]}
+                ls -lh downloads/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]}
               else
                 echo "⚠️ Artifact not found for $platform"
               fi

@@ -2,7 +2,10 @@ if [[ ${TARGET_OS} != "windows" ]]; then
     exit 255
 fi
 
-FILEVERSION=$(echo "${ffmpeg_version}" | sed 's/\./,/g'),0,0
+# Windows VERSIONINFO requires exactly 4 comma-separated 16-bit ints.
+# Parse ffmpeg_version (e.g. "8.1.1") and pad/truncate to 4 components.
+IFS=. read -r _maj _min _pat _extra <<<"${ffmpeg_version}"
+FILEVERSION="${_maj:-0},${_min:-0},${_pat:-0},${_extra:-0}"
 
 cp "/scripts/resources/fftools.ico" "/build/ffmpeg/fftools/fftools.ico" || exit 1
 
