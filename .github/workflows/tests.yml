@@ -151,10 +151,7 @@ jobs:
           
           echo "Running tests for ${{ matrix.platform }}-${{ matrix.arch }}"
           chmod +x "${{ github.workspace }}/tests/tests.sh"
-          "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}" || {
-            echo "Tests failed, but continuing..."
-            exit 0
-          }
+          "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}"
 
       - name: Run Tests (Windows)
         if: matrix.platform == 'windows'
@@ -165,20 +162,16 @@ jobs:
             Write-Host "FFmpeg binary not found, skipping tests"
             exit 0
           }
-          
+
           # Check if test script exists
           if (-not (Test-Path "${{ github.workspace }}\tests\tests.ps1")) {
             Write-Host "Test script not found, skipping tests"
             exit 0
           }
-          
+
           Write-Host "Running tests for ${{ matrix.platform }}-${{ matrix.arch }}"
-          try {
-            & "${{ github.workspace }}\tests\tests.ps1" "${{ github.workspace }}"
-          } catch {
-            Write-Host "Tests failed, but continuing..."
-            exit 0
-          }
+          & "${{ github.workspace }}\tests\tests.ps1" "${{ github.workspace }}"
+          exit $LASTEXITCODE
 
       - name: Run Tests (Darwin)
         if: matrix.platform == 'darwin'
@@ -189,19 +182,16 @@ jobs:
             echo "FFmpeg binary not found, skipping tests"
             exit 0
           fi
-          
+
           # Check if test script exists
           if [ ! -f "${{ github.workspace }}/tests/tests.sh" ]; then
             echo "Test script not found, skipping tests"
             exit 0
           fi
-          
+
           echo "Running tests for ${{ matrix.platform }}-${{ matrix.arch }}"
           chmod +x "${{ github.workspace }}/tests/tests.sh"
-          "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}" || {
-            echo "Tests failed, but continuing..."
-            exit 0
-          }
+          "${{ github.workspace }}/tests/tests.sh" "${{ github.workspace }}"
 
   # Security scanning for Docker images
   security-scans:

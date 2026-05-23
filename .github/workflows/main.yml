@@ -23,11 +23,6 @@ on:
         required: true
         type: boolean
         default: true
-      enable_cache_warmup:
-        description: 'Warm up caches before building'
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   # Detect what has changed to optimize builds
@@ -35,36 +30,6 @@ jobs:
     uses: ./.github/workflows/detect-changes.yml
     with:
       force_rebuild: ${{ inputs.force_rebuild || false }}
-
-  # Optional cache warmup for better build performance
-  cache-warmup:
-    runs-on: ubuntu-latest
-    if: inputs.enable_cache_warmup
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Warm Up Global Caches
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            ~/.cache/npm
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.ccache
-            ~/.docker/buildx-cache
-          key: global-cache-warmup-${{ github.sha }}
-          restore-keys: |
-            global-cache-warmup-
-            ${{ runner.os }}-deps-
-            ${{ runner.os }}-buildx-
-
-      - name: Pre-populate Build Caches
-        run: |
-          echo "🔥 Pre-warming build environment caches..."
-          mkdir -p ~/.cache/pip ~/.cache/npm ~/.cargo/registry ~/.docker/buildx-cache
-          echo "✅ Cache directories prepared"
 
   # Build the base image that others depend on
   build-base:
@@ -96,7 +61,7 @@ jobs:
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_TOKEN: ${{ secrets.PAT }}
 
   build-linux-aarch64:
     needs: [detect-changes, build-base]
@@ -111,7 +76,7 @@ jobs:
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_TOKEN: ${{ secrets.PAT }}
 
   build-windows-x86_64:
     needs: [detect-changes, build-base]
@@ -126,7 +91,7 @@ jobs:
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_TOKEN: ${{ secrets.PAT }}
 
   build-darwin-x86_64:
     needs: [detect-changes, build-base]
@@ -141,7 +106,7 @@ jobs:
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_TOKEN: ${{ secrets.PAT }}
 
   build-darwin-arm64:
     needs: [detect-changes, build-base]
@@ -156,7 +121,7 @@ jobs:
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_TOKEN: ${{ secrets.PAT }}
 
   # Export artifacts from built images
   export-artifacts:

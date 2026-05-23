@@ -11,3 +11,5 @@ tmp/*
 .claude/memories/
 .claude/scheduled_tasks.lock
 .superpowers/
+test-bin/
+test-bin-win/
