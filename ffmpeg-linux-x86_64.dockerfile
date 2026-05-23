@@ -157,6 +157,11 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=linux /output/ffmpeg-8.0-linux-x86_64.tar.gz /build/ffmpeg-8.0-linux-x86_64.tar.gz
+# Default tracks ffmpeg_version in ffmpeg-base.dockerfile.
+# Override at build time with --build-arg FFMPEG_VERSION=x.y.z if needed.
+ARG FFMPEG_VERSION=8.1.1
+ENV FFMPEG_VERSION=${FFMPEG_VERSION}
 
-CMD ["cp", "/build/ffmpeg-8.0-linux-x86_64.tar.gz", "/output"]
+COPY --from=linux /output/ffmpeg-${FFMPEG_VERSION}-linux-x86_64.tar.gz /build/ffmpeg-${FFMPEG_VERSION}-linux-x86_64.tar.gz
+
+CMD ["sh", "-c", "cp /build/ffmpeg-${FFMPEG_VERSION}-linux-x86_64.tar.gz /output"]

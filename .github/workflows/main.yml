@@ -1,5 +1,10 @@
 name: CI/CD Pipeline
 
+# Single source of truth for the FFmpeg version produced by this build.
+# Must track `ffmpeg_version` in ffmpeg-base.dockerfile — bump both together.
+env:
+  FFMPEG_VERSION: "8.1.1"
+
 concurrency:
   group: cicd-${{ github.ref }}
   cancel-in-progress: true
@@ -192,9 +197,9 @@ jobs:
             echo "🚀 Exporting $platform..."
             if docker pull nomercyentertainment/ffmpeg-${platform}:latest; then
               docker create --name ${platform}-container nomercyentertainment/ffmpeg-${platform}:latest
-              if docker cp ${platform}-container:/build/ffmpeg-8.0-${platform}.${platforms[$platform]} downloads/ffmpeg-8.0-${platform}.${platforms[$platform]}; then
+              if docker cp ${platform}-container:/build/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]} downloads/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]}; then
                 echo "✅ Successfully exported $platform"
-                ls -lh downloads/ffmpeg-8.0-${platform}.${platforms[$platform]}
+                ls -lh downloads/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]}
               else
                 echo "⚠️ Artifact not found for $platform"
               fi

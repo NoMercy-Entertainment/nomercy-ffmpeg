@@ -60,12 +60,16 @@ else
     text_with_padding "⚙️ Creating FFmpeg tar file" ""
 fi
 cd /ffmpeg/${TARGET_OS}/${ARCH}
+# ffmpeg_version is exported by the base image (ffmpeg-base.dockerfile). It is
+# the single source of truth for the artifact version — bumping ffmpeg_version
+# there flows through to every artifact filename produced here.
+: "${ffmpeg_version:?ffmpeg_version env var must be set by the base image}"
 if [[ ${TARGET_OS} == "windows" ]]; then
-    zip -r /build/ffmpeg-8.0-${TARGET_OS}-${ARCH}.zip . >/dev/null 2>&1
+    zip -r /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.zip . >/dev/null 2>&1
 else
-    tar -czf /build/ffmpeg-8.0-${TARGET_OS}-${ARCH}.tar.gz . >/dev/null 2>&1
+    tar -czf /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.tar.gz . >/dev/null 2>&1
 fi
-cp /build/ffmpeg-8.0-${TARGET_OS}-${ARCH}.* /output
+cp /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.* /output
 
 if [[ ${TARGET_OS} == "windows" ]]; then
     text_with_padding "✅ FFmpeg zip file created successfully" ""
