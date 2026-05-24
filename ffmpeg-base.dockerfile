@@ -94,7 +94,6 @@ RUN echo "------------------------------------------------------" \
     && echo "🔧 Start downloading and installing dependencies" \
     && echo "------------------------------------------------------"\
     && echo "🔄 Checking for updates" \
-    && sed -i 's|http://archive.ubuntu.com|http://mirror.nl.leaseweb.net|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true \
     && apt-get update >/dev/null 2>&1 \
     && echo "✅ Updating completed successfully" \
     && echo "------------------------------------------------------" \
