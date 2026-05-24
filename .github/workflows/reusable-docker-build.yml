@@ -68,6 +68,19 @@ jobs:
           free -h
           echo "Available space in /tmp: $(df -h /tmp | tail -1 | awk '{print $4}')"
 
+      - name: Docker Daemon Health Check
+        run: |
+          # Fail fast if the runner's dockerd is dead — prevents a 30+ min
+          # zombie job (each prior step times out) when a previous build
+          # crashed the daemon. Operator must restart Docker on the runner.
+          if ! docker info >/dev/null 2>&1; then
+            echo "❌ Docker daemon is not responding on runner $(hostname)."
+            echo "   The previous build likely crashed dockerd."
+            echo "   Restart Docker on the self-hosted runner and re-run this workflow."
+            exit 1
+          fi
+          echo "✅ Docker daemon is healthy"
+
       - name: Checkout Code
         uses: actions/checkout@v4
         timeout-minutes: 5
@@ -153,40 +166,68 @@ jobs:
             --load \
             ${{ inputs.context }}"
 
+          # Capture full build log so we can detect daemon-down failures
+          # (grep -only output discards the lines we need to match against).
+          BUILD_LOG="$(mktemp)"
+
           MAX_BUILD_ATTEMPTS=2
           for attempt in $(seq 1 $MAX_BUILD_ATTEMPTS); do
             echo "🔄 Build attempt $attempt/$MAX_BUILD_ATTEMPTS"
             set +e
-            docker buildx build --progress=plain $BUILD_ARGS 2>&1 \
-              | grep -E "^#[0-9]+ [0-9]+\.|^#[0-9]+ (DONE|CACHED)|^#[0-9]+ \[|error|ERROR|FAIL"
-            BUILD_EXIT=${PIPESTATUS[0]}
+            docker buildx build --progress=plain $BUILD_ARGS > "$BUILD_LOG" 2>&1
+            BUILD_EXIT=$?
             set -e
+            # Stream a filtered view to the job log (full log goes to artifact)
+            grep -E "^#[0-9]+ [0-9]+\.|^#[0-9]+ (DONE|CACHED)|^#[0-9]+ \[|error|ERROR|FAIL" "$BUILD_LOG" || true
+
             if [ $BUILD_EXIT -eq 0 ]; then
               echo "✅ Build succeeded on attempt $attempt"
               break
+            fi
+
+            echo "❌ Build failed on attempt $attempt (exit $BUILD_EXIT)"
+
+            # Detect daemon-death: BuildKit gRPC EOF or dockerd unreachable.
+            # Retrying is futile in DinD — dockerd needs an operator restart.
+            DAEMON_DEAD=0
+            if grep -qE "Cannot connect to the Docker daemon|error reading from server: EOF|code = Unavailable" "$BUILD_LOG"; then
+              DAEMON_DEAD=1
+            elif ! docker info >/dev/null 2>&1; then
+              DAEMON_DEAD=1
+            fi
+
+            if [ $DAEMON_DEAD -eq 1 ]; then
+              echo "💀 Docker daemon died during build — retry will not help."
+              echo "   Operator must restart Docker on the self-hosted runner."
+              # Skip remaining attempts; jump straight to failure report.
+              attempt=$MAX_BUILD_ATTEMPTS
+            fi
+
+            if [ $attempt -lt $MAX_BUILD_ATTEMPTS ]; then
+              echo "🧹 Cleaning up before retry..."
+              docker system prune -af --volumes || true
+              rm -rf /tmp/* || true
+              echo "⏰ Waiting 30 seconds before retry..."
+              sleep 30
             else
-              echo "❌ Build failed on attempt $attempt"
-              if [ $attempt -lt $MAX_BUILD_ATTEMPTS ]; then
-                echo "🧹 Cleaning up before retry..."
-                docker system prune -af --volumes || true
-                rm -rf /tmp/* || true
-                echo "⏰ Waiting 30 seconds before retry..."
-                sleep 30
-              else
-                echo "💥 Build failed after $MAX_BUILD_ATTEMPTS attempts"
-                # Generate build failure report
-                echo "## Build Failure Report" > build-failure-report.md
-                echo "Platform: ${{ inputs.platform }}" >> build-failure-report.md
-                echo "Dockerfile: ${{ inputs.dockerfile }}" >> build-failure-report.md
-                echo "Timestamp: $(date)" >> build-failure-report.md
-                echo "Attempts: $MAX_BUILD_ATTEMPTS" >> build-failure-report.md
-                echo "" >> build-failure-report.md
-                echo "### System Information:" >> build-failure-report.md
-                df -h >> build-failure-report.md
-                echo "" >> build-failure-report.md
-                docker system df >> build-failure-report.md
-                exit 1
-              fi
+              echo "💥 Build failed after $attempt attempt(s)"
+              echo "## Build Failure Report" > build-failure-report.md
+              echo "Platform: ${{ inputs.platform }}" >> build-failure-report.md
+              echo "Dockerfile: ${{ inputs.dockerfile }}" >> build-failure-report.md
+              echo "Timestamp: $(date)" >> build-failure-report.md
+              echo "Attempts: $attempt" >> build-failure-report.md
+              echo "Daemon died: $DAEMON_DEAD" >> build-failure-report.md
+              echo "" >> build-failure-report.md
+              echo "### System Information:" >> build-failure-report.md
+              df -h >> build-failure-report.md 2>&1 || true
+              echo "" >> build-failure-report.md
+              docker system df >> build-failure-report.md 2>&1 || echo "(docker unavailable)" >> build-failure-report.md
+              echo "" >> build-failure-report.md
+              echo "### Last 100 lines of build log:" >> build-failure-report.md
+              echo '```' >> build-failure-report.md
+              tail -100 "$BUILD_LOG" >> build-failure-report.md
+              echo '```' >> build-failure-report.md
+              exit 1
             fi
           done
         timeout-minutes: 240  # 4 hour timeout — Windows cross-compile on fuse-overlayfs runs ~3h
