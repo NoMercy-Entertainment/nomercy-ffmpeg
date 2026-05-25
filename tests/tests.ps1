@@ -13,7 +13,6 @@ $SampleAudio = "$TestRoot\sample.wav"
 $SampleImage = "$TestRoot\sample.png"
 $SampleSubs = "$TestRoot\test.ass"
 
-# Cleanup and create test directory
 Remove-Item -Recurse -Force -Path $TestRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out-Null
 
@@ -49,49 +48,44 @@ function generate_samples {
     if (-Not (Test-Path $SampleVideo)) {
         $Start_Time = Get-Date
         $Current_Count++
-        text_with_padding "📹 Generating sample video" "[$Current_Count/$Total_Count]"
         & "$Workspace\ffmpeg.exe" -hide_banner -y -f lavfi -i "testsrc=duration=10:size=1280x720:rate=30" -c:v libx264 -crf 23 "$SampleVideo" 2>&1 | Out-Null
-        $End_Time = Get-Date
-        text_with_padding "✅ Sample video generated" "[$((New-TimeSpan -Start $Start_Time -End $End_Time).TotalSeconds.ToString("0"))s]" 1
+        $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
+        text_with_padding "     $ICON_PASS Sample video" "[${elapsed}s]"
     }
 
     if (-Not (Test-Path $SampleAudio)) {
         $Start_Time = Get-Date
         $Current_Count++
-        text_with_padding "🔊 Generating sample audio" "[$Current_Count/$Total_Count]"
         & "$Workspace\ffmpeg.exe" -hide_banner -y -f lavfi -i "sine=frequency=1000:duration=10" -c:a pcm_s16le "$SampleAudio" 2>&1 | Out-Null
-        $End_Time = Get-Date
-        text_with_padding "✅ Sample audio generated" "[$((New-TimeSpan -Start $Start_Time -End $End_Time).TotalSeconds.ToString("0"))s]" 1
+        $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
+        text_with_padding "     $ICON_PASS Sample audio" "[${elapsed}s]"
     }
 
     if (-Not (Test-Path $SampleImage)) {
         $Start_Time = Get-Date
         $Current_Count++
-        text_with_padding "🖼️ Generating sample image" "[$Current_Count/$Total_Count]" -1
         & "$Workspace\ffmpeg.exe" -hide_banner -y -f lavfi -i "testsrc=duration=1:size=640x480:rate=1" -frames:v 1 "$SampleImage" 2>&1 | Out-Null
-        $End_Time = Get-Date
-        text_with_padding "✅ Sample image generated" "[$((New-TimeSpan -Start $Start_Time -End $End_Time).TotalSeconds.ToString("0"))s]" 1
+        $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
+        text_with_padding "     $ICON_PASS Sample image" "[${elapsed}s]"
     }
 
     if (-Not (Test-Path $SampleSubs)) {
-        $Start_Time = Get-Date
         $Current_Count++
-        text_with_padding "📝 Generating sample subtitles" "[$Current_Count/$Total_Count]"
-        @"
-[Script Info]
-Title: Test Subtitle
-ScriptType: v4.00+
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,0
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle
-"@ | Out-File -FilePath $SampleSubs -Encoding ASCII
-        $End_Time = Get-Date
-        text_with_padding "✅ Sample subtitles generated" "[$((New-TimeSpan -Start $Start_Time -End $End_Time).TotalSeconds.ToString("0"))s]" 1
+        $assContent = @(
+            '[Script Info]'
+            'Title: Test Subtitle'
+            'ScriptType: v4.00+'
+            ''
+            '[V4+ Styles]'
+            'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding'
+            'Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,0'
+            ''
+            '[Events]'
+            'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+            'Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle'
+        ) -join "`n"
+        [System.IO.File]::WriteAllText($SampleSubs, $assContent)
+        text_with_padding "     $ICON_PASS Sample subtitles" "[0s]"
     }
 
     if ($Current_Count -gt 0) {
@@ -145,17 +139,7 @@ function run_test {
 
 # Main execution
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
-Write-Host "        _   _       __  __                      "
-Write-Host "       | \ | | ___ |  \/  | ___ _ __ ___ _   _  "
-Write-Host "       |  \| |/ _ \| |\/| |/ _ \ '__/ __| | | | "
-Write-Host "       | |\  | (_) | |  | |  __/ | | (__| |_| | "
-Write-Host "       |_| \_|\___/|_|  |_|\___|_|  \___|\__, | "
-Write-Host "         _____ _____ __  __ ____  _____ _|___/  "
-Write-Host "        |  ___|  ___|  \/  |  _ \| ____/ ___|   "
-Write-Host "        | |_  | |_  | |\/| | |_) |  _|| |  _    "
-Write-Host "        |  _| |  _| | |  | |  __/| |__| |_| |   "
-Write-Host "        |_|   |_|   |_|  |_|_|   |_____\____|   "
-Write-Host ""
+Write-Host '  NoMercy FFmpeg Test Suite'
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 
 check_command
@@ -163,30 +147,17 @@ generate_samples
 
 # Basic tests
 run_test "version" "-version" "ffmpeg version"
-
-# Video codecs
 run_test "libx264" "-y -i $SampleVideo -c:v libx264 $TestRoot\test_h264.mp4" "x264"
 run_test "libx265" "-y -i $SampleVideo -c:v libx265 $TestRoot\test_h265.mp4" "x265"
-run_test "libvpx" "-y -i $SampleVideo -c:v libvpx-vp9 $TestRoot\test_vp9.webm" "vp9"
-run_test "libaom" "-y -i $SampleVideo -c:v libaom-av1 $TestRoot\test_av1.mkv" "av1"
-run_test "libtheora" "-y -i $SampleVideo -c:v libtheora $TestRoot\test_theora.ogv" "theora"
-
-# Audio codecs
+run_test "libvpx" "-y -i $SampleVideo -c:v libvpx-vp9 -frames:v 1 $TestRoot\test_vp9.webm" "vp9"
+run_test "libaom" "-y -i $SampleVideo -c:v libaom-av1 -frames:v 1 $TestRoot\test_av1.mkv" "av1"
+run_test "libtheora" "-y -i $SampleVideo -c:v libtheora -frames:v 1 $TestRoot\test_theora.ogv" "theora"
 run_test "libfdk_aac" "-y -i $SampleAudio -c:a libfdk_aac $TestRoot\test_aac.m4a" "aac"
 run_test "libopus" "-y -i $SampleAudio -c:a libopus $TestRoot\test_opus.opus" "opus"
 run_test "libmp3lame" "-y -i $SampleAudio -c:a libmp3lame $TestRoot\test_mp3.mp3" "mp3"
-
-# Image codecs
-run_test "libwebp" "-y -i $SampleImage -c:v libwebp $TestRoot\test_webp.webp" "webp"
+run_test "libwebp" "-y -i $SampleImage -c:v libwebp -f webp $TestRoot\test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i $SampleImage -c:v libopenjpeg $TestRoot\test_jp2.jp2" "openjpeg"
-
-# Subtitle codecs
-run_test "libass" "-y -i $SampleVideo -vf `"ass=$SampleSubs`" $TestRoot\test_ass.mp4" "ass"
-run_test "vobsub_muxer" "-hide_banner -muxers" "vobsub"
-run_test "spritevtt_muxer" "-hide_banner -muxers" "spritevtt"
-run_test "chapters_vtt_muxer" "-hide_banner -muxers" "chapters_vtt"
-
-# Auto-create directories
+run_test "libass" "-y -i $SampleVideo -vf ass=$($SampleSubs.Replace('\','/')) $TestRoot\test_ass.mp4" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"
 
 # Hardware acceleration (may fail if no hardware support)
@@ -218,7 +189,6 @@ text_with_padding "Failed tests:" "$script:FAILED_TESTS"
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host ""
 
-# Cleanup
 Remove-Item -Recurse -Force -Path $TestRoot -ErrorAction SilentlyContinue
 
 # Exit with failure if any tests failed

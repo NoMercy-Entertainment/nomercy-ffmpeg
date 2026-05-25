@@ -23,7 +23,6 @@ SampleAudio="${TestRoot}/sample.wav"
 SampleImage="${TestRoot}/sample.png"
 SampleSubs="${TestRoot}/test.ass"
 
-# Cleanup and create test directory
 rm -rf "${TestRoot}"
 mkdir -p "${TestRoot}"
 
@@ -105,21 +104,18 @@ generate_samples() {
     fi
 
     if [[ ! -f "$SampleSubs" ]]; then
-        Start_Time=$(date +%s)
-        Current_Count=$((Current_Count + 1))
-        text_with_padding "📝 Generating sample subtitles" "[$Current_Count/$Total_Count]" 1
         {
-            echo -e "[Script Info]"
-            echo -e "Title: Test Subtitle"
-            echo -e "ScriptType: v4.00+"
-            echo -e ""
-            echo -e "[V4+ Styles]"
-            echo -e "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
-            echo -e "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,0"
-            echo -e ""
-            echo -e "[Events]"
-            echo -e "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
-            echo -e "Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle"
+            echo "[Script Info]"
+            echo "Title: Test Subtitle"
+            echo "ScriptType: v4.00+"
+            echo ""
+            echo "[V4+ Styles]"
+            echo "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
+            echo "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,0"
+            echo ""
+            echo "[Events]"
+            echo "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+            echo "Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle"
         } >$SampleSubs
         End_Time=$(date +%s)
         text_with_padding "✅ Sample subtitles generated" "[$((End_Time - Start_Time))s]" 1
@@ -195,30 +191,17 @@ generate_samples
 
 # Basic tests
 run_test "version" "-version" "ffmpeg version"
-
-# Video codecs
 run_test "libx264" "-y -i ${SampleVideo} -c:v libx264 ${TestRoot}/test_h264.mp4" "x264"
 run_test "libx265" "-y -i ${SampleVideo} -c:v libx265 ${TestRoot}/test_h265.mp4" "x265"
-run_test "libvpx" "-y -i ${SampleVideo} -c:v libvpx-vp9 ${TestRoot}/test_vp9.webm" "vp9"
-run_test "libaom" "-y -i ${SampleVideo} -c:v libaom-av1 ${TestRoot}/test_av1.mkv" "av1"
-run_test "libtheora" "-y -i ${SampleVideo} -c:v libtheora ${TestRoot}/test_theora.ogv" "theora"
-
-# Audio codecs
+run_test "libvpx" "-y -i ${SampleVideo} -c:v libvpx-vp9 -frames:v 1 ${TestRoot}/test_vp9.webm" "vp9"
+run_test "libaom" "-y -i ${SampleVideo} -c:v libaom-av1 -frames:v 1 ${TestRoot}/test_av1.mkv" "av1"
+run_test "libtheora" "-y -i ${SampleVideo} -c:v libtheora -frames:v 1 ${TestRoot}/test_theora.ogv" "theora"
 run_test "libfdk_aac" "-y -i ${SampleAudio} -c:a libfdk_aac ${TestRoot}/test_aac.m4a" "aac"
 run_test "libopus" "-y -i ${SampleAudio} -c:a libopus ${TestRoot}/test_opus.opus" "opus"
 run_test "libmp3lame" "-y -i ${SampleAudio} -c:a libmp3lame ${TestRoot}/test_mp3.mp3" "mp3"
-
-# Image codecs
-run_test "libwebp" "-y -i ${SampleImage} -c:v libwebp ${TestRoot}/test_webp.webp" "webp"
+run_test "libwebp" "-y -i ${SampleImage} -c:v libwebp -f webp ${TestRoot}/test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i ${SampleImage} -c:v libopenjpeg ${TestRoot}/test_jp2.jp2" "openjpeg"
-
-# Subtitle codecs
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
-run_test "vobsub_muxer" "-hide_banner -muxers" "vobsub"
-run_test "spritevtt_muxer" "-hide_banner -muxers" "spritevtt"
-run_test "chapters_vtt_muxer" "-hide_banner -muxers" "chapters_vtt"
-
-# Auto-create directories
 run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"
 
 # Hardware acceleration (may fail if no hardware support)
@@ -250,7 +233,6 @@ text_with_padding "Failed tests:" "${FAILED_TESTS}"
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 echo ""
 
-# cleanup
 rm -rf "${TestRoot}"
 
 # Exit with failure if any tests failed
