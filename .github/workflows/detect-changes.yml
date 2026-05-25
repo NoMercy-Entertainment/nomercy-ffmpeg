@@ -236,10 +236,14 @@ jobs:
           echo "  PLATFORMS array: (${#PLATFORMS[@]}) ${PLATFORMS[*]}"
 
           # Emit JSON array — directly usable as matrix input via fromJSON().
+          # -n is critical: without it, jq consumes the first stdin line as
+          # its main filter input, and `inputs` reads from the SECOND line
+          # onwards — silently dropping element 0. With -n, jq starts with
+          # null input and `inputs` reads everything.
           if [[ ${#PLATFORMS[@]} -eq 0 ]]; then
             PLATFORMS_JSON="[]"
           else
-            PLATFORMS_JSON=$(printf '%s\n' "${PLATFORMS[@]}" | jq -Rc '[inputs]')
+            PLATFORMS_JSON=$(printf '%s\n' "${PLATFORMS[@]}" | jq -Rcn '[inputs]')
           fi
 
           emit_outputs "${PLATFORMS_JSON}" "${BASE_CHANGED}"
