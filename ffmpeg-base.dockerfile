@@ -145,9 +145,13 @@ RUN echo "------------------------------------------------------" \
 WORKDIR /build
 
 # Configure git
-RUN git config --global user.email "builder@nomercy.tv" \
+RUN \
+    echo "------------------------------------------------------" \
+    && echo "🔄 Configuring Git" \
+    && git config --global user.email "builder@nomercy.tv" \
     && git config --global user.name "Builder" \
-    && git config --global advice.detachedHead false
+    && git config --global advice.detachedHead false \
+    && echo "✅ Git configuration completed successfully"
 
 # Install meson >= 1.4.0 via pip (required for glib 2.86+)
 RUN \
