@@ -157,13 +157,17 @@ jobs:
             NO_CACHE_FLAG="--no-cache"
           fi
 
-          # docker driver = host dockerd builder, no nested container
-          # Build + load locally, then push separately
+          # docker driver = host dockerd builder, no nested container.
+          # --push pushes to registry directly during build (no separate
+          # push step needed afterwards). Image lands in registry; any
+          # consumer (verify, export-artifacts) docker-pulls or docker-
+          # creates on demand. Avoids keeping a ~5GB image on local disk
+          # between build and push.
           BUILD_ARGS="--file ${{ inputs.dockerfile }} \
             --tag ${IMAGE}:latest \
             --tag ${IMAGE}:${{ github.sha }} \
             ${NO_CACHE_FLAG} \
-            --load \
+            --push \
             ${{ inputs.context }}"
 
           # Stream Docker output live to the job log AND capture it to a file
@@ -204,9 +208,15 @@ jobs:
             fi
 
             if [ $attempt -lt $MAX_BUILD_ATTEMPTS ]; then
-              echo "🧹 Cleaning up before retry..."
-              docker system prune -af --volumes || true
-              rm -rf /tmp/* || true
+              # Minimal cleanup between retries: only exited containers.
+              # We deliberately do NOT prune images, volumes, or the
+              # buildkit cache — those contain the layers that attempt 1
+              # already succeeded with. Wiping them forces attempt 2 to
+              # re-execute every cached step, including the 50+ network-
+              # gated git clones in the base image — which is exactly what
+              # caused attempt 2 to be strictly worse than attempt 1.
+              echo "🧹 Cleaning up before retry (exited containers only)..."
+              docker container prune -f || true
               echo "⏰ Waiting 30 seconds before retry..."
               sleep 30
             else
@@ -232,13 +242,8 @@ jobs:
           done
         timeout-minutes: 240  # 4 hour timeout — Windows cross-compile on fuse-overlayfs runs ~3h
 
-      - name: Push to DockerHub
-        if: success()
-        run: |
-          source error_handler.sh
-          IMAGE="nomercyentertainment/ffmpeg-${{ inputs.platform }}"
-          docker_retry "docker push ${IMAGE}:latest"
-          docker_retry "docker push ${IMAGE}:${{ github.sha }}"
+      # No separate push step — `--push` in the build above pushes both
+      # tags (:latest and :${{ github.sha }}) to DockerHub during the build.
 
       - name: Upload Build Failure Report
         if: failure()
