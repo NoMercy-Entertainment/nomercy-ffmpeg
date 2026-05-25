@@ -198,17 +198,42 @@ jobs:
             echo false
           }
 
+          echo "─── State before platform loop ──────────────────────"
+          echo "  ALL_PLATFORMS:    [${ALL_PLATFORMS}]"
+          echo "  BASE_CHANGED:     ${BASE_CHANGED}"
+          echo "  WORKFLOW:         ${WORKFLOW}"
+          echo "  LINUX_SCRIPTS:    ${LINUX_SCRIPTS}"
+          echo "  DARWIN_SCRIPTS:   ${DARWIN_SCRIPTS}"
+          echo "  WINDOWS_SCRIPTS:  ${WINDOWS_SCRIPTS}"
+
           PLATFORMS=()
-          for p in ${ALL_PLATFORMS}; do
-            case "${p}" in
-              linux-*)   var=LINUX_SCRIPTS   ;;
-              darwin-*)  var=DARWIN_SCRIPTS  ;;
-              windows-*) var=WINDOWS_SCRIPTS ;;
-            esac
-            if [[ "$(platform_changed "${p}" "${var}")" == "true" ]]; then
+
+          # Fast path: when base rebuilds (incl. workflow changes), every
+          # platform must rebuild — they all FROM the base. Skip the
+          # per-platform classification entirely. This also dodges any
+          # weirdness in the per-iteration loop logic.
+          if [[ "${BASE_CHANGED}" == "true" ]]; then
+            echo "  → BASE_CHANGED=true: including all platforms"
+            for p in ${ALL_PLATFORMS}; do
               PLATFORMS+=("${p}")
-            fi
-          done
+            done
+          else
+            for p in ${ALL_PLATFORMS}; do
+              case "${p}" in
+                linux-*)   var=LINUX_SCRIPTS   ;;
+                darwin-*)  var=DARWIN_SCRIPTS  ;;
+                windows-*) var=WINDOWS_SCRIPTS ;;
+                *)         var=""              ;;
+              esac
+              result="$(platform_changed "${p}" "${var}")"
+              echo "  loop[${p}]: var=${var} → result=${result}"
+              if [[ "${result}" == "true" ]]; then
+                PLATFORMS+=("${p}")
+              fi
+            done
+          fi
+
+          echo "  PLATFORMS array: (${#PLATFORMS[@]}) ${PLATFORMS[*]}"
 
           # Emit JSON array — directly usable as matrix input via fromJSON().
           if [[ ${#PLATFORMS[@]} -eq 0 ]]; then
