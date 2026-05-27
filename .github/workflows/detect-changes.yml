@@ -71,14 +71,15 @@ jobs:
           #   os    — GitHub-hosted runner image
           #   ext   — archive extension produced by the build
           #   kind  — "unix" or "windows" (selects the test script)
-          # macos-13 is the last x86_64 macOS runner; macos-latest is arm64.
-          # ubuntu-latest is x86_64 — linux-aarch64 tests can only verify the
-          # archive extracts, the test script itself handles cross-arch skips.
+          # macos-15-intel is the supported x86_64 macOS runner (macos-13 was
+          # retired 2025-12-04; Intel macOS is supported until ~Fall 2027).
+          # macos-latest is arm64. ubuntu-latest is x86_64 — linux-aarch64 can
+          # only verify the archive extracts, smoke.sh handles the cross-arch skip.
           declare -A OS=(
             [linux-x86_64]=ubuntu-latest
             [linux-aarch64]=ubuntu-latest
             [windows-x86_64]=windows-latest
-            [darwin-x86_64]=macos-13
+            [darwin-x86_64]=macos-15-intel
             [darwin-arm64]=macos-latest
           )
           declare -A EXT=(
