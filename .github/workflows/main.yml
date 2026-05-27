@@ -177,6 +177,68 @@ jobs:
         shell: pwsh
         run: ./tests/smoke.ps1 -Workspace $env:GITHUB_WORKSPACE -ExpectedVersion $env:FFMPEG_VERSION
 
+  # ── Publish/refresh the Release Candidate prerelease (PR only) ───────────
+  # Gives contributors version-stamped binaries to test manually on each
+  # platform. Deleted+recreated each run so assets and tag always match the
+  # latest PR head. Promoted to a real release on master merge (see release).
+  publish-rc:
+    needs: [detect-changes, export-artifacts, smoke-test]
+    if: |
+      github.event_name == 'pull_request'
+      && needs.export-artifacts.result == 'success'
+      && needs.smoke-test.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: downloads/
+
+      - name: Stage RC files with version-stamped names
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          VERSION="${{ needs.detect-changes.outputs.version }}"
+          for f in "downloads/ffmpeg-${FFMPEG_VERSION}-"*; do
+            [[ -f "$f" ]] || continue
+            base=$(basename "$f")
+            case "$base" in
+              *.tar.gz) stem="${base%.tar.gz}"; ext="tar.gz" ;;
+              *)        stem="${base%.*}";     ext="${base##*.}" ;;
+            esac
+            cp "$f" "release/${stem}-${VERSION}-rc.${ext}"
+          done
+          ls -lh release/
+
+      - name: Remove previous RC for a clean refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "${{ needs.detect-changes.outputs.version }}-rc" \
+            --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes 2>/dev/null || true
+
+      - name: Publish RC prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.detect-changes.outputs.version }}-rc
+          name: Release Candidate ${{ needs.detect-changes.outputs.version }}-rc
+          target_commitish: ${{ github.event.pull_request.head.sha }}
+          draft: false
+          prerelease: true
+          files: release/*
+          body: |
+            # FFmpeg ${{ needs.detect-changes.outputs.version }} — Release Candidate
+
+            **Not for production.** Built from PR #${{ github.event.pull_request.number }}
+            (branch `${{ github.head_ref }}`).
+
+            Download the binary for each platform and run the manual suite
+            (`tests/tests.sh` / `tests/tests.ps1`) on real hardware, then tick the
+            matching box in the PR checklist. All boxes must be checked before merge.
+
   # ── Vulnerability scan the freshly-built images ─────────────────────────
   # Master-only — running Trivy on every PR adds 5-10 min for no marginal
   # benefit; vulns appear when a base image is rebuilt, which only happens
