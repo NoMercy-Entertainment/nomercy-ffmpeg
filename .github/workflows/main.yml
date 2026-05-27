@@ -27,7 +27,9 @@ jobs:
   detect-changes:
     uses: ./.github/workflows/detect-changes.yml
     with:
-      force_rebuild: ${{ inputs.force_rebuild || false }}
+      # A PR builds all platforms (it becomes the RC). Pushes to master keep
+      # normal diff-based detection. workflow_dispatch honours its input.
+      force_rebuild: ${{ inputs.force_rebuild || github.event_name == 'pull_request' }}
 
   # ── Base image (every platform FROMs this) ───────────────────────────────
   build-base:
@@ -126,12 +128,10 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # ── Smoke-test each binary on its target OS (hosted runners) ────────────
-  # macos-13 is the last x86_64 macOS runner; macos-latest is arm64.
-  # Cross-arch entries (linux-aarch64) still verify the artifact extracts;
-  # actually executing the binary needs qemu and is intentionally skipped
-  # by the test scripts themselves.
-  test-platforms:
+  # ── Minimal smoke gate: binary runs, reports the expected version, exits 0 ──
+  # The full codec/hardware suite (tests/tests.sh, tests/tests.ps1) is run
+  # MANUALLY by a contributor on real hardware against the RC prerelease.
+  smoke-test:
     needs: [detect-changes, export-artifacts]
     if: |
       always() && !cancelled()
@@ -139,8 +139,6 @@ jobs:
       && needs.detect-changes.outputs.platforms-to-build != '[]'
     strategy:
       fail-fast: false
-      # detect-changes emits {"include":[{platform, os, ext, kind}, ...]}
-      # with only the platforms that were actually rebuilt.
       matrix: ${{ fromJSON(needs.detect-changes.outputs.test-matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
@@ -167,45 +165,17 @@ jobs:
             zip)    unzip -o "${archive}" ;;
           esac
 
-      - name: Run unix tests
+      - name: Smoke test (unix)
         if: matrix.kind == 'unix'
         shell: bash
         run: |
-          if [[ ! -x ./ffmpeg ]]; then
-            echo "ffmpeg binary not present after extraction — skipping run-tests."
-            exit 0
-          fi
-          chmod +x ./ffmpeg ./ffprobe || true
-          if [[ -f "${GITHUB_WORKSPACE}/tests/tests.sh" ]]; then
-            chmod +x "${GITHUB_WORKSPACE}/tests/tests.sh"
-            # Test script decides what to do for cross-arch / hardware-deps.
-            "${GITHUB_WORKSPACE}/tests/tests.sh" "${GITHUB_WORKSPACE}" || {
-              echo "::warning::tests.sh reported failures for ${{ matrix.platform }}"
-              exit 0
-            }
-          else
-            echo "::warning::tests/tests.sh missing — skipping."
-          fi
+          chmod +x tests/smoke.sh
+          tests/smoke.sh "${GITHUB_WORKSPACE}" "${FFMPEG_VERSION}"
 
-      - name: Run windows tests
+      - name: Smoke test (windows)
         if: matrix.kind == 'windows'
         shell: pwsh
-        run: |
-          if (-not (Test-Path ffmpeg.exe)) {
-            Write-Host "ffmpeg.exe not present after extraction — skipping run-tests."
-            exit 0
-          }
-          $script = "$env:GITHUB_WORKSPACE\tests\tests.ps1"
-          if (-not (Test-Path $script)) {
-            Write-Host "::warning::tests/tests.ps1 missing — skipping."
-            exit 0
-          }
-          try {
-            & $script $env:GITHUB_WORKSPACE
-          } catch {
-            Write-Host "::warning::tests.ps1 reported failures for ${{ matrix.platform }}"
-            exit 0
-          }
+        run: ./tests/smoke.ps1 -Workspace $env:GITHUB_WORKSPACE -ExpectedVersion $env:FFMPEG_VERSION
 
   # ── Vulnerability scan the freshly-built images ─────────────────────────
   # Master-only — running Trivy on every PR adds 5-10 min for no marginal
@@ -249,11 +219,11 @@ jobs:
   # Master push only, after the whole pipeline is green. Uses the version
   # computed once by detect-changes.
   release:
-    needs: [detect-changes, export-artifacts, test-platforms]
+    needs: [detect-changes, export-artifacts, smoke-test]
     if: |
       github.event_name == 'push' && github.ref == 'refs/heads/master'
       && needs.export-artifacts.result == 'success'
-      && needs.test-platforms.result == 'success'
+      && needs.smoke-test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
