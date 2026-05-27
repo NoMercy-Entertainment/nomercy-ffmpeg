@@ -239,7 +239,7 @@ jobs:
           set -euo pipefail
           mkdir -p release
           VERSION="${{ needs.detect-changes.outputs.version }}"
-          for f in downloads/ffmpeg-${FFMPEG_VERSION}-*; do
+          for f in "downloads/ffmpeg-${FFMPEG_VERSION}-"*; do
             [[ -f "$f" ]] || continue
             base=$(basename "$f")
             # ffmpeg-8.1.1-linux-x86_64.tar.gz  →  ffmpeg-8.1.1-linux-x86_64-vX.Y.Z.tar.gz
