@@ -170,7 +170,7 @@ jobs:
         shell: bash
         run: |
           chmod +x tests/smoke.sh
-          tests/smoke.sh "${GITHUB_WORKSPACE}" "${FFMPEG_VERSION}"
+          tests/smoke.sh "${GITHUB_WORKSPACE}" "${FFMPEG_VERSION}" "${{ matrix.platform }}"
 
       - name: Smoke test (windows)
         if: matrix.kind == 'windows'
