@@ -1,0 +1,54 @@
+name: PR Guards
+
+# Fast, build-free gates for PRs into master. `edited` is included so the
+# checklist re-evaluates the moment a reviewer ticks a box.
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  group: pr-guards-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard-source-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce PR source branch is dev
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ "$HEAD_REF" != "dev" ]]; then
+            echo "❌ PRs into master are only allowed from 'dev' (got '$HEAD_REF')."
+            exit 1
+          fi
+          echo "✅ PR source branch is dev."
+
+  checklist-complete:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify manual-test checklist is complete
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node .github/scripts/check-checklist.js
+
+  # Single required context for branch protection. always() + explicit result
+  # checks so a failed/ skipped dependency reliably fails this job (a job
+  # skipped via failed `needs` can otherwise be miscounted as passing).
+  pr-validation:
+    needs: [guard-source-branch, checklist-complete]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all PR gates passed
+        run: |
+          guard='${{ needs.guard-source-branch.result }}'
+          checklist='${{ needs.checklist-complete.result }}'
+          if [[ "$guard" != "success" || "$checklist" != "success" ]]; then
+            echo "❌ PR gates failed: guard=$guard checklist=$checklist"
+            exit 1
+          fi
+          echo "✅ All PR validation gates passed."
