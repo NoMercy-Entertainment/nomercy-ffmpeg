@@ -239,6 +239,28 @@ jobs:
             (`tests/tests.sh` / `tests/tests.ps1`) on real hardware, then tick the
             matching box in the PR checklist. All boxes must be checked before merge.
 
+  # ── Single required status context for the PR build path ─────────────────
+  # always() so it always reports; explicit result checks so any failed
+  # dependency reliably fails the gate. PR-only (skipped on master pushes).
+  pr-build:
+    needs: [detect-changes, build-base, build-platforms, export-artifacts, smoke-test]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the PR build path is green
+        run: |
+          base='${{ needs.build-base.result }}'
+          platforms='${{ needs.build-platforms.result }}'
+          export='${{ needs.export-artifacts.result }}'
+          smoke='${{ needs.smoke-test.result }}'
+          echo "base=$base platforms=$platforms export=$export smoke=$smoke"
+          # On a PR we force a full build, so build-base must succeed.
+          if [[ "$base" != "success" ]]; then echo "❌ build-base: $base"; exit 1; fi
+          if [[ "$platforms" != "success" ]]; then echo "❌ build-platforms: $platforms"; exit 1; fi
+          if [[ "$export" != "success" ]]; then echo "❌ export-artifacts: $export"; exit 1; fi
+          if [[ "$smoke" != "success" ]]; then echo "❌ smoke-test: $smoke"; exit 1; fi
+          echo "✅ PR build path passed."
+
   # ── Vulnerability scan the freshly-built images ─────────────────────────
   # Master-only — running Trivy on every PR adds 5-10 min for no marginal
   # benefit; vulns appear when a base image is rebuilt, which only happens
@@ -339,3 +361,11 @@ jobs:
 
             ---
             Built by [NoMercy Entertainment](https://nomercy.tv)
+
+      - name: Delete the promoted RC prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "${{ needs.detect-changes.outputs.version }}-rc" \
+            --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes 2>/dev/null || true
+          echo "🧹 Removed RC ${{ needs.detect-changes.outputs.version }}-rc (promoted to final)."
