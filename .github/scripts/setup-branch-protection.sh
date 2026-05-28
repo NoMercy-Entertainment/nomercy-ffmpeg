@@ -5,8 +5,8 @@
 # Requires an ADMIN-scoped gh token (repo admin). The day-to-day maintainer
 # token (admin:false) cannot set protection — a repo admin runs this once.
 #
-#   REPO=owner/name BRANCH=master APPROVALS=1 ./scripts/setup-branch-protection.sh
-#   DRY_RUN=true ./scripts/setup-branch-protection.sh   # print payload, no API call
+#   REPO=owner/name BRANCH=master APPROVALS=1 ./.github/scripts/setup-branch-protection.sh
+#   DRY_RUN=true ./.github/scripts/setup-branch-protection.sh   # print payload, no API call
 set -euo pipefail
 
 REPO="${REPO:-NoMercy-Entertainment/nomercy-ffmpeg}"

@@ -17,9 +17,9 @@ These names must match the workflow aggregator jobs exactly:
 Requires a gh token with **repo admin** rights.
 
 ```bash
-REPO=NoMercy-Entertainment/nomercy-ffmpeg APPROVALS=1 ./scripts/setup-branch-protection.sh
+REPO=NoMercy-Entertainment/nomercy-ffmpeg APPROVALS=1 ./.github/scripts/setup-branch-protection.sh
 # Preview without applying:
-DRY_RUN=true ./scripts/setup-branch-protection.sh
+DRY_RUN=true ./.github/scripts/setup-branch-protection.sh
 ```
 
 ## Option B — GitHub UI
