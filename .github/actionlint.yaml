@@ -1,0 +1,6 @@
+# actionlint config. `beast-unit` is our self-hosted runner label — declaring
+# it here stops actionlint flagging it as unknown, so the lint signal stays
+# meaningful (real errors aren't drowned out by a known false positive).
+self-hosted-runner:
+  labels:
+    - beast-unit

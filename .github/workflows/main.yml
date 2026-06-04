@@ -11,11 +11,9 @@ concurrency:
 
 on:
   push:
-    branches:
-      - master
+    branches: [master]
   pull_request:
-    branches:
-      - master
+    branches: [master]
   workflow_dispatch:
     inputs:
       force_rebuild:
@@ -25,16 +23,18 @@ on:
         default: true
 
 jobs:
-  # Detect what has changed to optimize builds
+  # ── Detect which platforms need to (re)build ─────────────────────────────
   detect-changes:
     uses: ./.github/workflows/detect-changes.yml
     with:
-      force_rebuild: ${{ inputs.force_rebuild || false }}
+      # A PR builds all platforms (it becomes the RC). Pushes to master keep
+      # normal diff-based detection. workflow_dispatch honours its input.
+      force_rebuild: ${{ inputs.force_rebuild || github.event_name == 'pull_request' }}
 
-  # Build the base image that others depend on
+  # ── Base image (every platform FROMs this) ───────────────────────────────
   build-base:
-    needs: [detect-changes]
-    if: always() && !cancelled() && (needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.base-changed == 'true'
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       dockerfile: ffmpeg-base.dockerfile
@@ -47,14 +47,24 @@ jobs:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
 
-  # Build platform-specific images using the reusable workflow
-  build-linux-x86_64:
+  # ── Platform builds (matrix from detect-changes) ─────────────────────────
+  # Skipped (zero matrix entries) when detect-changes returns "[]".
+  # always()+!cancelled() lets platforms run even when build-base was
+  # skipped (then we rely on the existing :latest base on the registry).
+  build-platforms:
     needs: [detect-changes, build-base]
-    if: always() && !cancelled() && (needs.detect-changes.outputs.linux-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
+    if: |
+      always() && !cancelled()
+      && needs.detect-changes.outputs.platforms-to-build != '[]'
+      && (needs.build-base.result == 'success' || needs.build-base.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.detect-changes.outputs.platforms-to-build) }}
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
-      dockerfile: ffmpeg-linux-x86_64.dockerfile
-      platform: linux-x86_64
+      dockerfile: ffmpeg-${{ matrix.platform }}.dockerfile
+      platform: ${{ matrix.platform }}
       secrets_repo: true
       labels: beast-unit
       no_cache: ${{ inputs.force_rebuild || false }}
@@ -63,159 +73,299 @@ jobs:
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
       PAT_TOKEN: ${{ secrets.PAT }}
 
-  build-linux-aarch64:
-    needs: [detect-changes, build-base]
-    if: always() && !cancelled() && (needs.detect-changes.outputs.linux-aarch64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
-    uses: ./.github/workflows/reusable-docker-build.yml
-    with:
-      dockerfile: ffmpeg-linux-aarch64.dockerfile
-      platform: linux-aarch64
-      secrets_repo: true
-      labels: beast-unit
-      no_cache: ${{ inputs.force_rebuild || false }}
-    secrets:
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT }}
-
-  build-windows-x86_64:
-    needs: [detect-changes, build-base]
-    if: always() && !cancelled() && (needs.detect-changes.outputs.windows-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
-    uses: ./.github/workflows/reusable-docker-build.yml
-    with:
-      dockerfile: ffmpeg-windows-x86_64.dockerfile
-      platform: windows-x86_64
-      secrets_repo: true
-      labels: beast-unit
-      no_cache: ${{ inputs.force_rebuild || false }}
-    secrets:
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT }}
-
-  build-darwin-x86_64:
-    needs: [detect-changes, build-base]
-    if: always() && !cancelled() && (needs.detect-changes.outputs.darwin-x86_64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
-    uses: ./.github/workflows/reusable-docker-build.yml
-    with:
-      dockerfile: ffmpeg-darwin-x86_64.dockerfile
-      platform: darwin-x86_64
-      secrets_repo: true
-      labels: beast-unit
-      no_cache: ${{ inputs.force_rebuild || false }}
-    secrets:
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT }}
-
-  build-darwin-arm64:
-    needs: [detect-changes, build-base]
-    if: always() && !cancelled() && (needs.detect-changes.outputs.darwin-arm64-changed == 'true' || needs.detect-changes.outputs.base-changed == 'true' || needs.detect-changes.outputs.workflow-changed == 'true' || inputs.force_rebuild)
-    uses: ./.github/workflows/reusable-docker-build.yml
-    with:
-      dockerfile: ffmpeg-darwin-arm64.dockerfile
-      platform: darwin-arm64
-      secrets_repo: true
-      labels: beast-unit
-      no_cache: ${{ inputs.force_rebuild || false }}
-    secrets:
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      PAT_TOKEN: ${{ secrets.PAT }}
-
-  # Export artifacts from built images
+  # ── Export the produced binaries straight from the built images ────────
+  # Runs on a beast-unit self-hosted runner. When the same runner did the
+  # build, the image is local and `docker create` is instant; when it ran
+  # elsewhere, `docker create` auto-pulls — `docker login` covers the
+  # private-registry case.
   export-artifacts:
+    needs: [detect-changes, build-platforms]
+    if: |
+      always() && !cancelled()
+      && needs.build-platforms.result == 'success'
     runs-on: [self-hosted, beast-unit]
-    needs: [detect-changes, build-linux-x86_64, build-linux-aarch64, build-windows-x86_64, build-darwin-x86_64, build-darwin-arm64]
-    if: always() && (needs.detect-changes.outputs.any-changed == 'true' || inputs.force_rebuild) && needs.build-linux-x86_64.result == 'success' && needs.build-linux-aarch64.result == 'success' && needs.build-windows-x86_64.result == 'success' && needs.build-darwin-x86_64.result == 'success' && needs.build-darwin-arm64.result == 'success'
     steps:
-      - name: Cache Downloaded Artifacts
-        uses: actions/cache@v4
-        with:
-          path: downloads/
-          key: artifacts-${{ github.sha }}-${{ hashFiles('**/*.dockerfile') }}
-          restore-keys: |
-            artifacts-${{ github.sha }}-
-            artifacts-
-
       - name: Log in to DockerHub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Create downloads directory
-        run: mkdir -p downloads
-
-      - name: Export Artifacts
+      - name: Export artifacts from images
         run: |
-          # Define platforms and their corresponding archive formats
-          declare -A platforms=(
-            ["linux-x86_64"]="tar.gz"
-            ["linux-aarch64"]="tar.gz"
-            ["windows-x86_64"]="zip"
-            ["darwin-x86_64"]="tar.gz"
-            ["darwin-arm64"]="tar.gz"
+          set -euo pipefail
+          mkdir -p downloads
+
+          declare -A EXT=(
+            [linux-x86_64]=tar.gz
+            [linux-aarch64]=tar.gz
+            [windows-x86_64]=zip
+            [darwin-x86_64]=tar.gz
+            [darwin-arm64]=tar.gz
           )
-          
-          for platform in "${!platforms[@]}"; do
-            echo "🚀 Exporting $platform..."
-            if docker pull nomercyentertainment/ffmpeg-${platform}:latest; then
-              docker create --name ${platform}-container nomercyentertainment/ffmpeg-${platform}:latest
-              if docker cp ${platform}-container:/build/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]} downloads/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]}; then
-                echo "✅ Successfully exported $platform"
-                ls -lh downloads/ffmpeg-${FFMPEG_VERSION}-${platform}.${platforms[$platform]}
-              else
-                echo "⚠️ Artifact not found for $platform"
-              fi
-              docker rm ${platform}-container
-            else
-              echo "⚠️ Failed to pull image for $platform"
-            fi
+
+          # platforms-to-build is a JSON array; jq into a bash array.
+          mapfile -t PLATFORMS < <(echo '${{ needs.detect-changes.outputs.platforms-to-build }}' | jq -r '.[]')
+
+          for p in "${PLATFORMS[@]}"; do
+            ext="${EXT[$p]:-tar.gz}"
+            archive="ffmpeg-${FFMPEG_VERSION}-${p}.${ext}"
+            image="nomercyentertainment/ffmpeg-${p}:${{ github.sha }}"
+
+            echo "🚚 Exporting ${p} from ${image}"
+            # docker create auto-pulls when the image isn't local.
+            cid=$(docker create "${image}")
+            docker cp "${cid}:/build/${archive}" "downloads/${archive}"
+            docker rm -f "${cid}" >/dev/null
+            ls -lh "downloads/${archive}"
           done
-          
-          # Display final artifacts
-          echo "📦 Final artifacts:"
-          ls -lh downloads/ || echo "No artifacts found"
-      
-      - name: Upload Build Artifacts
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: downloads/
           retention-days: 30
-          
-      - name: Create Artifact Summary
-        run: |
-          echo "## Build Artifacts Summary" > artifact-summary.md
-          echo "Generated: $(date)" >> artifact-summary.md
-          echo "" >> artifact-summary.md
-          
-          if [ -d downloads ] && [ "$(ls -A downloads)" ]; then
-            echo "### Successfully Built Platforms:" >> artifact-summary.md
-            for file in downloads/*; do
-              if [ -f "$file" ]; then
-                filename=$(basename "$file")
-                size=$(du -h "$file" | cut -f1)
-                echo "- **$filename**: $size" >> artifact-summary.md
-              fi
-            done
-          else
-            echo "⚠️ No artifacts were generated" >> artifact-summary.md
-          fi
-          
-          echo "" >> artifact-summary.md
-          echo "### Cache Performance" >> artifact-summary.md
-          echo "- Docker registry cache: Enabled" >> artifact-summary.md
-          echo "- Local buildx cache: Enabled" >> artifact-summary.md
-          echo "- Dependency cache: Enabled" >> artifact-summary.md
-          echo "- Artifact cache: Enabled" >> artifact-summary.md
-          
-          cat artifact-summary.md
+          if-no-files-found: error
 
-      - name: Upload Artifact Summary
-        uses: actions/upload-artifact@v4
+  # ── Minimal smoke gate: binary runs, reports the expected version, exits 0 ──
+  # The full codec/hardware suite (tests/tests.sh, tests/tests.ps1) is run
+  # MANUALLY by a contributor on real hardware against the RC prerelease.
+  smoke-test:
+    needs: [detect-changes, export-artifacts]
+    if: |
+      always() && !cancelled()
+      && needs.export-artifacts.result == 'success'
+      && needs.detect-changes.outputs.platforms-to-build != '[]'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.test-matrix) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: artifact-summary
-          path: artifact-summary.md
-          retention-days: 30
+          name: build-artifacts
+          path: downloads/
+
+      - name: Unpack binary
+        shell: bash
+        run: |
+          archive="downloads/ffmpeg-${FFMPEG_VERSION}-${{ matrix.platform }}.${{ matrix.ext }}"
+          if [[ ! -f "${archive}" ]]; then
+            echo "❌ Expected artifact missing: ${archive}"
+            ls -la downloads/ || true
+            exit 1
+          fi
+          case "${{ matrix.ext }}" in
+            tar.gz) tar -xzf "${archive}" ;;
+            zip)    unzip -o "${archive}" ;;
+          esac
+
+      - name: Smoke test (unix)
+        if: matrix.kind == 'unix'
+        shell: bash
+        run: |
+          chmod +x tests/smoke.sh
+          tests/smoke.sh "${GITHUB_WORKSPACE}" "${FFMPEG_VERSION}" "${{ matrix.platform }}"
+
+      - name: Smoke test (windows)
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: ./tests/smoke.ps1 -Workspace $env:GITHUB_WORKSPACE -ExpectedVersion $env:FFMPEG_VERSION
+
+  # ── Publish/refresh the Release Candidate prerelease (PR only) ───────────
+  # Gives contributors version-stamped binaries to test manually on each
+  # platform. Deleted+recreated each run so assets and tag always match the
+  # latest PR head. Promoted to a real release on master merge (see release).
+  publish-rc:
+    needs: [detect-changes, export-artifacts, smoke-test]
+    if: |
+      github.event_name == 'pull_request'
+      && needs.export-artifacts.result == 'success'
+      && needs.smoke-test.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: downloads/
+
+      - name: Stage RC files with version-stamped names
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          VERSION="${{ needs.detect-changes.outputs.version }}"
+          for f in "downloads/ffmpeg-${FFMPEG_VERSION}-"*; do
+            [[ -f "$f" ]] || continue
+            base=$(basename "$f")
+            case "$base" in
+              *.tar.gz) stem="${base%.tar.gz}"; ext="tar.gz" ;;
+              *)        stem="${base%.*}";     ext="${base##*.}" ;;
+            esac
+            cp "$f" "release/${stem}-${VERSION}-rc.${ext}"
+          done
+          ls -lh release/
+
+      - name: Remove previous RC for a clean refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "${{ needs.detect-changes.outputs.version }}-rc" \
+            --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes 2>/dev/null || true
+
+      - name: Publish RC prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.detect-changes.outputs.version }}-rc
+          name: Release Candidate ${{ needs.detect-changes.outputs.version }}-rc
+          target_commitish: ${{ github.event.pull_request.head.sha }}
+          draft: false
+          prerelease: true
+          files: release/*
+          body: |
+            # FFmpeg ${{ needs.detect-changes.outputs.version }} — Release Candidate
+
+            **Not for production.** Built from PR #${{ github.event.pull_request.number }}
+            (branch `${{ github.head_ref }}`).
+
+            Download the binary for each platform and run the manual suite
+            (`tests/tests.sh` / `tests/tests.ps1`) on real hardware, then tick the
+            matching box in the PR checklist. All boxes must be checked before merge.
+
+  # ── Single required status context for the PR build path ─────────────────
+  # always() so it always reports; explicit result checks so any failed
+  # dependency reliably fails the gate. PR-only (skipped on master pushes).
+  pr-build:
+    needs: [detect-changes, build-base, build-platforms, export-artifacts, smoke-test]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the PR build path is green
+        run: |
+          base='${{ needs.build-base.result }}'
+          platforms='${{ needs.build-platforms.result }}'
+          export='${{ needs.export-artifacts.result }}'
+          smoke='${{ needs.smoke-test.result }}'
+          echo "base=$base platforms=$platforms export=$export smoke=$smoke"
+          # On a PR we force a full build, so build-base must succeed.
+          if [[ "$base" != "success" ]]; then echo "❌ build-base: $base"; exit 1; fi
+          if [[ "$platforms" != "success" ]]; then echo "❌ build-platforms: $platforms"; exit 1; fi
+          if [[ "$export" != "success" ]]; then echo "❌ export-artifacts: $export"; exit 1; fi
+          if [[ "$smoke" != "success" ]]; then echo "❌ smoke-test: $smoke"; exit 1; fi
+          echo "✅ PR build path passed."
+
+  # ── Vulnerability scan the freshly-built images ─────────────────────────
+  # Master-only — running Trivy on every PR adds 5-10 min for no marginal
+  # benefit; vulns appear when a base image is rebuilt, which only happens
+  # on master.
+  security-scan:
+    needs: [detect-changes, build-platforms]
+    if: |
+      always() && !cancelled()
+      && github.event_name == 'push' && github.ref == 'refs/heads/master'
+      && needs.build-platforms.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.detect-changes.outputs.platforms-to-build) }}
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: nomercyentertainment/ffmpeg-${{ matrix.platform }}:${{ github.sha }}
+          format: sarif
+          output: trivy-${{ matrix.platform }}.sarif
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-${{ matrix.platform }}.sarif
+          category: trivy-${{ matrix.platform }}
+
+  # ── GitHub release ──────────────────────────────────────────────────────
+  # Master push only, after the whole pipeline is green. Uses the version
+  # computed once by detect-changes.
+  release:
+    needs: [detect-changes, export-artifacts, smoke-test]
+    if: |
+      github.event_name == 'push' && github.ref == 'refs/heads/master'
+      && needs.export-artifacts.result == 'success'
+      && needs.smoke-test.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: downloads/
+
+      - name: Stage release files with version-stamped names
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          VERSION="${{ needs.detect-changes.outputs.version }}"
+          for f in "downloads/ffmpeg-${FFMPEG_VERSION}-"*; do
+            [[ -f "$f" ]] || continue
+            base=$(basename "$f")
+            # ffmpeg-8.1.1-linux-x86_64.tar.gz  →  ffmpeg-8.1.1-linux-x86_64-vX.Y.Z.tar.gz
+            stem="${base%.*}"
+            # handle .tar.gz two-part extension
+            case "$base" in
+              *.tar.gz) stem="${base%.tar.gz}"; ext="tar.gz" ;;
+              *)        stem="${base%.*}";     ext="${base##*.}" ;;
+            esac
+            cp "$f" "release/${stem}-${VERSION}.${ext}"
+          done
+          ls -lh release/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.detect-changes.outputs.version }}
+          name: FFmpeg Build ${{ needs.detect-changes.outputs.version }}
+          draft: false
+          prerelease: false
+          files: release/*
+          body: |
+            # FFmpeg Cross-Platform Build ${{ needs.detect-changes.outputs.version }}
+
+            **Internal Build for NoMercy MediaServer**
+
+            Cross-platform FFmpeg ${{ env.FFMPEG_VERSION }} binaries.
+
+            ## Platforms
+            - Linux x86_64 / aarch64
+            - Windows x86_64
+            - macOS x86_64 / arm64 (Apple Silicon)
+
+            All images scanned with Trivy; results in the Security tab.
+
+            ---
+            Built by [NoMercy Entertainment](https://nomercy.tv)
+
+      - name: Delete the promoted RC prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "${{ needs.detect-changes.outputs.version }}-rc" \
+            --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes 2>/dev/null || true
+          echo "🧹 Removed RC ${{ needs.detect-changes.outputs.version }}-rc (promoted to final)."

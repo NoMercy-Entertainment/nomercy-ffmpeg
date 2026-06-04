@@ -10,184 +10,241 @@ on:
         default: false
     outputs:
       version:
-        description: 'Generated version number'
+        description: 'Next version tag (vMAJOR.MINOR.PATCH+1)'
         value: ${{ jobs.detect-changes.outputs.version }}
       base-changed:
-        description: 'Base image changed'
+        description: 'Base image needs rebuild'
         value: ${{ jobs.detect-changes.outputs.base-changed }}
-      linux-x86_64-changed:
-        description: 'Linux x86_64 changed'
-        value: ${{ jobs.detect-changes.outputs.linux-x86_64-changed }}
-      linux-aarch64-changed:
-        description: 'Linux aarch64 changed'
-        value: ${{ jobs.detect-changes.outputs.linux-aarch64-changed }}
-      windows-x86_64-changed:
-        description: 'Windows x86_64 changed'
-        value: ${{ jobs.detect-changes.outputs.windows-x86_64-changed }}
-      darwin-x86_64-changed:
-        description: 'Darwin x86_64 changed'
-        value: ${{ jobs.detect-changes.outputs.darwin-x86_64-changed }}
-      darwin-arm64-changed:
-        description: 'Darwin arm64 changed'
-        value: ${{ jobs.detect-changes.outputs.darwin-arm64-changed }}
-      workflow-changed:
-        description: 'Workflow files changed'
-        value: ${{ jobs.detect-changes.outputs.workflow-changed }}
+      platforms-to-build:
+        description: 'JSON array of platform names to (re)build, e.g. ["linux-x86_64","windows-x86_64"]'
+        value: ${{ jobs.detect-changes.outputs.platforms-to-build }}
+      test-matrix:
+        description: 'JSON {"include":[…]} for the test job — only entries whose platform is being built'
+        value: ${{ jobs.detect-changes.outputs.test-matrix }}
       any-changed:
-        description: 'Any component changed'
+        description: 'True if base or any platform needs rebuild'
         value: ${{ jobs.detect-changes.outputs.any-changed }}
+
+# Single source of truth for the platform list. Anything that needs to know
+# about platforms (this workflow, the matrix in main.yml) reads it from here.
+env:
+  ALL_PLATFORMS: "linux-x86_64 linux-aarch64 windows-x86_64 darwin-x86_64 darwin-arm64"
 
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.bump-version.outputs.version }}
-      base-changed: ${{ steps.check-base.outputs.changed }}
-      linux-x86_64-changed: ${{ steps.check-linux-x86_64.outputs.changed }}
-      linux-aarch64-changed: ${{ steps.check-linux-aarch64.outputs.changed }}
-      windows-x86_64-changed: ${{ steps.check-windows-x86_64.outputs.changed }}
-      darwin-x86_64-changed: ${{ steps.check-darwin-x86_64.outputs.changed }}
-      darwin-arm64-changed: ${{ steps.check-darwin-arm64.outputs.changed }}
-      workflow-changed: ${{ steps.check-workflow.outputs.changed }}
-      any-changed: ${{ steps.check-any.outputs.changed }}
-      
+      version: ${{ steps.version.outputs.version }}
+      base-changed: ${{ steps.detect.outputs.base-changed }}
+      platforms-to-build: ${{ steps.detect.outputs.platforms-to-build }}
+      test-matrix: ${{ steps.detect.outputs.test-matrix }}
+      any-changed: ${{ steps.detect.outputs.any-changed }}
+
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: master
 
-      - name: Generate Version
-        id: bump-version
+      - name: Compute next version
+        id: version
         run: |
-          git config --global --add safe.directory ${{ github.workspace }}
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
-          
-          echo "LATEST_TAG=$LATEST_TAG" 
-
-          # Extract version components
           MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1 | sed 's/v//')
           MINOR=$(echo "$LATEST_TAG" | cut -d. -f2)
           PATCH=$(echo "$LATEST_TAG" | cut -d. -f3)
+          NEW_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: ${LATEST_TAG} → next: ${NEW_VERSION}"
 
-          echo "MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
-
-          # Increment patch version
-          NEW_PATCH=$(($PATCH + 1))
-          NEW_VERSION=v$MAJOR.$MINOR.$NEW_PATCH 
-          
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "New version will be: $NEW_VERSION"
-
-      - name: Check for file changes
-        id: check-files
+      - name: Detect changed components
+        id: detect
+        env:
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
         run: |
-          git config --global --add safe.directory ${{ github.workspace }}
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-          # Check if force rebuild is enabled
-          FORCE_REBUILD="${{ inputs.force_rebuild }}"
-          if [[ "$FORCE_REBUILD" == "true" ]]; then
-            echo "Force rebuild enabled - marking all as changed"
-            echo "base=true" >> $GITHUB_OUTPUT
-            echo "linux-x86_64=true" >> $GITHUB_OUTPUT
-            echo "linux-aarch64=true" >> $GITHUB_OUTPUT
-            echo "windows-x86_64=true" >> $GITHUB_OUTPUT
-            echo "darwin-x86_64=true" >> $GITHUB_OUTPUT
-            echo "darwin-arm64=true" >> $GITHUB_OUTPUT
-            echo "workflow=true" >> $GITHUB_OUTPUT
+          # ── Per-platform test-runner mapping ──────────────────────────────
+          # Single source of truth for "how do we smoke-test platform X":
+          #   os    — GitHub-hosted runner image
+          #   ext   — archive extension produced by the build
+          #   kind  — "unix" or "windows" (selects the test script)
+          # macos-15-intel is the supported x86_64 macOS runner (macos-13 was
+          # retired 2025-12-04; Intel macOS is supported until ~Fall 2027).
+          # macos-latest is arm64. ubuntu-latest is x86_64 — linux-aarch64 can
+          # only verify the archive extracts, smoke.sh handles the cross-arch skip.
+          declare -A OS=(
+            [linux-x86_64]=ubuntu-latest
+            [linux-aarch64]=ubuntu-latest
+            [windows-x86_64]=windows-latest
+            [darwin-x86_64]=macos-15-intel
+            [darwin-arm64]=macos-latest
+          )
+          declare -A EXT=(
+            [linux-x86_64]=tar.gz
+            [linux-aarch64]=tar.gz
+            [windows-x86_64]=zip
+            [darwin-x86_64]=tar.gz
+            [darwin-arm64]=tar.gz
+          )
+          declare -A KIND=(
+            [linux-x86_64]=unix
+            [linux-aarch64]=unix
+            [windows-x86_64]=windows
+            [darwin-x86_64]=unix
+            [darwin-arm64]=unix
+          )
+
+          emit_outputs() {
+            local platforms_json="$1" base_changed="$2"
+            local include_json='[]'
+            if [[ "${platforms_json}" != "[]" ]]; then
+              local entries=()
+              while read -r p; do
+                entries+=("$(jq -nc \
+                  --arg platform "$p" \
+                  --arg os "${OS[$p]}" \
+                  --arg ext "${EXT[$p]}" \
+                  --arg kind "${KIND[$p]}" \
+                  '{platform:$platform, os:$os, ext:$ext, kind:$kind}')")
+              done < <(echo "${platforms_json}" | jq -r '.[]')
+              include_json=$(printf '%s\n' "${entries[@]}" | jq -sc '.')
+            fi
+            local test_matrix
+            test_matrix=$(jq -nc --argjson include "${include_json}" '{include:$include}')
+
+            local any=false
+            [[ "${base_changed}" == "true" || "${platforms_json}" != "[]" ]] && any=true
+
+            {
+              echo "base-changed=${base_changed}"
+              echo "platforms-to-build=${platforms_json}"
+              echo "test-matrix=${test_matrix}"
+              echo "any-changed=${any}"
+            } >> "$GITHUB_OUTPUT"
+
+            echo "─── Detection result ────────────────────────────────"
+            echo "  base-changed:       ${base_changed}"
+            echo "  platforms-to-build: ${platforms_json}"
+            echo "  test-matrix:        ${test_matrix}"
+            echo "  any-changed:        ${any}"
+          }
+
+          # Force-rebuild shortcut: every platform + base rebuilds.
+          if [[ "${FORCE_REBUILD}" == "true" ]]; then
+            echo "Force rebuild requested — marking everything as changed."
+            PLATFORMS_JSON=$(echo "${ALL_PLATFORMS}" | jq -Rc 'split(" ")')
+            emit_outputs "${PLATFORMS_JSON}" "true"
             exit 0
           fi
 
-          # Get changed files since last commit
-          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
+          # Diff against previous commit. On the first commit of a branch HEAD^
+          # doesn't exist, so we fall back to an empty diff (=> nothing changed,
+          # which is the safe default — operator can force_rebuild if needed).
+          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || true)
           echo "Changed files:"
-          echo "$CHANGED_FILES"
+          echo "${CHANGED_FILES:-(none)}"
 
-          # Shared scripts/dev affect ALL platforms:
-          #   scripts/*.sh, scripts/init/*, scripts/patches/*, scripts/resources/*
-          #   scripts/includes/*.c (custom source files patched into FFmpeg)
+          # ── Classify changed paths ─────────────────────────────────────────
+          # Shared inputs affect every platform's build:
+          #   scripts/*.sh, scripts/{init,patches,resources}/*,
+          #   scripts/includes/<non-platform-file> (e.g. raw .c sources),
           #   dev/init/*
-          # (Dockerfiles COPY these dirs and execute them during build)
-          SHARED_CHANGED="false"
-          if echo "$CHANGED_FILES" | grep -qE "^scripts/(init/|patches/|resources/|[^/]+\.sh$)"; then
-            SHARED_CHANGED="true"
-          elif echo "$CHANGED_FILES" | grep -qE "^(scripts|dev)/includes/[^/]+$"; then
-            SHARED_CHANGED="true"
-          elif echo "$CHANGED_FILES" | grep -qE "^dev/init/"; then
-            SHARED_CHANGED="true"
+          # Workflow changes affect everything by definition.
+          # Platform-specific scripts only affect their own platform:
+          #   {scripts,dev}/includes/<platform>/*  where <platform> ∈
+          #   {linux, darwin, windows}.  (linux script change rebuilds both
+          #   linux-x86_64 and linux-aarch64; darwin rebuilds both darwin
+          #   variants; windows rebuilds windows-x86_64.)
+          matches() { echo "${CHANGED_FILES}" | grep -qE "$1"; }
+
+          SHARED=false
+          matches "^scripts/(init|patches|resources)/" && SHARED=true
+          matches "^scripts/[^/]+\.sh$"                && SHARED=true
+          matches "^(scripts|dev)/includes/[^/]+$"     && SHARED=true
+          matches "^dev/init/"                         && SHARED=true
+
+          WORKFLOW=false
+          matches "^\.github/workflows/" && WORKFLOW=true
+
+          LINUX_SCRIPTS=false;   matches "^(scripts|dev)/includes/linux/"   && LINUX_SCRIPTS=true
+          DARWIN_SCRIPTS=false;  matches "^(scripts|dev)/includes/darwin/"  && DARWIN_SCRIPTS=true
+          WINDOWS_SCRIPTS=false; matches "^(scripts|dev)/includes/windows/" && WINDOWS_SCRIPTS=true
+
+          # Base image rebuilds on its own Dockerfile or shared script changes.
+          BASE_CHANGED=false
+          matches "ffmpeg-base\.dockerfile" && BASE_CHANGED=true
+          [[ "${SHARED}" == "true" ]] && BASE_CHANGED=true
+
+          # A workflow-file change conservatively rebuilds everything so that
+          # any new build flag or environment tweak actually applies.
+          if [[ "${WORKFLOW}" == "true" ]]; then
+            BASE_CHANGED=true
           fi
 
-          # Platform-specific scripts only trigger their platform:
-          #   scripts/includes/<platform>/* and dev/includes/<platform>/*
-          DARWIN_SCRIPTS="false"
-          echo "$CHANGED_FILES" | grep -qE "^(scripts|dev)/includes/darwin/" && DARWIN_SCRIPTS="true"
+          # Per-platform decision:
+          #   rebuild if base rebuilds, or its own Dockerfile changed,
+          #   or its platform-family scripts changed, or workflow changed.
+          platform_changed() {
+            local platform="$1" platform_scripts_var="$2"
+            local dockerfile="ffmpeg-${platform}.dockerfile"
+            local scripts_changed="${!platform_scripts_var}"
 
-          LINUX_SCRIPTS="false"
-          echo "$CHANGED_FILES" | grep -qE "^(scripts|dev)/includes/linux/" && LINUX_SCRIPTS="true"
-
-          WINDOWS_SCRIPTS="false"
-          echo "$CHANGED_FILES" | grep -qE "^(scripts|dev)/includes/windows/" && WINDOWS_SCRIPTS="true"
-
-          echo "Detection: shared=$SHARED_CHANGED darwin=$DARWIN_SCRIPTS linux=$LINUX_SCRIPTS windows=$WINDOWS_SCRIPTS"
-
-          # Each platform: its Dockerfile OR shared scripts OR its platform-specific scripts
-          check_platform() {
-            local dockerfile="$1" platform_scripts="$2"
-            if echo "$CHANGED_FILES" | grep -q "$dockerfile"; then echo "true"
-            elif [[ "$SHARED_CHANGED" == "true" ]]; then echo "true"
-            elif [[ "$platform_scripts" == "true" ]]; then echo "true"
-            else echo "false"; fi
+            [[ "${BASE_CHANGED}" == "true" ]]      && { echo true; return; }
+            [[ "${WORKFLOW}" == "true" ]]          && { echo true; return; }
+            [[ "${scripts_changed}" == "true" ]]   && { echo true; return; }
+            matches "${dockerfile}"                && { echo true; return; }
+            echo false
           }
 
-          # Base image only rebuilds on its own Dockerfile or shared script changes
-          echo "base=$(echo "$CHANGED_FILES" | grep -q "ffmpeg-base.dockerfile" && echo "true" || echo "$SHARED_CHANGED")" >> $GITHUB_OUTPUT
-          echo "linux-x86_64=$(check_platform "ffmpeg-linux-x86_64.dockerfile" "$LINUX_SCRIPTS")" >> $GITHUB_OUTPUT
-          echo "linux-aarch64=$(check_platform "ffmpeg-linux-aarch64.dockerfile" "$LINUX_SCRIPTS")" >> $GITHUB_OUTPUT
-          echo "windows-x86_64=$(check_platform "ffmpeg-windows-x86_64.dockerfile" "$WINDOWS_SCRIPTS")" >> $GITHUB_OUTPUT
-          echo "darwin-x86_64=$(check_platform "ffmpeg-darwin-x86_64.dockerfile" "$DARWIN_SCRIPTS")" >> $GITHUB_OUTPUT
-          echo "darwin-arm64=$(check_platform "ffmpeg-darwin-arm64.dockerfile" "$DARWIN_SCRIPTS")" >> $GITHUB_OUTPUT
-          echo "workflow=$(echo "$CHANGED_FILES" | grep -q "^\.github/workflows/" && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          echo "─── State before platform loop ──────────────────────"
+          echo "  ALL_PLATFORMS:    [${ALL_PLATFORMS}]"
+          echo "  BASE_CHANGED:     ${BASE_CHANGED}"
+          echo "  WORKFLOW:         ${WORKFLOW}"
+          echo "  LINUX_SCRIPTS:    ${LINUX_SCRIPTS}"
+          echo "  DARWIN_SCRIPTS:   ${DARWIN_SCRIPTS}"
+          echo "  WINDOWS_SCRIPTS:  ${WINDOWS_SCRIPTS}"
 
-      - name: Set individual outputs
-        id: check-base
-        run: echo "changed=${{ steps.check-files.outputs.base }}" >> $GITHUB_OUTPUT
+          PLATFORMS=()
 
-      - name: Set Linux x86_64 output
-        id: check-linux-x86_64
-        run: echo "changed=${{ steps.check-files.outputs.linux-x86_64 }}" >> $GITHUB_OUTPUT
-
-      - name: Set Linux aarch64 output
-        id: check-linux-aarch64
-        run: echo "changed=${{ steps.check-files.outputs.linux-aarch64 }}" >> $GITHUB_OUTPUT
-
-      - name: Set Windows x86_64 output
-        id: check-windows-x86_64
-        run: echo "changed=${{ steps.check-files.outputs.windows-x86_64 }}" >> $GITHUB_OUTPUT
-
-      - name: Set Darwin x86_64 output
-        id: check-darwin-x86_64
-        run: echo "changed=${{ steps.check-files.outputs.darwin-x86_64 }}" >> $GITHUB_OUTPUT
-
-      - name: Set Darwin arm64 output
-        id: check-darwin-arm64
-        run: echo "changed=${{ steps.check-files.outputs.darwin-arm64 }}" >> $GITHUB_OUTPUT
-
-      - name: Set workflow output
-        id: check-workflow
-        run: echo "changed=${{ steps.check-files.outputs.workflow }}" >> $GITHUB_OUTPUT
-
-      - name: Check if any component changed
-        id: check-any
-        run: |
-          ANY_CHANGED="false"
-          if [[ "${{ steps.check-files.outputs.base }}" == "true" || \
-                "${{ steps.check-files.outputs.linux-x86_64 }}" == "true" || \
-                "${{ steps.check-files.outputs.linux-aarch64 }}" == "true" || \
-                "${{ steps.check-files.outputs.windows-x86_64 }}" == "true" || \
-                "${{ steps.check-files.outputs.darwin-x86_64 }}" == "true" || \
-                "${{ steps.check-files.outputs.darwin-arm64 }}" == "true" || \
-                "${{ steps.check-files.outputs.workflow }}" == "true" ]]; then
-            ANY_CHANGED="true"
+          # Fast path: when base rebuilds (incl. workflow changes), every
+          # platform must rebuild — they all FROM the base. Skip the
+          # per-platform classification entirely. This also dodges any
+          # weirdness in the per-iteration loop logic.
+          if [[ "${BASE_CHANGED}" == "true" ]]; then
+            echo "  → BASE_CHANGED=true: including all platforms"
+            for p in ${ALL_PLATFORMS}; do
+              PLATFORMS+=("${p}")
+            done
+          else
+            for p in ${ALL_PLATFORMS}; do
+              case "${p}" in
+                linux-*)   var=LINUX_SCRIPTS   ;;
+                darwin-*)  var=DARWIN_SCRIPTS  ;;
+                windows-*) var=WINDOWS_SCRIPTS ;;
+                *)         var=""              ;;
+              esac
+              result="$(platform_changed "${p}" "${var}")"
+              echo "  loop[${p}]: var=${var} → result=${result}"
+              if [[ "${result}" == "true" ]]; then
+                PLATFORMS+=("${p}")
+              fi
+            done
           fi
-          echo "changed=$ANY_CHANGED" >> $GITHUB_OUTPUT
+
+          echo "  PLATFORMS array: (${#PLATFORMS[@]}) ${PLATFORMS[*]}"
+
+          # Emit JSON array — directly usable as matrix input via fromJSON().
+          # -n is critical: without it, jq consumes the first stdin line as
+          # its main filter input, and `inputs` reads from the SECOND line
+          # onwards — silently dropping element 0. With -n, jq starts with
+          # null input and `inputs` reads everything.
+          if [[ ${#PLATFORMS[@]} -eq 0 ]]; then
+            PLATFORMS_JSON="[]"
+          else
+            PLATFORMS_JSON=$(printf '%s\n' "${PLATFORMS[@]}" | jq -Rcn '[inputs]')
+          fi
+
+          emit_outputs "${PLATFORMS_JSON}" "${BASE_CHANGED}"
