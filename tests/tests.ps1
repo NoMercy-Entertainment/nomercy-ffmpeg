@@ -7,11 +7,13 @@ $script:TOTAL_TESTS = 0
 $script:PASSED_TESTS = 0
 $script:FAILED_TESTS = 0
 
-$TestRoot = "$Workspace\test_files"
+$TestRoot = "$Workspace\sample_files"
 $SampleVideo = "$TestRoot\sample.mp4"
 $SampleAudio = "$TestRoot\sample.wav"
 $SampleImage = "$TestRoot\sample.png"
-$SampleSubs = "$TestRoot\test.ass"
+$SampleSubs = "$TestRoot\sample.ass"
+$AssSubPath = $SampleSubs -replace '\\','/'
+$AssSubPath = $AssSubPath -replace ':','\\:'
 
 Remove-Item -Recurse -Force -Path $TestRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out-Null
@@ -84,8 +86,10 @@ function generate_samples {
             'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
             'Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle'
         ) -join "`n"
-        [System.IO.File]::WriteAllText($SampleSubs, $assContent)
-        text_with_padding "     $ICON_PASS Sample subtitles" "[0s]"
+        [System.IO.File]::WriteAllText($SampleSubs, $assContent)  
+
+        $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
+        text_with_padding "     $ICON_PASS Sample subtitles" "[${elapsed}s]"
     }
 
     if ($Current_Count -gt 0) {
@@ -157,7 +161,7 @@ run_test "libopus" "-y -i $SampleAudio -c:a libopus $TestRoot\test_opus.opus" "o
 run_test "libmp3lame" "-y -i $SampleAudio -c:a libmp3lame $TestRoot\test_mp3.mp3" "mp3"
 run_test "libwebp" "-y -i $SampleImage -c:v libwebp -f webp $TestRoot\test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i $SampleImage -c:v libopenjpeg $TestRoot\test_jp2.jp2" "openjpeg"
-run_test "libass" "-y -i $SampleVideo -vf ass=$($SampleSubs.Replace('\','/')) $TestRoot\test_ass.mp4" "ass"
+run_test "libass" "-y -i '${SampleVideo}' -vf ass='${AssSubPath}' '${TestRoot}/test_ass.mp4'" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"
 
 # Hardware acceleration (may fail if no hardware support)
