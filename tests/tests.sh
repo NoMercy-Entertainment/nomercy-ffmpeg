@@ -3,172 +3,206 @@
 Workspace="$1"
 
 if [[ -z "$Workspace" ]]; then
-    echo "Error: Workspace path is required." >&2
-    exit 1
+	echo "Error: Workspace path is required." >&2
+	exit 1
 fi
 
 if [[ -L "$Workspace" ]]; then
-    echo "Error: Workspace path cannot be a symbolic link." >&2
-    exit 1
+	echo "Error: Workspace path cannot be a symbolic link." >&2
+	exit 1
 fi
 
 TOTAL_WIDTH_TEXT=54
 TOTAL_TESTS=0
 PASSED_TESTS=0
+SKIPPED_TESTS=0
 FAILED_TESTS=0
 
-TestRoot="${Workspace}/test_files"
+TestRoot="${Workspace}/sample_files"
 SampleVideo="${TestRoot}/sample.mp4"
 SampleAudio="${TestRoot}/sample.wav"
 SampleImage="${TestRoot}/sample.png"
-SampleSubs="${TestRoot}/test.ass"
+SampleSubs="${TestRoot}/sample.ass"
 
 rm -rf "${TestRoot}"
 mkdir -p "${TestRoot}"
 
 get_test_runs_count() {
-    local searchString="$1"
-    local filePath="$0"
-    local fileContent
-    local matches
-    local m_count
-    fileContent=$(<"$filePath")
-    _matches=$(grep -o "$searchString" <<<"$fileContent")
-    matches_count=$(echo "$_matches" | wc -l)
-    if [ "$matches_count" -gt 0 ]; then
-        matches_count=$((matches_count - 1))
-    fi
-    echo "$matches_count"
+	local searchString="$1"
+	local filePath="$0"
+	local fileContent
+	local matches
+	local m_count
+	fileContent=$(<"$filePath")
+	_matches=$(grep -o "$searchString" <<<"$fileContent")
+	matches_count=$(echo "$_matches" | wc -l)
+	if [ "$matches_count" -gt 0 ]; then
+		matches_count=$((matches_count - 1))
+	fi
+	echo "$matches_count"
 }
 
 TOTAL_RUNS=$(get_test_runs_count 'run_test "')
 
 generate_samples() {
-    local Total_Count=0
-    local Current_Count=0
-    local Start_Time End_Time
+	local Total_Count=0
+	local Current_Count=0
+	local Start_Time End_Time
 
-    # Count needed samples
-    [[ ! -f "$SampleVideo" ]] && ((Total_Count++))
-    [[ ! -f "$SampleAudio" ]] && ((Total_Count++))
-    [[ ! -f "$SampleImage" ]] && ((Total_Count++))
-    [[ ! -f "$SampleSubs" ]] && ((Total_Count++))
+	# Count needed samples
+	[[ ! -f "$SampleVideo" ]] && ((Total_Count++))
+	[[ ! -f "$SampleAudio" ]] && ((Total_Count++))
+	[[ ! -f "$SampleImage" ]] && ((Total_Count++))
+	[[ ! -f "$SampleSubs" ]] && ((Total_Count++))
 
-    # Generate samples
-    if [[ ! -f "$SampleVideo" ]]; then
-        Start_Time=$(date +%s)
-        Current_Count=$((Current_Count + 1))
-        text_with_padding "📹 Generating sample video" "[$Current_Count/$Total_Count]" 1
-        ffmpeg_command="-hide_banner -y -f lavfi -i \"testsrc=duration=10:size=1280x720:rate=30\" -c:v libx264 -crf 23 \"$SampleVideo\""
-        output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
-        exit_code=$?
-        End_Time=$(date +%s)
-        if [[ $exit_code -ne 0 ]]; then
-            text_with_padding "❌ Error generating sample video" "[$((End_Time - Start_Time))s]" 1
-            echo "$output"
-            exit 1
-        fi
-        text_with_padding "✅ Sample video generated" "[$((End_Time - Start_Time))s]" 1
-    fi
+	# Generate samples
+	if [[ ! -f "$SampleVideo" ]]; then
+		Start_Time=$(date +%s)
+		Current_Count=$((Current_Count + 1))
+		text_with_padding "📹 Generating sample video" "[$Current_Count/$Total_Count]" 1
+		ffmpeg_command="-hide_banner -y -f lavfi -i \"testsrc=duration=10:size=1280x720:rate=30\" -c:v libx264 -crf 23 \"$SampleVideo\""
+		output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
+		exit_code=$?
+		End_Time=$(date +%s)
+		if [[ $exit_code -ne 0 ]]; then
+			text_with_padding "❌ Error generating sample video" "[$((End_Time - Start_Time))s]" 1
+			echo "$output"
+			exit 1
+		fi
+		text_with_padding "✅ Sample video generated" "[$((End_Time - Start_Time))s]" 1
+	fi
 
-    if [[ ! -f "$SampleAudio" ]]; then
-        Start_Time=$(date +%s)
-        Current_Count=$((Current_Count + 1))
-        text_with_padding "🔊 Generating sample audio" "[$Current_Count/$Total_Count]" 1
-        ffmpeg_command="-hide_banner -y -f lavfi -i \"sine=frequency=1000:duration=10\" -c:a pcm_s16le \"$SampleAudio\""
-        output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
-        exit_code=$?
-        End_Time=$(date +%s)
-        if [[ $exit_code -ne 0 ]]; then
-            text_with_padding "❌ Error generating sample audio" "[$((End_Time - Start_Time))s]" 1
-            echo "$output"
-            exit 1
-        fi
-        text_with_padding "✅ Sample audio generated" "[$((End_Time - Start_Time))s]" 1
-    fi
+	if [[ ! -f "$SampleAudio" ]]; then
+		Start_Time=$(date +%s)
+		Current_Count=$((Current_Count + 1))
+		text_with_padding "🔊 Generating sample audio" "[$Current_Count/$Total_Count]" 1
+		ffmpeg_command="-hide_banner -y -f lavfi -i \"sine=frequency=1000:duration=10\" -c:a pcm_s16le \"$SampleAudio\""
+		output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
+		exit_code=$?
+		End_Time=$(date +%s)
+		if [[ $exit_code -ne 0 ]]; then
+			text_with_padding "❌ Error generating sample audio" "[$((End_Time - Start_Time))s]" 1
+			echo "$output"
+			exit 1
+		fi
+		text_with_padding "✅ Sample audio generated" "[$((End_Time - Start_Time))s]" 1
+	fi
 
-    if [[ ! -f "$SampleImage" ]]; then
-        Start_Time=$(date +%s)
-        Current_Count=$((Current_Count + 1))
-        text_with_padding "🖼️ Generating sample image" "[$Current_Count/$Total_Count]"
-        ffmpeg_command="-hide_banner -y -f lavfi -i \"testsrc=duration=1:size=640x480:rate=1\" -frames:v 1 \"$SampleImage\""
-        output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
-        exit_code=$?
-        End_Time=$(date +%s)
-        if [[ $exit_code -ne 0 ]]; then
-            text_with_padding "❌ Error generating sample image" "[$((End_Time - Start_Time))s]" 1
-            echo "$output"
-            exit 1
-        fi
-        text_with_padding "✅ Sample image generated" "[$((End_Time - Start_Time))s]" 1
-    fi
+	if [[ ! -f "$SampleImage" ]]; then
+		Start_Time=$(date +%s)
+		Current_Count=$((Current_Count + 1))
+		text_with_padding "🖼️ Generating sample image" "[$Current_Count/$Total_Count]"
+		ffmpeg_command="-hide_banner -y -f lavfi -i \"testsrc=duration=1:size=640x480:rate=1\" -frames:v 1 \"$SampleImage\""
+		output=$(eval "${Workspace}/ffmpeg $ffmpeg_command" 2>&1)
+		exit_code=$?
+		End_Time=$(date +%s)
+		if [[ $exit_code -ne 0 ]]; then
+			text_with_padding "❌ Error generating sample image" "[$((End_Time - Start_Time))s]" 1
+			echo "$output"
+			exit 1
+		fi
+		text_with_padding "✅ Sample image generated" "[$((End_Time - Start_Time))s]" 1
+	fi
 
-    if [[ ! -f "$SampleSubs" ]]; then
-        {
-            echo "[Script Info]"
-            echo "Title: Test Subtitle"
-            echo "ScriptType: v4.00+"
-            echo ""
-            echo "[V4+ Styles]"
-            echo "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
-            echo "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,0"
-            echo ""
-            echo "[Events]"
-            echo "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
-            echo "Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle"
-        } >$SampleSubs
-        End_Time=$(date +%s)
-        text_with_padding "✅ Sample subtitles generated" "[$((End_Time - Start_Time))s]" 1
-    fi
+	if [[ ! -f "$SampleSubs" ]]; then
+		{
+			echo "[Script Info]"
+			echo "Title: Test Subtitle"
+			echo "ScriptType: v4.00+"
+			echo ""
+			echo "[V4+ Styles]"
+			echo "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
+			echo "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,0"
+			echo ""
+			echo "[Events]"
+			echo "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+			echo "Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle"
+		} >$SampleSubs
+		End_Time=$(date +%s)
+		text_with_padding "✅ Sample subtitles generated" "[$((End_Time - Start_Time))s]" 1
+	fi
 
-    if [ $Total_Count -gt 0 ]; then
-        printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
-    fi
+	if [ $Total_Count -gt 0 ]; then
+		printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
+	fi
 }
 
 text_with_padding() {
-    local text_before=$1
-    local text_after=$2
-    local extra_padding=${3:-0}
-    local text_length=$((${#text_before} + ${#text_after}))
-    local padding=$((TOTAL_WIDTH_TEXT - text_length - extra_padding))
-    printf "%s%*s%s\n" "$text_before" "$padding" " " "$text_after"
+	local text_before=$1
+	local text_after=$2
+	local extra_padding=${3:-0}
+	local text_length=$((${#text_before} + ${#text_after}))
+	local padding=$((TOTAL_WIDTH_TEXT - text_length - extra_padding))
+	printf "%s%*s%s\n" "$text_before" "$padding" " " "$text_after"
 }
 
 check_command() {
-    if [[ ! -f ${Workspace}/ffmpeg ]]; then
-        printf "%s\n" "❌ FFmpeg executable not found in current directory"
-        exit 1
-    fi
-    if [[ ! -x ${Workspace}/ffmpeg ]]; then
-        chmod +x ${Workspace}/ffmpeg
-    fi
+	if [[ ! -f ${Workspace}/ffmpeg ]]; then
+		printf "%s\n" "❌ FFmpeg executable not found in current directory"
+		exit 1
+	fi
+	if [[ ! -x ${Workspace}/ffmpeg ]]; then
+		chmod +x ${Workspace}/ffmpeg
+	fi
 }
 
 run_test() {
-    local name=$1
-    local command=$2
-    local expected_output=$3
-    local test_output
-    local exit_code
+	local name=$1
+	local command=$2
+	local expected_output=$3
+	local test_output
+	local exit_code
 
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    name=$(echo $name | tr '[:lower:]' '[:upper:]')
+	TOTAL_TESTS=$((TOTAL_TESTS + 1))
+	name=$(echo $name | tr '[:lower:]' '[:upper:]')
 
-    text_with_padding "🧪 Testing ${name}" "[${TOTAL_TESTS}/${TOTAL_RUNS}]" 1
-    Start_Time=$(date +%s)
+	text_with_padding "🧪 Testing ${name}" "[${TOTAL_TESTS}/${TOTAL_RUNS}]" 1
+	Start_Time=$(date +%s)
 
-    test_output=$(eval "${Workspace}/ffmpeg $command" 2>&1)
-    exit_code=$?
-    if [[ $exit_code -eq 0 ]] && echo "$test_output" | grep -q "$expected_output"; then
-        End_Time=$(date +%s)
-        text_with_padding "✅ ${name} test passed" "[$((End_Time - Start_Time))s]" 1
-        PASSED_TESTS=$((PASSED_TESTS + 1))
-    else
-        End_Time=$(date +%s)
-        text_with_padding "❌ ${name} test failed" "[$((End_Time - Start_Time))s]" 1
-        FAILED_TESTS=$((FAILED_TESTS + 1))
-    fi
+	test_output=$(eval "${Workspace}/ffmpeg $command" 2>&1)
+	exit_code=$?
+	if [[ $exit_code -eq 0 ]] && echo "$test_output" | grep -q "$expected_output"; then
+		End_Time=$(date +%s)
+		text_with_padding "✅ ${name} test passed" "[$((End_Time - Start_Time))s]" 1
+		PASSED_TESTS=$((PASSED_TESTS + 1))
+	else
+		End_Time=$(date +%s)
+		text_with_padding "❌ ${name} test failed" "[$((End_Time - Start_Time))s]" 1
+		FAILED_TESTS=$((FAILED_TESTS + 1))
+	fi
+}
+
+test_support() {
+	local feature=$1
+
+	# Haal GPU informatie op via lspci
+	local gpu_info
+	gpu_info=$(lspci 2>/dev/null | grep -E "VGA|Display|3D")
+
+	if [ "$feature" = "AMF" ]; then
+		# Check of het een AMD GPU is en of de AMF library bestaat (vaak meegeleverd met AMDVLK/Pro drivers)
+		echo "$gpu_info" | grep -iq "AMD"
+		local has_amd=$?
+
+		# Check veelvoorkomende locaties voor de AMF library op Linux
+		if [ $has_amd -eq 0 ] && [ -f "/usr/lib/x86_64-linux-gnu/libamfrt64.so" ] || [ -f "/usr/lib64/libamfrt64.so" ] || [ -f "/opt/amdgpu-pro/lib/x86_64-linux-gnu/libamfrt64.so" ]; then
+			return 0 # True / Ondersteund
+		fi
+		return 1 # False
+
+	elif [ "$feature" = "VPL" ]; then
+		# Check of het een Intel GPU is
+		echo "$gpu_info" | grep -iq "Intel"
+		local has_intel=$?
+
+		# Check voor oneVPL / Media SDK bibliotheken (libvpl of libmfx)
+		if [ $has_intel -eq 0 ] && ldconfig -p 2>/dev/null | grep -E -q "libvpl\.so|libmfx\.so"; then
+			return 0 # True / Ondersteund
+		fi
+		return 1 # False
+	fi
+
+	return 1
 }
 
 # Main execution
@@ -206,8 +240,25 @@ run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\"
 
 # Hardware acceleration (may fail if no hardware support)
 run_test "NVENC" "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4" "nvenc"
-run_test "VPL" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4" "vpl"
-run_test "AMF" "-y -i ${SampleVideo} -c:v h264_amf ${TestRoot}/test_amf.mp4" "amf"
+# Check for Intel GPU/driver otherwise skip
+if test_support "VPL"; then
+	run_test "VPL" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4" "vpl"
+else
+	TOTAL_TESTS=$((TOTAL_TESTS + 1))
+	text_with_padding "🧪 Testing VPL" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+	text_with_padding "➖ VPL was skipped" "[ 0s ]" 1
+	SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+fi
+
+# Check for AMD GPU/driver otherwise skip
+if test_support "AMF"; then
+	run_test "AMF" "-y -i ${SampleVideo} -c:v h264_amf ${TestRoot}/test_amf.mp4" "amf"
+else
+	TOTAL_TESTS=$((TOTAL_TESTS + 1))
+	text_with_padding "🧪 Testing AMF" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+	text_with_padding "➖ AMF was skipped" "[ 0s ]" 1
+	SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+fi
 
 # Additional format tests
 run_test "libbluray" "-hide_banner -protocols | grep bluray" "bluray"
@@ -227,9 +278,10 @@ run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
 # Print summary
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 text_with_padding "📊 Summary:" ""
-text_with_padding "Total tests:" "${TOTAL_TESTS}"
 text_with_padding "Passed tests:" "${PASSED_TESTS}"
+text_with_padding "Skipped tests:" "${SKIPPED_TESTS}"
 text_with_padding "Failed tests:" "${FAILED_TESTS}"
+text_with_padding "Total tests:" "${TOTAL_TESTS}"
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 echo ""
 
@@ -237,6 +289,6 @@ rm -rf "${TestRoot}"
 
 # Exit with failure if any tests failed
 if [ "${FAILED_TESTS}" -gt 0 ]; then
-    exit $FAILED_TESTS
+	exit $FAILED_TESTS
 fi
 exit 0
