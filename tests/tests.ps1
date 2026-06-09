@@ -5,6 +5,7 @@ param (
 $TOTAL_WIDTH_TEXT = 54
 $script:TOTAL_TESTS = 0
 $script:PASSED_TESTS = 0
+$script:SKIPPED_TESTS = 0
 $script:FAILED_TESTS = 0
 
 $TestRoot = "$Workspace\sample_files"
@@ -136,9 +137,36 @@ function run_test {
     }
     else {
         $End_Time = Get-Date
-        text_with_padding "❌ ${name} test failed" "[ $((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s ]" 1               
+        text_with_padding "❌ ${name} test failed" "[ $((New-TimeSpan -Start $Start_Time -End $End_Time).Seconds)s ]" 1
         $script:FAILED_TESTS++
     }
+}
+
+function test_support {
+    param (
+        [ValidateSet("AMF", "VPL")]
+        [string]$Feature
+    )
+
+    # Vraag video controllers op (eenmalig, wel zo efficiënt)
+    $gpus = Get-CimInstance Win32_VideoController
+
+    if ($Feature -eq "AMF") {
+        $hasAmdGpu = $gpus | Where-Object { $_.DriverProvider -like "*AMD*" -or $_.Caption -like "*AMD*" -or $_.Caption -like "*Radeon*" }
+        $hasAmfDll = Test-Path "$env:SystemRoot\System32\amfrt64.dll"
+        
+        return [bool]($hasAmdGpu -and $hasAmfDll)
+    }
+    elseif ($Feature -eq "VPL") {
+        $hasIntelGpu = $gpus | Where-Object { $_.DriverProvider -like "*Intel*" -or $_.Caption -like "*Intel*" }
+        $hasVplDll = (Test-Path "$env:SystemRoot\System32\libvplintel_preview64.dll") -or 
+                     (Test-Path "$env:SystemRoot\System32\mfxplugin64.dll") -or 
+                     (Test-Path "$env:SystemRoot\System32\libvpl.dll")
+        
+        return [bool]($hasIntelGpu -and $hasVplDll)
+    }
+
+    return $false
 }
 
 # Main execution
@@ -166,8 +194,26 @@ run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`"
 
 # Hardware acceleration (may fail if no hardware support)
 run_test "NVENC" "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nvenc.mp4" "nvenc"
-run_test "VPL" "-y -i $SampleVideo -c:v h264_vpl $TestRoot\test_vpl.mp4" "vpl"
-run_test "AMF" "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4" "amf"
+# Check for Intel GPU/driver otherwise skip
+if (test_support "VPL") {
+    run_test "VPL" "-y -i $SampleVideo -c:v h264_vpl $TestRoot\test_vpl.mp4" "vpl"
+}
+else {
+    $script:TOTAL_TESTS++
+    text_with_padding "🧪 Testing VPL" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+    text_with_padding "➖ VPL was skipped" "[ 0s ]" 1
+    $script:SKIPPED_TESTS++
+}
+# Check for AMD GPU/driver otherwise skip
+if (test_support "AMF") {
+    run_test "AMF" "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4" "amf"
+}
+else {
+    $script:TOTAL_TESTS++
+    text_with_padding "🧪 Testing AMF" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+    text_with_padding "➖ AMF was skipped" "[ 0s ]" 1
+    $script:SKIPPED_TESTS++
+}
 
 # Additional format tests
 run_test "libbluray" "-hide_banner -protocols | findstr bluray" "bluray"
@@ -187,9 +233,10 @@ run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
 # Print summary
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 text_with_padding "📊 Summary:" ""
-text_with_padding "Total tests:" "$script:TOTAL_TESTS"
 text_with_padding "Passed tests:" "$script:PASSED_TESTS"
+text_with_padding "Skipped tests:" "$script:SKIPPED_TESTS"
 text_with_padding "Failed tests:" "$script:FAILED_TESTS"
+text_with_padding "Total tests:" "$script:TOTAL_TESTS"
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host ""
 

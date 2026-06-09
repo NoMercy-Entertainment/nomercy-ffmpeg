@@ -15,6 +15,7 @@ fi
 TOTAL_WIDTH_TEXT=54
 TOTAL_TESTS=0
 PASSED_TESTS=0
+SKIPPED_TESTS=0
 FAILED_TESTS=0
 
 TestRoot="${Workspace}/sample_files"
@@ -171,6 +172,39 @@ run_test() {
 	fi
 }
 
+test_support() {
+	local feature=$1
+
+	# Haal GPU informatie op via lspci
+	local gpu_info
+	gpu_info=$(lspci 2>/dev/null | grep -E "VGA|Display|3D")
+
+	if [ "$feature" = "AMF" ]; then
+		# Check of het een AMD GPU is en of de AMF library bestaat (vaak meegeleverd met AMDVLK/Pro drivers)
+		echo "$gpu_info" | grep -iq "AMD"
+		local has_amd=$?
+
+		# Check veelvoorkomende locaties voor de AMF library op Linux
+		if [ $has_amd -eq 0 ] && [ -f "/usr/lib/x86_64-linux-gnu/libamfrt64.so" ] || [ -f "/usr/lib64/libamfrt64.so" ] || [ -f "/opt/amdgpu-pro/lib/x86_64-linux-gnu/libamfrt64.so" ]; then
+			return 0 # True / Ondersteund
+		fi
+		return 1 # False
+
+	elif [ "$feature" = "VPL" ]; then
+		# Check of het een Intel GPU is
+		echo "$gpu_info" | grep -iq "Intel"
+		local has_intel=$?
+
+		# Check voor oneVPL / Media SDK bibliotheken (libvpl of libmfx)
+		if [ $has_intel -eq 0 ] && ldconfig -p 2>/dev/null | grep -E -q "libvpl\.so|libmfx\.so"; then
+			return 0 # True / Ondersteund
+		fi
+		return 1 # False
+	fi
+
+	return 1
+}
+
 # Main execution
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 printf "%s\n" "        _   _       __  __                      "
@@ -206,8 +240,25 @@ run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\"
 
 # Hardware acceleration (may fail if no hardware support)
 run_test "NVENC" "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4" "nvenc"
-run_test "VPL" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4" "vpl"
-run_test "AMF" "-y -i ${SampleVideo} -c:v h264_amf ${TestRoot}/test_amf.mp4" "amf"
+# Check for Intel GPU/driver otherwise skip
+if test_support "VPL"; then
+	run_test "VPL" "-y -i ${SampleVideo} -c:v h264_vpl ${TestRoot}/test_vpl.mp4" "vpl"
+else
+	TOTAL_TESTS=$((TOTAL_TESTS + 1))
+	text_with_padding "🧪 Testing VPL" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+	text_with_padding "➖ VPL was skipped" "[ 0s ]" 1
+	SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+fi
+
+# Check for AMD GPU/driver otherwise skip
+if test_support "AMF"; then
+	run_test "AMF" "-y -i ${SampleVideo} -c:v h264_amf ${TestRoot}/test_amf.mp4" "amf"
+else
+	TOTAL_TESTS=$((TOTAL_TESTS + 1))
+	text_with_padding "🧪 Testing AMF" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+	text_with_padding "➖ AMF was skipped" "[ 0s ]" 1
+	SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+fi
 
 # Additional format tests
 run_test "libbluray" "-hide_banner -protocols | grep bluray" "bluray"
@@ -227,9 +278,10 @@ run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
 # Print summary
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 text_with_padding "📊 Summary:" ""
-text_with_padding "Total tests:" "${TOTAL_TESTS}"
 text_with_padding "Passed tests:" "${PASSED_TESTS}"
+text_with_padding "Skipped tests:" "${SKIPPED_TESTS}"
 text_with_padding "Failed tests:" "${FAILED_TESTS}"
+text_with_padding "Total tests:" "${TOTAL_TESTS}"
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 echo ""
 
