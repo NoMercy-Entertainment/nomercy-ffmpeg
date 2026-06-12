@@ -5,9 +5,6 @@ LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.1"
 LABEL description="FFmpeg for Linux x86_64"
 
-ARG DEBUG
-ENV DEBUG=${DEBUG}
-
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video

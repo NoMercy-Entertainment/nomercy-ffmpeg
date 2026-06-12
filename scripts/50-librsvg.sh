@@ -104,6 +104,43 @@ if [ ${TARGET_OS} == "windows" ]; then
 
 	rm -rf /build/gettext
 	#endregion
+
+	#region expat (XML backend for cairo's bundled fontconfig fallback)
+	# When cairo can't resolve the system fontconfig via pkg-config it downloads
+	# and builds its own fontconfig subproject, which #include <expat.h>. expat is
+	# not built anywhere else in the Windows pipeline, so provide it here, before
+	# cairo, so the subproject both compiles and links it.
+	cd /build
+	wget -O expat.tar.gz https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz
+	tar -xzf expat.tar.gz && rm expat.tar.gz && mv expat-2.6.4 expat
+	cd expat
+
+	./configure --prefix=${PREFIX} \
+		--host=${CROSS_PREFIX%-} \
+		--enable-static \
+		--disable-shared \
+		--without-docbook \
+		--without-examples \
+		--without-tests | log
+	if [ ${PIPESTATUS[0]} -ne 0 ]; then
+		log "expat configure failed"
+		exit 1
+	fi
+
+	make -j$(nproc) 2>&1 | log -a
+	if [ ${PIPESTATUS[0]} -ne 0 ]; then
+		log "expat build failed"
+		exit 1
+	fi
+
+	make install 2>&1 | log -a
+	if [ ! -f "${PREFIX}/lib/pkgconfig/expat.pc" ]; then
+		log "expat install failed"
+		exit 1
+	fi
+
+	rm -rf /build/expat
+	#endregion
 fi
 
 #region pixman (required by cairo)
@@ -258,6 +295,33 @@ fi
 
 cd /build/cairo
 
+if [[ ${TARGET_OS} == "windows" ]]; then
+	# Drop cairo's csi-replay/csi-exec/csi-trace helper programs. They are dev
+	# tools (install:false, unused downstream) but a full `ninja` still builds
+	# them, and they link the whole static stack as a final executable. cairo
+	# resolves fontconfig via pkg-config WITHOUT its Libs.private, so fontconfig's
+	# libxml2 symbols (xmlParseChunk, xmlSAX2GetLineNumber, ...) are never on
+	# their link line and the link fails. libcairo.a itself links fine.
+	python3 - <<'PYEOF'
+import re
+p = "util/cairo-script/meson.build"
+s = open(p, encoding="utf-8").read()
+patterns = [
+    r"\ncsi_replay_exe = executable\(.*?\n\)\n",
+    r"\ncsi_exec_exe = executable\(.*?\n\)\n",
+    r"\nif feature_conf\.get\('CAIRO_HAS_SCRIPT_SURFACE'.*?\nendif\n",
+]
+for pat in patterns:
+    s, n = re.subn(pat, "\n", s, flags=re.S)
+    assert n == 1, "cairo-script meson.build: pattern not matched: %s" % pat
+open(p, "w", encoding="utf-8").write(s)
+PYEOF
+	if [ $? -ne 0 ]; then
+		log "cairo csi helper removal patch failed"
+		exit 1
+	fi
+fi
+
 CAIRO_EXTRA_FLAGS="-Dxlib=disabled -Dxcb=disabled -Dgtk_doc=false -Dglib=enabled"
 
 cp /build/cross_file.txt /build/cairo/cross_file.txt
@@ -267,8 +331,13 @@ cp /build/cross_file.txt /build/cairo/cross_file.txt
 	if [[ ${TARGET_OS} == "windows" ]]; then
 		echo "c_args = ['-DCAIRO_WIN32_STATIC_BUILD=1']"
 		echo "cpp_args = ['-DCAIRO_WIN32_STATIC_BUILD=1']"
-		echo "c_link_args = ['-L${PREFIX}/lib', '-lglib-2.0', '-lgobject-2.0', '-lfontconfig', '-lfreetype', '-lpixman-1', '-lxml2', '-liconv', '-lbcrypt']"
-		echo "cpp_link_args = ['-L${PREFIX}/lib', '-lglib-2.0', '-lgobject-2.0', '-lfontconfig', '-lfreetype', '-lpixman-1', '-lxml2', '-liconv', '-lbcrypt']"
+		# Search path only — do NOT list -l<lib> deps here. Meson applies these link
+		# args to every probe, including cc.find_library('gdi32') in cairo's mandatory
+		# win32 backend; one unmet transitive symbol from a bumped freetype/fontconfig/
+		# xml2 makes that probe fail as the misleading "gdi32 not found". Cairo's real
+		# deps are resolved via pkg-config.
+		echo "c_link_args = ['-L${PREFIX}/lib']"
+		echo "cpp_link_args = ['-L${PREFIX}/lib']"
 	elif [[ ${TARGET_OS} == "linux" ]]; then
 		echo "c_link_args = ['-L${PREFIX}/lib', '-lglib-2.0', '-lgobject-2.0', '-lfontconfig', '-lfreetype', '-lpixman-1', '-lxml2', '-liconv']"
 		echo "cpp_link_args = ['-L${PREFIX}/lib', '-lglib-2.0', '-lgobject-2.0', '-lfontconfig', '-lfreetype', '-lpixman-1', '-lxml2', '-liconv']"
@@ -289,7 +358,8 @@ meson setup build --prefix=${PREFIX} \
 	--cross-file="/build/cairo/cross_file.txt" | log -a
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-	log "cairo configure failed"
+	log "$(tail -n 60 /build/cairo/build/meson-logs/meson-log.txt 2>/dev/null)"
+	log -a "cairo configure failed"
 	exit 1
 fi
 
@@ -306,7 +376,7 @@ echo "Installing cairo..." > /ffmpeg_build.log
 
 ninja -C build install 2>&1 | log -a
 
-if [ ${PIPESTATUS[0]} -ne 0 ] ||  [ ! -f "${PREFIX}/lib/pkgconfig/cairo.pc"]; then
+if [ ${PIPESTATUS[0]} -ne 0 ] || [ ! -f "${PREFIX}/lib/pkgconfig/cairo.pc" ]; then
 	log "cairo install failed"
 	exit 1
 fi

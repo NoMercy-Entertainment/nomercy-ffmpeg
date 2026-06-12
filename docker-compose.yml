@@ -9,6 +9,8 @@ services:
     build:
       context: .
       dockerfile: ffmpeg-base.dockerfile
+      args:
+        DEBUG: "true"
     image: nomercyentertainment/ffmpeg-base:latest
     volumes:
       - tmp:/tmp
@@ -19,8 +21,6 @@ services:
     privileged: true
     build:
       context: .
-      args:
-        DEBUG: "false"
       dockerfile: ffmpeg-linux-x86_64.dockerfile
     depends_on:
       - ffmpeg-base
@@ -33,8 +33,6 @@ services:
     privileged: true
     build:
       context: .
-      args:
-        DEBUG: "false"
       dockerfile: ffmpeg-linux-aarch64.dockerfile
     depends_on:
       - ffmpeg-base
@@ -47,8 +45,6 @@ services:
     privileged: true
     build:
       context: .
-      args:
-        DEBUG: "false"
       dockerfile: ffmpeg-windows-x86_64.dockerfile
     depends_on:
       - ffmpeg-base
@@ -61,8 +57,6 @@ services:
   #   privileged: true
   #   build:
   #     context: .
-  #     args:
-  #       DEBUG: "false"
   #     dockerfile: ffmpeg-windows-arm64.dockerfile
   #   depends_on:
   #     - ffmpeg-base
@@ -75,8 +69,6 @@ services:
     privileged: true
     build:
       context: .
-      args:
-        DEBUG: "false"
       dockerfile: ffmpeg-darwin-x86_64.dockerfile
     depends_on:
       - ffmpeg-base
@@ -89,8 +81,6 @@ services:
     privileged: true
     build:
       context: .
-      args:
-        DEBUG: "false"
       dockerfile: ffmpeg-darwin-arm64.dockerfile
     depends_on:
       - ffmpeg-base

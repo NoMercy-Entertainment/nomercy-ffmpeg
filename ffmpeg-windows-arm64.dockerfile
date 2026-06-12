@@ -5,9 +5,6 @@ LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.1"
 LABEL description="FFmpeg for Windows arm64"
 
-ARG DEBUG=0
-ENV DEBUG=${DEBUG}
-
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video

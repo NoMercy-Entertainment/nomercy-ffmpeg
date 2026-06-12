@@ -219,11 +219,14 @@ else
 fi
 
 if [[ -f "/scripts/patches/libbluray/aacs_static.c" ]]; then
-    mv configure.ac configure.ac.orig
-    cp /scripts/patches/libbluray/configure.ac configure.ac
+    mv meson.build meson.build.orig
+    cp /scripts/patches/libbluray/meson.build meson.build
 
-    mv Makefile.am Makefile.am.orig
-    cp /scripts/patches/libbluray/Makefile.am Makefile.am
+    mv meson_options.txt meson_options.txt.orig
+    cp /scripts/patches/libbluray/meson_options.txt meson_options.txt
+
+    mv src/meson.build src/meson.build.orig
+    cp /scripts/patches/libbluray/src.meson.build src/meson.build
 
     mv src/libbluray/disc/aacs.c src/libbluray/disc/aacs.c.orig
     cp /scripts/patches/libbluray/aacs_static.c src/libbluray/disc/aacs.c
@@ -244,30 +247,34 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     EXTRA_LIBS+=" -lws2_32"
 fi
 
-./bootstrap --prefix=${PREFIX} --enable-static --enable-bdjava --disable-shared \
-    --with-pic --with-libxml2 --with-libaacs --with-libbdplus --with-aacs --with-bdplus \
-    --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-html --disable-doxygen-ps --disable-doxygen-pdf --disable-examples \
-    --host=${CROSS_PREFIX%-}
+meson setup build \
+    --prefix=${PREFIX} \
+    --libdir=lib \
+    --buildtype=release \
+    -Ddefault_library=static \
+    -Dlibaacs=enabled \
+    -Dlibbdplus=enabled \
+    -Dlibxml2=enabled \
+    -Dbdj_jar=auto \
+    -Denable_tools=false \
+    -Denable_examples=false \
+    -Denable_devtools=false \
+    -Denable_docs=false \
+    --cross-file="/build/cross_file.txt" | log
 
-./configure --prefix=${PREFIX} --enable-static --enable-bdjava --disable-shared \
-    --with-pic --with-libxml2 --with-libaacs --with-libbdplus --with-aacs --with-bdplus \
-    --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-html --disable-doxygen-ps --disable-doxygen-pdf --disable-examples \
-    --host=${CROSS_PREFIX%-} | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    exit 1
+	log -a "libbluray configure failed"
+	exit 1
 fi
 
-make -j$(nproc) &>make.log || {
-    log "$(cat make.log)"
-    log "Error: libbluray make failed."
-    exit 1
-}
+ninja -j$(nproc) -C build 2>&1 | log
 
-make install &>install.log || {
-    log "$(cat install.log)"
-    log "Error: libbluray install failed."
-    exit 1
-}
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+	log -a "libbluray build failed"
+	exit 1
+fi
+
+ninja -C build install >/dev/null 2>&1
 
 if [[ ! -f "${PREFIX}/lib/libbluray.a" ]]; then
     log "Error: ${PREFIX}/lib/libbluray.a does not exist."
@@ -290,6 +297,7 @@ echo "Libs.private: -lstdc++ -laacs -lbdplus -lgcrypt -lgpg-error" >>${PREFIX}/l
 
 LIBS=""
 EXTRA_LIBS=""
+log -a "libbluray build and installation successful."
 #endregion
 
 #region Clean up
