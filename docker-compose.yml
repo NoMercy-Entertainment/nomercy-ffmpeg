@@ -10,7 +10,7 @@ services:
       context: .
       dockerfile: ffmpeg-base.dockerfile
       args:
-        DEBUG: "true"
+        DEBUG: "false"
     image: nomercyentertainment/ffmpeg-base:latest
     volumes:
       - tmp:/tmp
