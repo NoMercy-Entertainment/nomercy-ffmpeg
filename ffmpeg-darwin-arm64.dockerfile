@@ -55,7 +55,7 @@ RUN echo "------------------------------------------------------" \
 # signatures for ARM64 binaries when run from Linux.
 RUN echo "------------------------------------------------------" \
     && echo "🔏 Installing rcodesign for Mach-O code signing" \
-    && cargo install apple-codesign >/dev/null 2>&1 \
+    && cargo install apple-codesign --no-default-features >/dev/null 2>&1 \
     && echo "✅ rcodesign installed successfully" \
     && echo "------------------------------------------------------"
 

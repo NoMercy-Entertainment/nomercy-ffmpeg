@@ -7,6 +7,19 @@ EXTRA_FONTCONFIG_FLAGS="--enable-iconv"
 if [[ ${TARGET_OS} == "darwin" ]]; then
 	EXTRA_FONTCONFIG_FLAGS="--disable-iconv"
 	export ac_cv_va_copy="C99"
+	python3 - <<'PYEOF'
+p = "src/fcint.h"
+s = open(p, encoding="utf-8").read()
+anchor = "#include <locale.h>\n"
+inject = anchor + "#if defined(__APPLE__) && __has_include(<xlocale.h>)\n#include <xlocale.h>\n#endif\n"
+assert anchor in s, "fcint.h: <locale.h> include not found"
+if "xlocale.h" not in s:
+    open(p, "w", encoding="utf-8").write(s.replace(anchor, inject, 1))
+PYEOF
+	if [ $? -ne 0 ]; then
+		log "fontconfig xlocale patch failed"
+		exit 1
+	fi
 elif [[ ${TARGET_OS} == "linux" && ${ARCH} == "aarch64" ]]; then
 	export ac_cv_va_copy="C99"
 elif [[ ${TARGET_OS} == "windows" ]]; then
@@ -79,32 +92,10 @@ if [ -f "${PREFIX}/lib/pkgconfig/fontconfig.pc" ]; then
 else
 	log "fontconfig install failed — no .pc"
 	exit 1
-	# {
-    #     echo "prefix=${PREFIX}"
-    #     echo "exec_prefix=\${prefix}"
-    #     echo "libdir=\${exec_prefix}/lib"
-    #     echo "includedir=\${prefix}/include"
-	# 	echo "sysconfdir=\${exec_prefix}/etc"
-	# 	echo "localstatedir=\${exec_prefix}/var"
-	# 	echo "PACKAGE=fontconfig"
-	# 	echo "confdir=\${sysconfdir}/fonts"
-	# 	echo "cachedir=\${localstatedir}/cache/fontconfig"
-	# 	echo ""
-	# 	echo "Name: Fontconfig"
-	# 	echo "Description: Font configuration and customization library"
-	# 	echo "Version: ${fontconfig_version}"
-	# 	echo "Requires: freetype2 >= 21.0.15"
-	# 	echo "Requires.private: "
-	# 	echo "Libs: -L\${libdir} -lfontconfig"
-	# 	echo "Libs.private: -liconv -lxml2 -lexpat"
-	# 	echo "Cflags: -I\${includedir}"
-	# } > ${PREFIX}/lib/pkgconfig/fontconfig.pc
 fi
 
 rm -rf /build/fontconfig
 
 add_enable "--enable-fontconfig"
-
-log "✅ fontconfig build and installation completed successfully"
 
 exit 0
