@@ -35,6 +35,16 @@ on:
         required: false
         type: boolean
         default: false
+      base_tag:
+        description: >-
+          Tag to pin the platform Dockerfile's FROM base to. Platform builds
+          pass the base's per-run commit SHA when the base was rebuilt this
+          run (immutable — cannot be clobbered by a concurrent pipeline), or
+          "latest" to reuse the existing registry base. Leave empty for the
+          base build itself (its Dockerfile has no BASE_TAG arg).
+        required: false
+        type: string
+        default: ''
     secrets:
       DOCKER_USERNAME:
         required: true
@@ -157,7 +167,23 @@ jobs:
             NO_CACHE_FLAG="--no-cache"
           fi
 
+          # Pin the platform Dockerfile's FROM base to an explicit tag when one
+          # is supplied. Platform builds pass BASE_TAG=<sha> when the base was
+          # rebuilt this run (immutable; survives concurrent pipelines) or
+          # BASE_TAG=latest when reusing the existing registry base. The base
+          # build itself supplies nothing — its Dockerfile has no BASE_TAG arg.
+          BASE_TAG_FLAG=""
+          if [[ -n "${{ inputs.base_tag }}" ]]; then
+            echo "📌 Pinning FROM base to BASE_TAG=${{ inputs.base_tag }}"
+            BASE_TAG_FLAG="--build-arg BASE_TAG=${{ inputs.base_tag }}"
+          fi
+
           # docker driver = host dockerd builder, no nested container.
+          # --pull: always re-check the registry for the FROM base(s) so a
+          # build can never silently compile against a stale base image left
+          # on this runner by a previous run. Critical for the matrix: it
+          # guarantees each platform uses the base produced earlier this run,
+          # not a cached local copy from an older run on this beast-unit.
           # --push pushes to registry directly during build (no separate
           # push step needed afterwards). Image lands in registry; any
           # consumer (verify, export-artifacts) docker-pulls or docker-
@@ -167,6 +193,8 @@ jobs:
             --tag ${IMAGE}:latest \
             --tag ${IMAGE}:${{ github.sha }} \
             ${NO_CACHE_FLAG} \
+            ${BASE_TAG_FLAG} \
+            --pull \
             --push \
             ${{ inputs.context }}"
 

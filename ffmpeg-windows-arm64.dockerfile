@@ -1,5 +1,8 @@
 # Create a Windows ffmpeg build
-FROM nomercyentertainment/ffmpeg-base AS windows
+# CI pins this to the base built in the same run (BASE_TAG=<commit sha>);
+# local/compose builds use the default "latest". See .github/workflows.
+ARG BASE_TAG=latest
+FROM nomercyentertainment/ffmpeg-base:${BASE_TAG} AS windows
 
 LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.1"

@@ -68,6 +68,13 @@ jobs:
       secrets_repo: true
       labels: beast-unit
       no_cache: ${{ inputs.force_rebuild || false }}
+      # Pin every matrix build to the exact base produced this run. When the
+      # base was rebuilt (PRs, force_rebuild, or base-changed on master) it was
+      # pushed tagged with this commit SHA, so we FROM that immutable tag;
+      # otherwise fall back to the existing registry :latest. Combined with
+      # --pull in the reusable build, this guarantees the matrix never compiles
+      # against a stale local base image on a beast-unit runner.
+      base_tag: ${{ needs.detect-changes.outputs.base-changed == 'true' && github.sha || 'latest' }}
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
