@@ -12,7 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
-ENV ffmpeg_version=8.1.1 \
+ENV ffmpeg_version=8.1.2 \
     iconv_version=1.19 \
     libxml2_version=2.15 \
     zlib_version=1.3.2 \
