@@ -1,0 +1,62 @@
+name: npm Publish (ffmpeg-static)
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: clients/npm
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build package
+        run: npm run build
+
+      - name: Check if version is already published
+        id: version-check
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$LOCAL_VERSION" version 2>/dev/null || echo "")
+          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
+            echo "Version $LOCAL_VERSION is already published. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Publishing $LOCAL_VERSION (not yet on npm)"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish package
+        if: steps.version-check.outputs.skip != 'true'
+        run: npm publish --provenance --access public
