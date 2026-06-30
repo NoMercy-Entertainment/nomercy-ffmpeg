@@ -71,7 +71,13 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) 2>&1 | log -a || { log -a "libtesseract build failed"; exit 1; }
+make install 2>&1 | log -a || { log -a "libtesseract install failed"; exit 1; }
+
+if [ ! -f ${PREFIX}/lib/pkgconfig/tesseract.pc ]; then
+    log "Failed to build libtesseract"
+    exit 1
+fi
 
 if [[ ${TARGET_OS} == "windows" ]]; then
     sed -i 's/^Libs: \(.*\)/Libs: \1 -lws2_32/' ${PREFIX}/lib/pkgconfig/tesseract.pc

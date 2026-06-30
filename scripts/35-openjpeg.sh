@@ -52,10 +52,22 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) 2>&1 | log -a || { log -a "openjpeg build failed"; exit 1; }
+make install 2>&1 | log -a || { log -a "openjpeg install failed"; exit 1; }
+
+OPENJPEG_PC="${PREFIX}/lib/pkgconfig/libopenjp2.pc"
+
+if [ ! -f "${OPENJPEG_PC}" ]; then
+    log "openjpeg install failed — libopenjp2.pc not found under ${PREFIX}"
+    exit 1
+fi
 
 if [[ ${TARGET_OS} != "linux" ]]; then
-    echo "Libs.private: -lstdc++ -lm -lpthread -lz" >>${PREFIX}/lib/pkgconfig/libopenjp2.pc
+    if grep -q "^Libs.private:" "${OPENJPEG_PC}"; then
+        sed -i 's/^Libs.private:.*/Libs.private: -lstdc++ -lm -lpthread -lz/' "${OPENJPEG_PC}"
+    else
+        echo "Libs.private: -lstdc++ -lm -lpthread -lz" >>"${OPENJPEG_PC}"
+    fi
 fi
 
 rm -rf /build/openjpeg

@@ -1,12 +1,12 @@
 # Create a Windows ffmpeg build
-FROM nomercyentertainment/ffmpeg-base AS windows
+# CI pins this to the base built in the same run (BASE_TAG=<commit sha>);
+# local/compose builds use the default "latest". See .github/workflows.
+ARG BASE_TAG=latest
+FROM nomercyentertainment/ffmpeg-base:${BASE_TAG} AS windows
 
 LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.1"
 LABEL description="FFmpeg for Windows arm64"
-
-ARG DEBUG=0
-ENV DEBUG=${DEBUG}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
@@ -192,6 +192,6 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=windows /output/ffmpeg-8.1.1-windows-aarch64.zip /build/ffmpeg-8.1.1-windows-aarch64.zip
+COPY --from=windows /output/ffmpeg-8.1.2-windows-aarch64.zip /build/ffmpeg-8.1.2-windows-aarch64.zip
 
-CMD ["cp", "/build/ffmpeg-8.1.1-windows-aarch64.zip", "/output"]
+CMD ["cp", "/build/ffmpeg-8.1.2-windows-aarch64.zip", "/output"]

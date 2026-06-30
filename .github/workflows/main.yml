@@ -3,7 +3,7 @@ name: CI/CD Pipeline
 # Single source of truth for the FFmpeg version produced by this build.
 # Must track `ffmpeg_version` in ffmpeg-base.dockerfile — bump both together.
 env:
-  FFMPEG_VERSION: "8.1.1"
+  FFMPEG_VERSION: "8.1.2"
 
 concurrency:
   group: cicd-${{ github.ref }}
@@ -68,6 +68,13 @@ jobs:
       secrets_repo: true
       labels: beast-unit
       no_cache: ${{ inputs.force_rebuild || false }}
+      # Pin every matrix build to the exact base produced this run. When the
+      # base was rebuilt (PRs, force_rebuild, or base-changed on master) it was
+      # pushed tagged with this commit SHA, so we FROM that immutable tag;
+      # otherwise fall back to the existing registry :latest. Combined with
+      # --pull in the reusable build, this guarantees the matrix never compiles
+      # against a stale local base image on a beast-unit runner.
+      base_tag: ${{ needs.detect-changes.outputs.base-changed == 'true' && github.sha || 'latest' }}
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -326,7 +333,7 @@ jobs:
           for f in "downloads/ffmpeg-${FFMPEG_VERSION}-"*; do
             [[ -f "$f" ]] || continue
             base=$(basename "$f")
-            # ffmpeg-8.1.1-linux-x86_64.tar.gz  →  ffmpeg-8.1.1-linux-x86_64-vX.Y.Z.tar.gz
+            # ffmpeg-8.1.2-linux-x86_64.tar.gz  →  ffmpeg-8.1.2-linux-x86_64-vX.Y.Z.tar.gz
             stem="${base%.*}"
             # handle .tar.gz two-part extension
             case "$base" in

@@ -4,76 +4,79 @@ LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.0"
 LABEL description="Cross-compile FFmpeg for Windows, Linux, Darwin"
 
+ARG DEBUG
+ENV DEBUG=${DEBUG}
+
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
-ENV ffmpeg_version=8.1.1 \
-    iconv_version=1.18 \
-    libxml2_version=2.13 \
-    zlib_version=1.3.1 \
-    fftw3_version=3.3.10 \
-    freetype_version=2-13-3 \
+ENV ffmpeg_version=8.1.2 \
+    iconv_version=1.19 \
+    libxml2_version=2.15 \
+    zlib_version=1.3.2 \
+    fftw3_version=3.3.11 \
+    freetype_version=2-14-3 \
     fribidi_version=1.0.16 \
-    libogg_version=1.3.5 \
-    openssl_version=3.4.0 \
-    fontconfig_version=2.17.0 \
-    libpciaccess_version=0.18.1 \
+    libogg_version=1.3.6 \
+    openssl_version=4.0.0 \
+    fontconfig_version=2.18.1 \
+    libpciaccess_version=0.19 \
     xcbproto_version=1.17.0 \
-    xorgproto_version=2024.1 \
+    xorgproto_version=2025.1 \
     xtranx_version=1.5.2 \
     libxcb_version=1.17.0 \
-    libx11_version=1.8.10 \
-    libXfixed_version=6.0.1 \
-    libdrm_version=2.4.124 \
-    harfbuzz_version=10.1.0 \
-    vulkan_headers_version=1.4.328 \
-    libudfread_version=1.1.2 \
+    libx11_version=1.8.13 \
+    libXfixed_version=6.0.2 \
+    libdrm_version=2.4.134 \
+    harfbuzz_version=14.2.0 \
+    vulkan_headers_version=1.4.353 \
+    libudfread_version=1.2.0 \
     libvorbis_version=1.3.7 \
-    libvmaf_version=3.0.0 \
-    avisynth_version=3.7.3 \
-    chromaprint_version=1.5.1 \
-    libass_version=0.17.3 \
-    libva_version=2.22.0 \
-    libgpg_error_version=1.51 \
-    libgcrypt_version=1.11.0 \
+    libvmaf_version=3.1.0 \
+    avisynth_version=3.7.5 \
+    chromaprint_version=1.6.0 \
+    libass_version=0.17.4 \
+    libva_version=2.23.0 \
+    libgpg_error_version=1.61 \
+    libgcrypt_version=1.12.2 \
     libbdplus_version=0.2.0 \
     libaacs_version=0.11.1 \
-    libbluray_version=1.3.4 \
+    libbluray_version=1.4.1 \
     libcddb_version=1.3.2 \
-    libcdio_version=master \
+    libcdio_version=2.3.0 \
     libcdio_paranoia_version=2.0.2 \
-    dav1d_version=1.5.0 \
+    dav1d_version=1.5.3 \
     davs2_version=1.7 \
-    rav1e_version=0.7.1 \
-    libsrt_version=1.5.4 \
+    rav1e_version=0.8.1 \
+    libsrt_version=1.5.5 \
     twolame_version=0.4.0 \
     mp3lame_version=3.100 \
     fdk_aac_version=2.0.3 \
-    opus_version=1.5.2 \
-    libaom_version=3.11.0 \
-    libtheora_version=1.1.1 \
-    libvpx_version=1.15.0 \
+    opus_version=1.6.1 \
+    libaom_version=3.13.3 \
+    libtheora_version=1.2.0 \
+    libvpx_version=1.16.0 \
     x264_version=stable \
-    x265_version=4.0 \
+    x265_version=4.1 \
     xavs2_version=1.4 \
     xvid_version=1.3.7 \
-    libwebp_version=1.4.0 \
-    openjpeg_version=2.5.3 \
-    jpegsrc_version=9f \
-    zimg_version=3.0.5 \
-    frei0r_version=2.3.3 \
-    libvpl_version=2.14.0 \
-    libsvtav1_version=2.3.0 \
-    amf_version=1.4.36 \
-    nvcodec_version=12.2.72.0 \
-    leptonica_version=1.85.0 \
-    libtesseract_version=5.5.0 \
-    sdl2_version=2.30.10 \
-    shaderc_version=2024.4 \
-    spirv_cross_checkout=5e7db829a37787e096a7bfbdbdf317cd6cbe5897 \
-    libplacebo_version=7.349.0
+    libwebp_version=1.6.0 \
+    openjpeg_version=2.5.4 \
+    jpegsrc_version=10 \
+    zimg_version=3.0.6 \
+    frei0r_version=3.2.1 \
+    libvpl_version=2.16.0 \
+    libsvtav1_version=4.1.0 \
+    amf_version=1.5.0 \
+    nvcodec_version=13.0.19.0 \
+    leptonica_version=1.87.0 \
+    libtesseract_version=5.5.2 \
+    sdl2_version=2.32.10 \
+    shaderc_version=2026.2 \
+    spirv_cross_checkout=1a6169566c73d3da552748fc372fe2bbb856e46e \
+    libplacebo_version=7.360.1
 
 # Dependencies for building ffmpeg
 RUN echo "------------------------------------------------------" \
@@ -94,7 +97,7 @@ RUN echo "------------------------------------------------------" \
     && echo "🔧 Start downloading and installing dependencies" \
     && echo "------------------------------------------------------"\
     && echo "🔄 Swapping apt mirror to Leaseweb NL for speed" \
-    && sed -i 's|http://archive.ubuntu.com|http://mirror.nl.leaseweb.net|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true \
+    && sed -i 's|http://archive.ubuntu.com|http://nl.archive.ubuntu.com|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true \
     && echo "🔄 Checking for updates" \
     && apt-get update >/dev/null 2>&1 \
     && echo "✅ Updating completed successfully" \

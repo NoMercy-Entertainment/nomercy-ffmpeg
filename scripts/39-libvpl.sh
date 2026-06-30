@@ -20,6 +20,10 @@ fi
 ninja -j$(nproc) && ninja install
 rm -rf /build/libvpl ${PREFIX}/{etc,share}
 
+# libvpl is C++ but upstream leaves vpl.pc's C++ runtime empty (CXX_LIB is never set),
+# so add -lstdc++ for FFmpeg's static pkg-config link test against the C++ dispatcher.
+sed -i 's/^Libs.private:/Libs.private: -lstdc++/' ${PREFIX}/lib/pkgconfig/vpl.pc
+
 add_enable "--enable-libvpl"
 
 exit 0

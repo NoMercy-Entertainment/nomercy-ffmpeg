@@ -5,6 +5,7 @@ if [[ "${ARCH}" == "aarch64" && "${TARGET_OS}" == "linux" ]]; then
     LIBRAV1E_TARGET="--target=${ARCH}-unknown-linux-gnu"
 elif [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "windows" ]]; then
     LIBRAV1E_TARGET="--target=${ARCH}-pc-windows-gnu"
+    export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=${CC}
 elif [[ "${ARCH}" == "aarch64" && "${TARGET_OS}" == "windows" ]]; then
     LIBRAV1E_TARGET="--target=${ARCH}-pc-windows-msvc"
 elif [[ "${ARCH}" == "arm64" && "${TARGET_OS}" == "darwin" ]]; then
@@ -22,7 +23,14 @@ if [[ "${TARGET_OS}" == "darwin" ]]; then
 fi
 
 cd /build/librav1e
-cargo cinstall -j$(nproc) -v ${LIBRAV1E_TARGET} --prefix=${PREFIX} --library-type=staticlib --crt-static --release | log
+
+if [[ "${TARGET_OS}" == "windows" ]] \
+    || [[ "${TARGET_OS}" == "linux" && "${ARCH}" == "aarch64" ]] \
+    || [[ "${TARGET_OS}" == "darwin" ]]; then
+    sed -i 's/,[[:space:]]*"git_version"//' /build/librav1e/Cargo.toml
+fi
+
+cargo cinstall -j$(nproc) -v ${LIBRAV1E_TARGET} --prefix=${PREFIX} --library-type=staticlib --crt-static --release 2>&1 | log -a
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	LDFLAGS="${OLD_LDFLAGS}"
 	RUSTFLAGS="${OLD_RUSTFLAGS}"
@@ -34,6 +42,14 @@ if [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "linux" ]]; then
     cp ${PREFIX}/lib/x86_64-linux-gnu/pkgconfig/rav1e.pc ${PREFIX}/lib/pkgconfig/rav1e.pc
 else
     sed -i 's/-lgcc_s//' ${PREFIX}/lib/pkgconfig/rav1e.pc
+fi
+
+# Rust std for the windows-gnu target pulls in these system libs; without them
+# FFmpeg's static pkg-config link test against rav1e fails on Windows.
+if [[ "${TARGET_OS}" == "windows" ]]; then
+    if ! grep -q "Libs.private:" ${PREFIX}/lib/pkgconfig/rav1e.pc; then
+        echo "Libs.private: -lws2_32 -lbcrypt -luserenv -lntdll -lkernel32 -ladvapi32" >>${PREFIX}/lib/pkgconfig/rav1e.pc
+    fi
 fi
 LDFLAGS="${OLD_LDFLAGS}"
 RUSTFLAGS="${OLD_RUSTFLAGS}"

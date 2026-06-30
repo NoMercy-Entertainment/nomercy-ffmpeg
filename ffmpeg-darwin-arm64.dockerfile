@@ -1,12 +1,12 @@
 # Create a macOS ffmpeg build
-FROM nomercyentertainment/ffmpeg-base AS darwin
+# CI pins this to the base built in the same run (BASE_TAG=<commit sha>);
+# local/compose builds use the default "latest". See .github/workflows.
+ARG BASE_TAG=latest
+FROM nomercyentertainment/ffmpeg-base:${BASE_TAG} AS darwin
 
 LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.1"
 LABEL description="FFmpeg for Darwin arm64"
-
-ARG DEBUG=0
-ENV DEBUG=${DEBUG}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
@@ -58,7 +58,7 @@ RUN echo "------------------------------------------------------" \
 # signatures for ARM64 binaries when run from Linux.
 RUN echo "------------------------------------------------------" \
     && echo "🔏 Installing rcodesign for Mach-O code signing" \
-    && cargo install apple-codesign >/dev/null 2>&1 \
+    && cargo install apple-codesign --no-default-features >/dev/null 2>&1 \
     && echo "✅ rcodesign installed successfully" \
     && echo "------------------------------------------------------"
 
@@ -227,6 +227,6 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=darwin /output/ffmpeg-8.1.1-darwin-arm64.tar.gz /build/ffmpeg-8.1.1-darwin-arm64.tar.gz
+COPY --from=darwin /output/ffmpeg-8.1.2-darwin-arm64.tar.gz /build/ffmpeg-8.1.2-darwin-arm64.tar.gz
 
-CMD ["cp", "/build/ffmpeg-8.1.1-darwin-arm64.tar.gz", "/output"]
+CMD ["cp", "/build/ffmpeg-8.1.2-darwin-arm64.tar.gz", "/output"]

@@ -1,12 +1,12 @@
 # Create an Aarch64 ffmpeg build
-FROM nomercyentertainment/ffmpeg-base AS linux
+# CI pins this to the base built in the same run (BASE_TAG=<commit sha>);
+# local/compose builds use the default "latest". See .github/workflows.
+ARG BASE_TAG=latest
+FROM nomercyentertainment/ffmpeg-base:${BASE_TAG} AS linux
 
 LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.1"
 LABEL description="FFmpeg for Linux Aarch64"
-
-ARG DEBUG=0
-ENV DEBUG=${DEBUG}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
@@ -170,6 +170,6 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=linux /build/ffmpeg-8.1.1-linux-aarch64.tar.gz /build/ffmpeg-8.1.1-linux-aarch64.tar.gz
+COPY --from=linux /build/ffmpeg-8.1.2-linux-aarch64.tar.gz /build/ffmpeg-8.1.2-linux-aarch64.tar.gz
 
-CMD ["cp", "/build/ffmpeg-8.1.1-linux-aarch64.tar.gz", "/output"]
+CMD ["cp", "/build/ffmpeg-8.1.2-linux-aarch64.tar.gz", "/output"]

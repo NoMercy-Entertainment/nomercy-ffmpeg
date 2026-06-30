@@ -10,7 +10,16 @@ fi
 # Configure HarfBuzz with CoreText support for Darwin
 HARFBUZZ_EXTRA_FLAGS=""
 if [[ "${TARGET_OS}" == "darwin" ]]; then
-	HARFBUZZ_EXTRA_FLAGS="-Dcoretext=enabled"
+	# HarfBuzz 14.x added a GPU feature (default enabled) whose util/meson.build
+	# requires an Objective-C++ (objcpp) compiler on darwin — which our Meson cross
+	# file doesn't define, so configure aborts. The GPU demo tool isn't needed for
+	# libharfbuzz, so disable it on darwin to drop the objcpp requirement.
+	#
+	# NOTE: do NOT inject objcpp into the shared /build/cross_file.txt here — later
+	# steps (e.g. librsvg's glib/cairo) copy that file and add objcpp themselves,
+	# which would then double-define it ("objcpp ... already exists"). Disabling the
+	# gpu feature is sufficient and self-contained.
+	HARFBUZZ_EXTRA_FLAGS="-Dcoretext=enabled -Dgpu=disabled"
 fi
 
 meson build --prefix=${PREFIX} --buildtype=release -Ddefault_library=static \
