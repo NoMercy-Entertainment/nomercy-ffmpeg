@@ -166,8 +166,14 @@ jobs:
           matches "^(scripts|dev)/includes/[^/]+$"     && SHARED=true
           matches "^dev/init/"                         && SHARED=true
 
+          # npm-publish.yml is an npm-client-only workflow — it never affects
+          # the binaries, so a change to it alone must not force a rebuild.
           WORKFLOW=false
-          matches "^\.github/workflows/" && WORKFLOW=true
+          if echo "${CHANGED_FILES}" \
+               | grep -E "^\.github/workflows/" \
+               | grep -qvE "^\.github/workflows/npm-publish\.yml$"; then
+            WORKFLOW=true
+          fi
 
           LINUX_SCRIPTS=false;   matches "^(scripts|dev)/includes/linux/"   && LINUX_SCRIPTS=true
           DARWIN_SCRIPTS=false;  matches "^(scripts|dev)/includes/darwin/"  && DARWIN_SCRIPTS=true

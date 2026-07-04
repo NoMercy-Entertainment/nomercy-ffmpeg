@@ -10,7 +10,38 @@ defaults:
     working-directory: clients/npm
 
 jobs:
+  # Gate first: a binary-only release never bumps the npm client version, so
+  # this check skips the whole publish job — the npm CI ignores binary changes.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.version-check.outputs.skip }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Check if version is already published
+        id: version-check
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$LOCAL_VERSION" version 2>/dev/null || echo "")
+          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
+            echo "Version $LOCAL_VERSION already published — skipping npm publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Publishing $LOCAL_VERSION (not yet on npm)."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   publish-npm:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,20 +74,5 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Check if version is already published
-        id: version-check
-        run: |
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
-          LOCAL_VERSION=$(node -p "require('./package.json').version")
-          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$LOCAL_VERSION" version 2>/dev/null || echo "")
-          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
-            echo "Version $LOCAL_VERSION is already published. Skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Publishing $LOCAL_VERSION (not yet on npm)"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Publish package
-        if: steps.version-check.outputs.skip != 'true'
         run: npm publish --provenance --access public
