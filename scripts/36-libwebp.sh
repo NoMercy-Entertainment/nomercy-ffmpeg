@@ -7,12 +7,19 @@ fi
 # #region libpng
 cd /build/libpng
 
+LIBPNG_EXTRA_FLAGS=""
+if [[ ${TARGET_OS} == "freebsd" ]]; then
+    # the pngvalid test program uses feenableexcept, which FreeBSD's fenv.h
+    # hides under the _POSIX_SOURCE that pngpriv.h defines — skip the tests
+    LIBPNG_EXTRA_FLAGS="--disable-tests --disable-tools"
+fi
+
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
-    --host=${CROSS_PREFIX%-}
+    ${LIBPNG_EXTRA_FLAGS} --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
     CPPFLAGS="${CPPFLAGS} -I${PREFIX}/include" \
     LDFLAGS="${LDFLAGS} -L${PREFIX}/lib -lz" \
-    --host=${CROSS_PREFIX%-} | log
+    ${LIBPNG_EXTRA_FLAGS} --host=${CROSS_PREFIX%-} | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libpng config"
     exit 1

@@ -14,7 +14,7 @@ elif [[ "${TARGET_OS}" == "darwin" ]]; then
     fi
     cp -r /build/libdavs2/build/linux /build/libdavs2/build/darwin-${ARCH}
     cd /build/libdavs2/build/darwin-${ARCH}
-elif [[ "${TARGET_OS}" == "linux" ]]; then
+elif [[ "${TARGET_OS}" == "linux" || "${TARGET_OS}" == "freebsd" ]]; then
     cd /build/libdavs2/build/linux
     if [[ "${ARCH}" == "aarch64" ]]; then
         cp -r /build/libdavs2/build/linux /build/libdavs2/build/aarch64
@@ -23,7 +23,9 @@ elif [[ "${TARGET_OS}" == "linux" ]]; then
     fi
 fi
 
-if [[ "${TARGET_OS}" != "darwin" ]]; then
+if [[ "${TARGET_OS}" != "darwin" && "${TARGET_OS}" != "freebsd" ]]; then
+    # gcc-only hack: clang objects have no empty .bss section to grep for,
+    # but the original EGIB/naidnePF data patterns work fine with clang
     sed -i -e 's/EGIB/bss/g' -e 's/naidnePF/bss/g' configure
 fi
 

@@ -7,6 +7,9 @@ elif [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "windows" ]]; then
     export OPENSSL_TARGET="mingw64"
 elif [[ "${TARGET_OS}" == "darwin" ]]; then
     export OPENSSL_TARGET="darwin64-${ARCH}-cc"
+elif [[ "${TARGET_OS}" == "freebsd" ]]; then
+    # linux-x86_64 would compile Linux syscall paths that break against FreeBSD libc
+    export OPENSSL_TARGET="BSD-x86_64"
 fi
 
 export OLD_CFLAGS=${CFLAGS}

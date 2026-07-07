@@ -87,3 +87,16 @@ services:
     volumes:
       - tmp:/tmp
       - ./output:/output
+
+  ffmpeg-freebsd-x86_64:
+    container_name: ffmpeg-freebsd-x86_64
+    privileged: true
+    build:
+      context: .
+      dockerfile: ffmpeg-freebsd-x86_64.dockerfile
+    depends_on:
+      - ffmpeg-base
+    volumes:
+      - tmp:/tmp
+      - ./output:/output
+

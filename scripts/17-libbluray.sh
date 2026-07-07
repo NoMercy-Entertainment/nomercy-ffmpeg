@@ -14,6 +14,29 @@ if [[ ${TARGET_OS} == "darwin" ]]; then
     else
         cp src/syscfg/lock-obj-pub.${ARCH}-apple-darwin.h src/syscfg/lock-obj-pub.${CROSS_PREFIX%-}.h
     fi
+elif [[ ${TARGET_OS} == "freebsd" ]]; then
+    # Upstream ships no FreeBSD lock object and a cross build cannot run
+    # gen-posix-lock-obj. On FreeBSD amd64 pthread_mutex_t is an 8-byte pointer
+    # and PTHREAD_MUTEX_INITIALIZER is NULL, so the object is all zeroes.
+    # mkheader looks up the stripped OS name, configure the full triplet.
+    for f in lock-obj-pub.freebsd14.h lock-obj-pub.${CROSS_PREFIX%-}.h; do
+        cat >src/syscfg/${f} <<'EOF'
+## File created by gen-posix-lock-obj - DO NOT EDIT
+## To be included by mkheader into gpg-error.h
+
+typedef struct
+{
+  long _vers;
+  union {
+    volatile char _priv[8];
+    long _x_align;
+    long *_xp_align;
+  } u;
+} gpgrt_lock_t;
+
+#define GPGRT_LOCK_INITIALIZER {1,{{0,0,0,0,0,0,0,0}}}
+EOF
+    done
 fi
 
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc \
@@ -118,6 +141,19 @@ chmod +x /usr/local/bin/libgcrypt-config
 
 #region libbdplus
 cd /build/libbdplus
+
+if [[ ${TARGET_OS} == "freebsd" ]]; then
+    # trap.c calls gettimeofday() without including <sys/time.h>; glibc leaks
+    # the declaration through other headers, FreeBSD libc does not
+    sed -i '0,/^#include/s//#include <sys\/time.h>\n&/' src/libbdplus/bdsvm/trap.c
+    # -D_POSIX_C_SOURCE=200112L hides XSI declarations (gettimeofday) on
+    # FreeBSD; _XOPEN_SOURCE=700 restores them
+    sed -i 's/^SET_FEATURES="\(.*\)"/SET_FEATURES="\1 -D_XOPEN_SOURCE=700"/' configure.ac
+    # convtab_dump.c declares a global "uint32_t index[]" that collides with
+    # libc's legacy index() declaration, which FreeBSD's strings.h exposes
+    # whenever __POSIX_VISIBLE <= 200112 — rename the variable
+    sed -i 's/\bindex\b/conv_index/g' src/examples/convtab_dump.c
+fi
 ./bootstrap --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
@@ -151,6 +187,11 @@ echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libbdplus.pc
 
 #region libaacs
 cd /build/libaacs
+
+if [[ ${TARGET_OS} == "freebsd" ]]; then
+    # same -D_POSIX_C_SOURCE strictness as libbdplus; keep XSI declarations visible
+    sed -i 's/^SET_FEATURES="\(.*\)"/SET_FEATURES="\1 -D_XOPEN_SOURCE=700"/' configure.ac
+fi
 
 if [[ -f "/scripts/patches/libaacs/keydb.cfg" ]]; then
     mv KEYDB.cfg KEYDB.cfg.orig

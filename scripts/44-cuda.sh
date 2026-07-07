@@ -1,6 +1,7 @@
 #!/bin/bash
 
-if [[ ${TARGET_OS} == "darwin" ]]; then
+if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" ]]; then
+    # No CUDA on FreeBSD, and the host CUDA libs are Linux/glibc binaries
     exit 255
 fi
 
