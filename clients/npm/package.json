@@ -1,0 +1,78 @@
+{
+	"name": "@nomercy-entertainment/ffmpeg-static",
+	"type": "module",
+	"version": "1.0.36",
+	"description": "Fetches the NoMercy FFmpeg fork binary (custom muxers, AACS/BD+ decrypt, libass) for the current platform. One static library for every CI action and every NoMercy package that needs ffmpeg.",
+	"author": {
+		"name": "NoMercy Entertainment",
+		"email": "info@nomercy.tv",
+		"url": "https://nomercy.tv"
+	},
+	"contributors": [
+		"Stoney Eagle <45034970+StoneyEagle@users.noreply.github.com>"
+	],
+	"license": "MIT",
+	"homepage": "https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/tree/master/clients/npm#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/NoMercy-Entertainment/nomercy-ffmpeg.git",
+		"directory": "clients/npm"
+	},
+	"bugs": {
+		"url": "https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/issues"
+	},
+	"keywords": [
+		"ffmpeg",
+		"ffprobe",
+		"ffmpeg-static",
+		"nomercy",
+		"binary",
+		"encoder",
+		"transcode",
+		"aacs",
+		"libass",
+		"cli"
+	],
+	"sideEffects": false,
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"bin": {
+		"nomercy-ffmpeg-path": "./dist/bin/ffmpeg-path.js",
+		"nomercy-ffprobe-path": "./dist/bin/ffprobe-path.js"
+	},
+	"files": [
+		"README.md",
+		"dist"
+	],
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+		"dev": "tsc -p tsconfig.build.json --watch",
+		"typecheck": "tsc --noEmit",
+		"lint": "eslint . --max-warnings 0",
+		"lint:fix": "eslint . --fix --max-warnings 0",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"prepublishOnly": "npm run build"
+	},
+	"devDependencies": {
+		"@antfu/eslint-config": "^9.0.0",
+		"@types/node": "^25.9.0",
+		"eslint": "^10.4.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.6"
+	}
+}
