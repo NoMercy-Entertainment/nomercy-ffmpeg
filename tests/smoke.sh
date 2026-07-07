@@ -21,13 +21,15 @@ fail() { echo "❌ $*" >&2; exit 1; }
 note() { echo "ℹ️  $*"; }
 ok()   { echo "✅ $*"; }
 
-# Platforms whose binary is built for a different arch than its smoke-test
-# runner and therefore cannot be executed there. Keep in sync with the build
-# matrix if another cross-arch target is added.
+# Platforms whose binary is built for a different arch OR OS than its
+# smoke-test runner and therefore cannot be executed there (freebsd ELF on a
+# Linux runner fails the same way as cross-arch). Keep in sync with the build
+# matrix if another cross-arch/cross-OS target is added.
 is_cross_arch_platform() {
   case "$1" in
-    linux-aarch64) return 0 ;;
-    *)             return 1 ;;
+    linux-aarch64)   return 0 ;;
+    freebsd-x86_64)  return 0 ;;
+    *)               return 1 ;;
   esac
 }
 

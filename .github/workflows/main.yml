@@ -109,6 +109,7 @@ jobs:
             [windows-x86_64]=zip
             [darwin-x86_64]=tar.gz
             [darwin-arm64]=tar.gz
+            [freebsd-x86_64]=tar.gz
           )
 
           # platforms-to-build is a JSON array; jq into a bash array.
@@ -363,6 +364,7 @@ jobs:
             - Linux x86_64 / aarch64
             - Windows x86_64
             - macOS x86_64 / arm64 (Apple Silicon)
+            - FreeBSD x86_64
 
             All images scanned with Trivy; results in the Security tab.
 
