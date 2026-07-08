@@ -200,8 +200,8 @@ static float compute_spectral_flux(BeatDetectContext *s, const float *samples)
         s->fft_in[i].im = 0.0f;
     }
 
-    // Apply FFT
-    s->fft_fn(s->fft_ctx, s->fft_out, s->fft_in, sizeof(float));
+    // Apply FFT (stride must be the size of one complex sample, see tx.h)
+    s->fft_fn(s->fft_ctx, s->fft_out, s->fft_in, sizeof(AVComplexFloat));
 
     // Compute spectral flux (difference with previous frame)
     for (int i = 1; i < s->window_size / 2; i++)
