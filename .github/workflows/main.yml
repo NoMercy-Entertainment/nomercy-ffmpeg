@@ -221,6 +221,59 @@ jobs:
           done
           ls -lh release/
 
+      - name: Generate per-asset SHA256, manifest and signature
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_SIGNING_KEY_PASSPHRASE: ${{ secrets.GPG_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${{ needs.detect-changes.outputs.version }}-rc"
+
+          # Per-asset .sha256 sidecar files
+          for f in release/*; do
+            [[ -f "$f" ]] || continue
+            sha256sum "$f" | awk '{print $1}' > "${f}.sha256"
+          done
+
+          # Build manifest.json (exclude .sha256 sidecars from the assets list)
+          assets_json='[]'
+          while IFS= read -r fname; do
+            [[ "$fname" == *.sha256 ]] && continue
+            fp="release/${fname}"
+            hash=$(sha256sum "$fp" | awk '{print $1}')
+            size=$(stat -c%s "$fp")
+            assets_json=$(printf '%s' "$assets_json" | jq \
+              --arg name "$fname" --arg sha256 "$hash" --argjson size "$size" \
+              '. + [{"name":$name,"sha256":$sha256,"size":$size}]')
+          done < <(ls release/ | sort)
+          jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg tag "$RELEASE_TAG" \
+            --arg version "$RELEASE_TAG" \
+            --arg commit_sha "$GITHUB_SHA" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson assets "$assets_json" \
+            '{"repo":$repo,"tag":$tag,"version":$version,"commit_sha":$commit_sha,"created_at":$created_at,"build_timestamp":$created_at,"assets":$assets}' \
+            > release/manifest.json
+
+          # Import GPG key and create detached ASCII-armored signature.
+          # Signing is skipped (with a warning) when the org secret is absent —
+          # the media server treats manifest.json.sig as optional.
+          if [[ -z "${GPG_SIGNING_KEY:-}" ]]; then
+            echo "::warning::GPG_SIGNING_KEY secret not set — manifest.json will not be signed"
+          else
+            echo "$GPG_SIGNING_KEY" | gpg --batch --import
+            if [[ -n "${GPG_SIGNING_KEY_PASSPHRASE:-}" ]]; then
+              echo "$GPG_SIGNING_KEY_PASSPHRASE" | gpg --batch --pinentry-mode loopback \
+                --passphrase-fd 0 --armor --detach-sign \
+                --output release/manifest.json.sig release/manifest.json
+            else
+              gpg --batch --armor --detach-sign \
+                --output release/manifest.json.sig release/manifest.json
+            fi
+          fi
+          ls -lh release/
+
       - name: Remove previous RC for a clean refresh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -246,6 +299,10 @@ jobs:
             Download the binary for each platform and run the manual suite
             (`tests/tests.sh` / `tests/tests.ps1`) on real hardware, then tick the
             matching box in the PR checklist. All boxes must be checked before merge.
+
+            **Integrity verification:** Each archive ships with a `.sha256` sidecar.
+            `manifest.json` lists all assets with SHA-256 digests; `manifest.json.sig`
+            is a detached ASCII-armored GPG signature over `manifest.json`.
 
   # ── Single required status context for the PR build path ─────────────────
   # always() so it always reports; explicit result checks so any failed
@@ -345,6 +402,59 @@ jobs:
           done
           ls -lh release/
 
+      - name: Generate per-asset SHA256, manifest and signature
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_SIGNING_KEY_PASSPHRASE: ${{ secrets.GPG_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${{ needs.detect-changes.outputs.version }}"
+
+          # Per-asset .sha256 sidecar files
+          for f in release/*; do
+            [[ -f "$f" ]] || continue
+            sha256sum "$f" | awk '{print $1}' > "${f}.sha256"
+          done
+
+          # Build manifest.json (exclude .sha256 sidecars from the assets list)
+          assets_json='[]'
+          while IFS= read -r fname; do
+            [[ "$fname" == *.sha256 ]] && continue
+            fp="release/${fname}"
+            hash=$(sha256sum "$fp" | awk '{print $1}')
+            size=$(stat -c%s "$fp")
+            assets_json=$(printf '%s' "$assets_json" | jq \
+              --arg name "$fname" --arg sha256 "$hash" --argjson size "$size" \
+              '. + [{"name":$name,"sha256":$sha256,"size":$size}]')
+          done < <(ls release/ | sort)
+          jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg tag "$RELEASE_TAG" \
+            --arg version "$RELEASE_TAG" \
+            --arg commit_sha "$GITHUB_SHA" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson assets "$assets_json" \
+            '{"repo":$repo,"tag":$tag,"version":$version,"commit_sha":$commit_sha,"created_at":$created_at,"build_timestamp":$created_at,"assets":$assets}' \
+            > release/manifest.json
+
+          # Import GPG key and create detached ASCII-armored signature.
+          # Signing is skipped (with a warning) when the org secret is absent —
+          # the media server treats manifest.json.sig as optional.
+          if [[ -z "${GPG_SIGNING_KEY:-}" ]]; then
+            echo "::warning::GPG_SIGNING_KEY secret not set — manifest.json will not be signed"
+          else
+            echo "$GPG_SIGNING_KEY" | gpg --batch --import
+            if [[ -n "${GPG_SIGNING_KEY_PASSPHRASE:-}" ]]; then
+              echo "$GPG_SIGNING_KEY_PASSPHRASE" | gpg --batch --pinentry-mode loopback \
+                --passphrase-fd 0 --armor --detach-sign \
+                --output release/manifest.json.sig release/manifest.json
+            else
+              gpg --batch --armor --detach-sign \
+                --output release/manifest.json.sig release/manifest.json
+            fi
+          fi
+          ls -lh release/
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -365,6 +475,12 @@ jobs:
             - Windows x86_64
             - macOS x86_64 / arm64 (Apple Silicon)
             - FreeBSD x86_64
+
+            ## Integrity Verification
+            Each archive ships with a `.sha256` sidecar containing the hex digest.
+            `manifest.json` lists every asset with its SHA-256 hash and byte size.
+            `manifest.json.sig` is a detached ASCII-armored GPG signature over
+            `manifest.json`, signed with the NoMercy Entertainment org key.
 
             All images scanned with Trivy; results in the Security tab.
 
