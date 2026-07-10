@@ -1,8 +1,16 @@
 name: npm Publish (ffmpeg-static)
 
+# Releases are created by main.yml with the default GITHUB_TOKEN, whose events
+# never trigger other workflows (GitHub recursion prevention) — so the release
+# trigger below only fires for manually created releases. workflow_run is the
+# reliable path: it fires when the CI/CD Pipeline completes on master, and the
+# version-check gate keeps it a no-op unless clients/npm was actually bumped.
 on:
   release:
     types: [created]
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types: [completed]
   workflow_dispatch:
 
 defaults:
@@ -13,6 +21,10 @@ jobs:
   # Gate first: a binary-only release never bumps the npm client version, so
   # this check skips the whole publish job — the npm CI ignores binary changes.
   check:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master')
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.version-check.outputs.skip }}
