@@ -192,6 +192,18 @@ else
                     -DSDL_JOYSTICK=OFF \
                     -DSDL_HAPTIC=OFF \
                     -DWITH_SYSROOT=${SDK_PATH}"
+    elif [[ ${TARGET_OS} == "freebsd" ]]; then
+        # X11 must stay off: SDL's cmake finds the HOST X11 headers in
+        # /usr/include and the resulting -I/usr/include shadows the sysroot's
+        # libc headers with glibc's; audio uses the sysroot's OSS headers
+        CONFIG_ARG="-DSDL_SHARED=OFF \
+                    -DSDL_STATIC=ON \
+                    -DSDL_STATIC_PIC=ON \
+                    -DSDL_TEST=OFF \
+                    -DSDL_X11=OFF \
+                    -DSDL_X11_SHARED=OFF \
+                    -DSDL_PULSEAUDIO=OFF \
+                    -DSDL_PULSEAUDIO_SHARED=OFF"
     fi
 fi
 
@@ -207,7 +219,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 make -j$(nproc) && make install
 
-if [[ ${TARGET_OS} == "darwin" ]]; then
+if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" ]]; then
     sed -ri -e 's/\-Wl,\-\-no\-undefined.*//' -e 's/ \-l\/.+?\.a//g' ${PREFIX}/lib/pkgconfig/sdl2.pc
 elif [[ ${TARGET_OS} == "linux" ]]; then
     sed -ri -e 's/\-Wl,\-\-no\-undefined.*//' -e 's/ \-l\/.+?\.a//g' ${PREFIX}/lib/pkgconfig/sdl2.pc

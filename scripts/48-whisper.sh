@@ -1,5 +1,11 @@
 #!/bin/bash
 
+if [[ ${TARGET_OS} == "freebsd" ]]; then
+    # The generated whisper.pc treats every non-linux/darwin target as Windows
+    # (-lwinpthread -lws2_32 -lopenblas), which cannot link on FreeBSD
+    exit 255
+fi
+
 whisper_version=1.8.3
 
 rm -f /ffmpeg_build.log

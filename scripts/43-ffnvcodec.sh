@@ -1,6 +1,7 @@
 #!/bin/bash
 
-if [[ ${TARGET_OS} == "darwin" ]]; then
+if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" ]]; then
+    # The FreeBSD NVIDIA driver ships no NVENC/CUVID userland
     exit 255
 fi
 

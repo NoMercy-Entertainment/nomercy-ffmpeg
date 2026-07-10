@@ -28,7 +28,7 @@ on:
 # Single source of truth for the platform list. Anything that needs to know
 # about platforms (this workflow, the matrix in main.yml) reads it from here.
 env:
-  ALL_PLATFORMS: "linux-x86_64 linux-aarch64 windows-x86_64 darwin-x86_64 darwin-arm64"
+  ALL_PLATFORMS: "linux-x86_64 linux-aarch64 windows-x86_64 darwin-x86_64 darwin-arm64 freebsd-x86_64"
 
 jobs:
   detect-changes:
@@ -75,12 +75,15 @@ jobs:
           # retired 2025-12-04; Intel macOS is supported until ~Fall 2027).
           # macos-latest is arm64. ubuntu-latest is x86_64 — linux-aarch64 can
           # only verify the archive extracts, smoke.sh handles the cross-arch skip.
+          # freebsd-x86_64 has no GitHub-hosted runner; like linux-aarch64 it
+          # runs on ubuntu-latest where smoke.sh downgrades to a presence check.
           declare -A OS=(
             [linux-x86_64]=ubuntu-latest
             [linux-aarch64]=ubuntu-latest
             [windows-x86_64]=windows-latest
             [darwin-x86_64]=macos-15-intel
             [darwin-arm64]=macos-latest
+            [freebsd-x86_64]=ubuntu-latest
           )
           declare -A EXT=(
             [linux-x86_64]=tar.gz
@@ -88,6 +91,7 @@ jobs:
             [windows-x86_64]=zip
             [darwin-x86_64]=tar.gz
             [darwin-arm64]=tar.gz
+            [freebsd-x86_64]=tar.gz
           )
           declare -A KIND=(
             [linux-x86_64]=unix
@@ -95,6 +99,7 @@ jobs:
             [windows-x86_64]=windows
             [darwin-x86_64]=unix
             [darwin-arm64]=unix
+            [freebsd-x86_64]=unix
           )
 
           emit_outputs() {
@@ -166,12 +171,19 @@ jobs:
           matches "^(scripts|dev)/includes/[^/]+$"     && SHARED=true
           matches "^dev/init/"                         && SHARED=true
 
+          # npm-publish.yml is an npm-client-only workflow — it never affects
+          # the binaries, so a change to it alone must not force a rebuild.
           WORKFLOW=false
-          matches "^\.github/workflows/" && WORKFLOW=true
+          if echo "${CHANGED_FILES}" \
+               | grep -E "^\.github/workflows/" \
+               | grep -qvE "^\.github/workflows/npm-publish\.yml$"; then
+            WORKFLOW=true
+          fi
 
           LINUX_SCRIPTS=false;   matches "^(scripts|dev)/includes/linux/"   && LINUX_SCRIPTS=true
           DARWIN_SCRIPTS=false;  matches "^(scripts|dev)/includes/darwin/"  && DARWIN_SCRIPTS=true
           WINDOWS_SCRIPTS=false; matches "^(scripts|dev)/includes/windows/" && WINDOWS_SCRIPTS=true
+          FREEBSD_SCRIPTS=false; matches "^(scripts|dev)/includes/freebsd/" && FREEBSD_SCRIPTS=true
 
           # Base image rebuilds on its own Dockerfile or shared script changes.
           BASE_CHANGED=false
@@ -206,6 +218,7 @@ jobs:
           echo "  LINUX_SCRIPTS:    ${LINUX_SCRIPTS}"
           echo "  DARWIN_SCRIPTS:   ${DARWIN_SCRIPTS}"
           echo "  WINDOWS_SCRIPTS:  ${WINDOWS_SCRIPTS}"
+          echo "  FREEBSD_SCRIPTS:  ${FREEBSD_SCRIPTS}"
 
           PLATFORMS=()
 
@@ -224,6 +237,7 @@ jobs:
                 linux-*)   var=LINUX_SCRIPTS   ;;
                 darwin-*)  var=DARWIN_SCRIPTS  ;;
                 windows-*) var=WINDOWS_SCRIPTS ;;
+                freebsd-*) var=FREEBSD_SCRIPTS ;;
                 *)         var=""              ;;
               esac
               result="$(platform_changed "${p}" "${var}")"

@@ -28,7 +28,7 @@ feature/fix → dev → (PR, the only route) → master → release
 A PR into `master` can only merge when **all** of these are green:
 
 - `pr-validation` — source branch is `dev` and every manual-test checkbox is ticked.
-- `pr-build` — full build + export + smoke passed for all 5 platforms.
+- `pr-build` — full build + export + smoke passed for all 6 platforms.
 - At least one approving review; conversations resolved; branch up to date.
 
 On merge, `master` builds the **final release** `vX.Y.Z`, runs the Trivy scan, and the `-rc`

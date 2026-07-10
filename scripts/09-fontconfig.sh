@@ -22,6 +22,9 @@ PYEOF
 	fi
 elif [[ ${TARGET_OS} == "linux" && ${ARCH} == "aarch64" ]]; then
 	export ac_cv_va_copy="C99"
+elif [[ ${TARGET_OS} == "freebsd" ]]; then
+	# cross-compiling: the va_copy configure check is a run-test
+	export ac_cv_va_copy="C99"
 elif [[ ${TARGET_OS} == "windows" ]]; then
 	export ac_cv_va_copy="C99"
 	python3 - <<'PYEOF'

@@ -23,6 +23,7 @@ Run the full manual suite on each platform — `tests/tests.sh` (unix) or `tests
 - [ ] windows-x86_64 — tested on real hardware, `tests/tests.ps1` ✓, version correct
 - [ ] darwin-x86_64 — tested on real hardware, `tests/tests.sh` ✓, version correct
 - [ ] darwin-arm64 — tested on real hardware, `tests/tests.sh` ✓, version correct
+- [ ] freebsd-x86_64 — tested on real hardware, `tests/tests.sh` ✓, version correct
 - [ ] Hardware acceleration (NVENC / AMF / VPL) verified where applicable
 <!-- TEST-CHECKLIST-END -->
 

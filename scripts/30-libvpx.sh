@@ -9,6 +9,10 @@ elif [[ "${ARCH}" == "arm64" && "${TARGET_OS}" == "darwin" ]]; then
     export LIBVPX_TARGET="--target=${ARCH}-darwin23-gcc"
 elif [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "darwin" ]]; then
     export LIBVPX_TARGET="--target=${ARCH}-darwin14-gcc"
+elif [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "freebsd" ]]; then
+    # libvpx has no freebsd target; x86_64-linux-gcc is generic ELF/pthreads
+    # and keeps the x86_64 asm enabled
+    export LIBVPX_TARGET="--target=${ARCH}-linux-gcc"
 fi
 
 cd /build/libvpx

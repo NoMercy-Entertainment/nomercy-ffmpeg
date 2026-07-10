@@ -1,6 +1,7 @@
 #!/bin/bash
 
-if [[ ${TARGET_OS} == "darwin" ]]; then
+if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" ]]; then
+    # QSV needs libva + an Intel media driver; libva is Linux-only here
     exit 255
 fi
 

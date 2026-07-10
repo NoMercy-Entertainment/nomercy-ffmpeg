@@ -1,6 +1,7 @@
 #!/bin/bash
 
-if [[ ${TARGET_OS} == "darwin" || ${ARCH} == "arm64" || ${ARCH} == "aarch64" ]]; then
+if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" || ${ARCH} == "arm64" || ${ARCH} == "aarch64" ]]; then
+	# freebsd: librsvg is Rust and the x86_64-unknown-freebsd cargo target is not set up
 	exit 255;
 fi
 

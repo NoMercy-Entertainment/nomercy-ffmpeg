@@ -1,5 +1,17 @@
 #!/bin/bash
 
+# code.videolan.org intermittently drops clones under repeated CI-style load;
+# retry with backoff instead of failing the whole build
+clone_retry() {
+    local branch=$1 url=$2 dest=$3 i
+    for i in 1 2 3 4 5; do
+        git clone --branch "${branch}" "${url}" "${dest}" && return 0
+        rm -rf "${dest}"
+        sleep $((i * 10))
+    done
+    return 1
+}
+
 EXTRA_FLAGS=""
 
 if [[ ${TARGET_OS} == "darwin" ]]; then
@@ -7,7 +19,7 @@ if [[ ${TARGET_OS} == "darwin" ]]; then
 fi
 
 #region libdvdcss
-git clone --branch 1.4.3 https://code.videolan.org/videolan/libdvdcss.git /build/libdvdcss
+clone_retry 1.4.3 https://code.videolan.org/videolan/libdvdcss.git /build/libdvdcss || exit 1
 cd /build/libdvdcss
 
 autoreconf -i
@@ -23,7 +35,7 @@ rm -rf /build/libdvdcss && cd /build
 #endregion
 
 #region libdvdread
-git clone --branch 6.1.3 https://code.videolan.org/videolan/libdvdread.git /build/libdvdread
+clone_retry 6.1.3 https://code.videolan.org/videolan/libdvdread.git /build/libdvdread || exit 1
 cd /build/libdvdread
 
 autoreconf -i
@@ -39,7 +51,7 @@ rm -rf /build/libdvdread && cd /build
 #endregion
 
 #region libdvdnav
-git clone --branch 6.1.1 https://code.videolan.org/videolan/libdvdnav.git /build/libdvdnav
+clone_retry 6.1.1 https://code.videolan.org/videolan/libdvdnav.git /build/libdvdnav || exit 1
 cd /build/libdvdnav
 
 autoreconf -i

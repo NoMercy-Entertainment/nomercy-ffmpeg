@@ -1,5 +1,13 @@
 #!/bin/bash
 
+if [[ ${TARGET_OS} == "freebsd" ]]; then
+    # pthread_{set,get}affinity_np are declared in <pthread_np.h> on FreeBSD
+    sed -i '0,/^#include/s//#include <pthread.h>\n#include <pthread_np.h>\n&/' /build/libxavs2/source/common/threadpool.c
+    # clang makes the encoder's thread-entry function pointer mismatch a hard
+    # error by default; configure --extra-cflags does not reach these objects
+    export CFLAGS="${CFLAGS} -Wno-incompatible-function-pointer-types"
+fi
+
 if [[ ${TARGET_OS} == "darwin" ]]; then
     cp -r /build/libxavs2/build/linux /build/libxavs2/build/darwin
     cd /build/libxavs2/build/darwin

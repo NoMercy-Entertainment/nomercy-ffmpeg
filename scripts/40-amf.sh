@@ -1,6 +1,7 @@
 #!/bin/bash
 
-if [[ ${TARGET_OS} == "darwin" ]]; then
+if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" ]]; then
+    # AMD provides no AMF runtime for FreeBSD
     exit 255
 fi
 
