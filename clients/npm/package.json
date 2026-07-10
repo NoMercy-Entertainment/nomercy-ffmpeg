@@ -1,7 +1,7 @@
 {
 	"name": "@nomercy-entertainment/ffmpeg-static",
 	"type": "module",
-	"version": "1.0.36",
+	"version": "1.0.38",
 	"description": "Fetches the NoMercy FFmpeg fork binary (custom muxers, AACS/BD+ decrypt, libass) for the current platform. One static library for every CI action and every NoMercy package that needs ffmpeg.",
 	"author": {
 		"name": "NoMercy Entertainment",
