@@ -1,12 +1,6 @@
 #!/bin/bash
 
-if [[ ${TARGET_OS} == "freebsd" ]]; then
-    # The generated whisper.pc treats every non-linux/darwin target as Windows
-    # (-lwinpthread -lws2_32 -lopenblas), which cannot link on FreeBSD
-    exit 255
-fi
-
-whisper_version=1.8.3
+whisper_version=1.9.1
 
 rm -f /ffmpeg_build.log
 touch /ffmpeg_build.log
@@ -94,6 +88,10 @@ else
         if [[ ${ARCH} == "x86_64" ]]; then
             WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15.0"
         fi
+    elif [[ ${TARGET_OS} == "freebsd" ]]; then
+        # FreeBSD base ships libomp.so but no libomp.a, so clang's -fopenmp
+        # cannot survive the fully static ffmpeg link; use ggml's own threadpool
+        WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_OPENMP=OFF"
     fi
     mkdir build && cd build
 
@@ -150,6 +148,8 @@ lib_private_flags="Libs.private: -lstdc++"
     elif [[ ${TARGET_OS} == "darwin" ]]; then
         lib_flags+=" -lggml-blas"
         lib_private_flags+=" -lz"
+    elif [[ ${TARGET_OS} == "freebsd" ]]; then
+        lib_private_flags+=" -lm -pthread"
     else
         lib_flags+=" -lggml-blas -lwinpthread -lgomp -lws2_32 -fopenmp"
         lib_private_flags+=" -lm -lopenblas -lwinpthread -lgomp -lws2_32 -fopenmp"

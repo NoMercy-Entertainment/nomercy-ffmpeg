@@ -6,7 +6,7 @@ fi
 rm -f /ffmpeg_build.log
 touch /ffmpeg_build.log
 
-git clone --branch v0.3.30 https://github.com/OpenMathLib/OpenBLAS /build/OpenBLAS
+git clone --branch v0.3.34 https://github.com/OpenMathLib/OpenBLAS /build/OpenBLAS
 cd /build/OpenBLAS
 
 mkdir build && cd build
