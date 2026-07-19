@@ -133,6 +133,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 | **VOBsub muxer** | Muxer | Writes DVD-style VOBsub subtitle output |
 | **OmniDrive protocol** | Protocol | Direct I/O against NoMercy OmniDrive storage (Linux/Windows/FreeBSD) |
 | **Auto-create directories** | Core patch | Output muxers automatically create missing parent directories |
+| **`whisper` language detection** | Filter patch | The `whisper` filter exposes the auto-detected spoken language (`lavfi.whisper.language` + `lavfi.whisper.language_confidence` frame metadata, `detected_language` object in JSON output) |
 | **AACS/BD+ static keydb** | Patch | libaacs/libbluray patched for built-in Blu-ray decryption support |
 
 #### 🤖 **AI & Analysis**

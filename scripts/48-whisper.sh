@@ -172,6 +172,15 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     mv ${PREFIX}/lib/ggml-cpu.a ${PREFIX}/lib/libggml-cpu.a
 fi
 
+# Replace the upstream whisper filter with our patched version that exposes
+# the auto-detected language as frame metadata (lavfi.whisper.language +
+# lavfi.whisper.language_confidence) and as a leading JSON detection object.
+# See: https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/issues/38
+if [[ -f /scripts/includes/af_whisper.c ]]; then
+    cp /scripts/includes/af_whisper.c /build/ffmpeg/libavfilter/af_whisper.c
+    log "Applied af_whisper.c language-detection patch"
+fi
+
 add_enable "--enable-whisper"
 
 exit 0
