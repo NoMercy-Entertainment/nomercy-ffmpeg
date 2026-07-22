@@ -190,6 +190,9 @@ typedef struct VariantStream {
     const char *varname;  /* variant name */
     const char *subtitle_varname;  /* subtitle variant name */
     const char *audio_varname;  /* audio rendition name */
+    int autoselect;       /* rendition AUTOSELECT: 0 unset, 1 yes, 2 no */
+    int subtitle_forced;  /* subtitle rendition FORCED flag */
+    const char *characteristics;  /* rendition CHARACTERISTICS string */
 } VariantStream;
 
 typedef struct ClosedCaptionsStream {
@@ -1385,6 +1388,11 @@ static int create_master_playlist(AVFormatContext *s,
 
     ff_hls_write_playlist_version(hls->m3u8_out, hls->version);
 
+    /* Apple requires this tag in the multivariant playlist when segments
+     * start with keyframes; hls_flags independent_segments asserts that. */
+    if (hls->flags & HLS_INDEPENDENT_SEGMENTS)
+        avio_printf(hls->m3u8_out, "#EXT-X-INDEPENDENT-SEGMENTS\n");
+
     for (i = 0; i < hls->nb_ccstreams; i++) {
         ccs = &(hls->cc_streams[i]);
         avio_printf(hls->m3u8_out, "#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS");
@@ -1413,7 +1421,8 @@ static int create_master_playlist(AVFormatContext *s,
                 if (vs->streams[j]->codecpar->ch_layout.nb_channels > nb_channels)
                     nb_channels = vs->streams[j]->codecpar->ch_layout.nb_channels;
 
-        ff_hls_write_audio_rendition(hls->m3u8_out, vs->agroup, m3u8_rel_name, vs->language, vs->audio_varname, i, hls->has_default_key ? vs->is_default : 1, nb_channels);
+        ff_hls_write_audio_rendition(hls->m3u8_out, vs->agroup, m3u8_rel_name, vs->language, vs->audio_varname, i, hls->has_default_key ? vs->is_default : 1, nb_channels,
+                                     vs->autoselect == 1 ? 1 : (vs->autoselect == 2 ? 0 : -1), vs->characteristics);
     }
 
     /* For variant streams with video add #EXT-X-STREAM-INF tag with attributes*/
@@ -1486,6 +1495,11 @@ static int create_master_playlist(AVFormatContext *s,
                         vs->ccgroup);
         }
 
+        /* Apple requires CLOSED-CAPTIONS=NONE on every variant when the
+         * presentation has no closed captions at all. */
+        if (!hls->nb_ccstreams)
+            ccgroup = "NONE";
+
         if (vid_st && vs->sgroup) {
             sgroup = vs->sgroup;
             vtt_m3u8_rel_name = get_relative_url(hls->master_m3u8_url, vs->vtt_m3u8_name);
@@ -1495,7 +1509,9 @@ static int create_master_playlist(AVFormatContext *s,
             }
 
             ff_hls_write_subtitle_rendition(hls->m3u8_out, sgroup, vtt_m3u8_rel_name, vs->language,
-                    vs->subtitle_varname, i, hls->has_default_key ? vs->is_default : 1);
+                    vs->subtitle_varname, i, hls->has_default_key ? vs->is_default : 1,
+                    vs->autoselect == 1 ? 1 : (vs->autoselect == 2 ? 0 : -1),
+                    vs->subtitle_forced, vs->characteristics);
         }
 
         if (!hls->has_default_key || !hls->has_video_m3u8) {
@@ -2033,6 +2049,13 @@ static int parse_variant_stream_mapstring(AVFormatContext *s)
      * EXT-X-MEDIA tag in the master playlist. A string can be given as
      * value; %XX percent-escapes are decoded (e.g. aname:English%205.1
      * gives NAME="English 5.1") since the map syntax is space-separated.
+     * autoselect: is key to set AUTOSELECT on the variant's EXT-X-MEDIA
+     * rendition. Allowed values are yes/1 and no/0. DEFAULT=YES and
+     * FORCED=YES renditions always get AUTOSELECT=YES as the spec requires.
+     * sforced: is key to mark the subtitle rendition FORCED (yes/1).
+     * characteristics: is key to set the rendition CHARACTERISTICS string
+     * (e.g. characteristics:public.accessibility.describes-video). %XX
+     * escapes are decoded, use %2C for the comma between multiple values.
      */
     p = av_strdup(hls->var_stream_map);
     if (!p)
@@ -2094,11 +2117,24 @@ static int parse_variant_stream_mapstring(AVFormatContext *s)
                 vs->varname  = val;
                 continue;
             } else if (av_strstart(keyval, "sname:", &val)) {
+                percent_decode_inplace((char *)val);
                 vs->subtitle_varname  = val;
                 continue;
             } else if (av_strstart(keyval, "aname:", &val)) {
                 percent_decode_inplace((char *)val);
                 vs->audio_varname  = val;
+                continue;
+            } else if (av_strstart(keyval, "autoselect:", &val)) {
+                vs->autoselect = (!av_strncasecmp(val, "YES", strlen("YES")) ||
+                                  !av_strncasecmp(val, "1", strlen("1"))) ? 1 : 2;
+                continue;
+            } else if (av_strstart(keyval, "sforced:", &val)) {
+                vs->subtitle_forced = (!av_strncasecmp(val, "YES", strlen("YES")) ||
+                                       !av_strncasecmp(val, "1", strlen("1")));
+                continue;
+            } else if (av_strstart(keyval, "characteristics:", &val)) {
+                percent_decode_inplace((char *)val);
+                vs->characteristics = val;
                 continue;
             } else if (av_strstart(keyval, "agroup:", &val)) {
                 vs->agroup   = val;

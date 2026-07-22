@@ -22,6 +22,7 @@
 
 #include "config.h"
 #include <stdint.h>
+#include <string.h>
 #include <time.h>
 
 #include "libavutil/time_internal.h"
@@ -37,22 +38,39 @@ void ff_hls_write_playlist_version(AVIOContext *out, int version)
     avio_printf(out, "#EXT-X-VERSION:%d\n", version);
 }
 
+/* autoselect: 1 = YES, 0 = NO, -1 = unset. RFC 8216 requires AUTOSELECT=YES
+ * when DEFAULT=YES, and Apple requires it for FORCED renditions, so those
+ * override an unset or contradicting value. */
+static void write_rendition_autoselect(AVIOContext *out, int autoselect,
+                                       int is_default, int forced)
+{
+    if (is_default || forced || autoselect == 1)
+        avio_printf(out, "AUTOSELECT=YES,");
+    else if (autoselect == 0)
+        avio_printf(out, "AUTOSELECT=NO,");
+}
+
 void ff_hls_write_audio_rendition(AVIOContext *out, const char *agroup,
                                   const char *filename, const char *language,
                                   const char *aname, int name_id, int is_default,
-                                  int nb_channels)
+                                  int nb_channels, int autoselect,
+                                  const char *characteristics)
 {
     if (!out || !agroup || !filename)
         return;
 
-    avio_printf(out, "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"group_%s\"", agroup);
+    avio_printf(out, "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"%s\"", agroup);
     if (aname) {
         avio_printf(out, ",NAME=\"%s\",DEFAULT=%s,", aname, is_default ? "YES" : "NO");
     } else {
         avio_printf(out, ",NAME=\"audio_%d\",DEFAULT=%s,", name_id, is_default ? "YES" : "NO");
     }
+    write_rendition_autoselect(out, autoselect, is_default, 0);
     if (language) {
         avio_printf(out, "LANGUAGE=\"%s\",", language);
+    }
+    if (characteristics && characteristics[0]) {
+        avio_printf(out, "CHARACTERISTICS=\"%s\",", characteristics);
     }
     if (nb_channels) {
         avio_printf(out, "CHANNELS=\"%d\",", nb_channels);
@@ -62,7 +80,9 @@ void ff_hls_write_audio_rendition(AVIOContext *out, const char *agroup,
 
 void ff_hls_write_subtitle_rendition(AVIOContext *out, const char *sgroup,
                                      const char *filename, const char *language,
-                                     const char *sname, int name_id, int is_default)
+                                     const char *sname, int name_id, int is_default,
+                                     int autoselect, int forced,
+                                     const char *characteristics)
 {
     if (!out || !filename)
         return;
@@ -74,8 +94,13 @@ void ff_hls_write_subtitle_rendition(AVIOContext *out, const char *sgroup,
         avio_printf(out, ",NAME=\"subtitle_%d\",", name_id);
     }
     avio_printf(out, "DEFAULT=%s,", is_default ? "YES" : "NO");
+    write_rendition_autoselect(out, autoselect, is_default, forced);
+    avio_printf(out, "FORCED=%s,", forced ? "YES" : "NO");
     if (language) {
         avio_printf(out, "LANGUAGE=\"%s\",", language);
+    }
+    if (characteristics && characteristics[0]) {
+        avio_printf(out, "CHARACTERISTICS=\"%s\",", characteristics);
     }
     avio_printf(out, "URI=\"%s\"\n", filename);
 }
@@ -103,16 +128,9 @@ void ff_hls_write_stream_info(AVStream *st, AVIOContext *out, int bandwidth,
                 st->codecpar->height);
     if (st && st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
         st->avg_frame_rate.num > 0 && st->avg_frame_rate.den > 0) {
-        /* RFC 8216 4.3.4.2: decimal-floating-point, at most three decimal
-         * places; trailing zeros are trimmed (23.976, 29.97, 25) */
-        char frame_rate[32];
-        int len = snprintf(frame_rate, sizeof(frame_rate), "%.3f",
-                           av_q2d(st->avg_frame_rate));
-        while (len > 0 && frame_rate[len - 1] == '0')
-            frame_rate[--len] = '\0';
-        if (len > 0 && frame_rate[len - 1] == '.')
-            frame_rate[--len] = '\0';
-        avio_printf(out, ",FRAME-RATE=%s", frame_rate);
+        /* RFC 8216 4.3.4.2: decimal-floating-point, rounded to three
+         * decimal places (23.976, 24.000, 29.970) */
+        avio_printf(out, ",FRAME-RATE=%.3f", av_q2d(st->avg_frame_rate));
     }
     if (codecs && codecs[0])
         avio_printf(out, ",CODECS=\"%s\"", codecs);
@@ -125,9 +143,14 @@ void ff_hls_write_stream_info(AVStream *st, AVIOContext *out, int bandwidth,
         avio_printf(out, ",VIDEO-RANGE=%s", video_range);
     }
     if (agroup && agroup[0])
-        avio_printf(out, ",AUDIO=\"group_%s\"", agroup);
-    if (ccgroup && ccgroup[0])
-        avio_printf(out, ",CLOSED-CAPTIONS=\"%s\"", ccgroup);
+        avio_printf(out, ",AUDIO=\"%s\"", agroup);
+    if (ccgroup && ccgroup[0]) {
+        /* NONE is an enumerated value and must not be quoted */
+        if (!strcmp(ccgroup, "NONE"))
+            avio_printf(out, ",CLOSED-CAPTIONS=NONE");
+        else
+            avio_printf(out, ",CLOSED-CAPTIONS=\"%s\"", ccgroup);
+    }
     if (sgroup && sgroup[0])
         avio_printf(out, ",SUBTITLES=\"%s\"", sgroup);
     avio_printf(out, "\n%s\n\n", filename);
