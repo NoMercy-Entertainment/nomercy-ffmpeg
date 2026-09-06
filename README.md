@@ -177,7 +177,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 | Component | Type | What it does |
 |-----------|------|--------------|
 | **`keydetect`** | Audio filter | Musical key and chord detection |
-| **`beatdetect`** | Audio filter | Beat detection via spectral flux analysis |
+| **`beatdetect`** | Audio filter | Tempo, beat grid and confidence as `lavfi.beatdetect.*` frame metadata; octave decided from the onsets, not from a preferred range |
 | **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems (Spleeter 2stems on ggml) |
 | **OCR subtitle encoder** | Codec | Converts bitmap subtitles (DVD/Blu-ray) to WebVTT text using Tesseract OCR |
 | **Sprite-sheet muxer** | Muxer | Generates thumbnail sprite sheets with a WebVTT timeline for player scrubbing |

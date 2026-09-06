@@ -299,6 +299,10 @@ run_test "librav1e" "-hide_banner -encoders" "rav1e"
 # Stemsplit filter
 run_test "stemsplit" "-hide_banner -filters | grep stemsplit" "stemsplit"
 
+# Beat detection: a 174 BPM click track must come back as 174, not as the
+# 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).
+run_test "beatdetect" "-f lavfi -i \"aevalsrc=(sin(2*PI*1200*t)*exp(-45*mod(t\\,60/174))+0.9*sin(2*PI*70*t)*exp(-18*mod(t\\,60/174)))*0.7:s=44100:d=20\" -af beatdetect -f null -" "lavfi.beatdetect.bpm=17"
+
 # OCR subtitle encoder
 run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
 
