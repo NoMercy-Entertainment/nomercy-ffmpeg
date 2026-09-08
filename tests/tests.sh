@@ -67,7 +67,7 @@ mkdir -p "${TestRoot}"
 # Counts the call sites at the bottom of this file so the progress counter can
 # read "[3/25]". Anchored at line start so the definitions above never count.
 get_test_runs_count() {
-	grep -cE '^(run_test|run_hw_test) "' "${BASH_SOURCE[0]}"
+	grep -cE '^(run_test|run_hw_test|run_platform_test) "' "${BASH_SOURCE[0]}"
 }
 
 TOTAL_RUNS=$(get_test_runs_count)
@@ -244,6 +244,36 @@ run_hw_test() {
 	report_add "${name}" skipped 0 "${reason}"
 }
 
+# Same contract again, for a component only some platforms build. Where it IS
+# built, absence is a failure; everywhere else it is a skip carrying the reason,
+# so "we never build it here" can never be confused with "it went missing".
+# The platform list mirrors the build script's own guard — enabling a component
+# for another platform means adding that platform here, and this test is what
+# makes forgetting that visible.
+run_platform_test() {
+	local name=$1
+	local platforms=$2
+	local command=$3
+	local expected_output=$4
+	local reason
+
+	case " ${platforms} " in
+	*" ${Platform} "*)
+		run_test "$name" "$command" "$expected_output"
+		return
+		;;
+	esac
+
+	reason="not built for ${Platform}; built on: ${platforms}"
+	TOTAL_TESTS=$((TOTAL_TESTS + 1))
+	name=$(echo $name | tr '[:lower:]' '[:upper:]')
+	text_with_padding "🧪 Testing ${name}" "[${TOTAL_TESTS}/${TOTAL_RUNS}]" 1
+	text_with_padding "➖ ${name} was skipped" "[0s]" 1
+	echo "   ${reason}"
+	SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+	report_add "${name}" skipped 0 "${reason}"
+}
+
 # Main execution
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 printf "%s\n" "        _   _       __  __                      "
@@ -274,7 +304,7 @@ run_test "libopus" "-y -i ${SampleAudio} -c:a libopus ${TestRoot}/test_opus.opus
 run_test "libmp3lame" "-y -i ${SampleAudio} -c:a libmp3lame ${TestRoot}/test_mp3.mp3" "mp3"
 run_test "libwebp" "-y -i ${SampleImage} -c:v libwebp -f webp ${TestRoot}/test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i ${SampleImage} -c:v libopenjpeg ${TestRoot}/test_jp2.jp2" "openjpeg"
-run_test "librsvg" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
+run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"
 

@@ -37,7 +37,7 @@ New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out
 # read "[3/26]". Anchored at line start so the definitions above never count.
 function get_test_runs_count {
     $lines = Get-Content -Path $PSCommandPath
-    return @($lines | Where-Object { $_ -match '^(run_test|run_hw_test) "' }).Count
+    return @($lines | Where-Object { $_ -match '^(run_test|run_hw_test|run_platform_test) "' }).Count
 }
 
 $TOTAL_RUNS = get_test_runs_count
@@ -197,6 +197,35 @@ function run_hw_test {
     Report-Add -Name $name -Status skipped -DurationSeconds 0 -Reason $reason
 }
 
+# Same contract again, for a component only some platforms build. Where it IS
+# built, absence is a failure; everywhere else it is a skip carrying the reason,
+# so "we never build it here" can never be confused with "it went missing".
+# The platform list mirrors the build script's own guard — enabling a component
+# for another platform means adding that platform here, and this test is what
+# makes forgetting that visible.
+function run_platform_test {
+    param (
+        $name,
+        $platforms,
+        $command,
+        $expected_output
+    )
+
+    if (($platforms -split ' ') -contains $Platform) {
+        run_test $name $command $expected_output
+        return
+    }
+
+    $reason = "not built for ${Platform}; built on: $platforms"
+    $script:TOTAL_TESTS++
+    $name = $name.ToUpper()
+    text_with_padding "🧪 Testing ${name}" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+    text_with_padding "➖ ${name} was skipped" "[ 0s ]" 1
+    Write-Host "   $reason"
+    $script:SKIPPED_TESTS++
+    Report-Add -Name $name -Status skipped -DurationSeconds 0 -Reason $reason
+}
+
 # Main execution
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host '  NoMercy FFmpeg Test Suite'
@@ -217,7 +246,7 @@ run_test "libopus" "-y -i $SampleAudio -c:a libopus $TestRoot\test_opus.opus" "o
 run_test "libmp3lame" "-y -i $SampleAudio -c:a libmp3lame $TestRoot\test_mp3.mp3" "mp3"
 run_test "libwebp" "-y -i $SampleImage -c:v libwebp -f webp $TestRoot\test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i $SampleImage -c:v libopenjpeg $TestRoot\test_jp2.jp2" "openjpeg"
-run_test "librsvg" "-y -i $SampleSvg -frames:v 1 $TestRoot\test_svg.png" "svg"
+run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i $SampleSvg -frames:v 1 $TestRoot\test_svg.png" "svg"
 run_test "libass" "-y -i '${SampleVideo}' -vf ass='${AssSubPath}' '${TestRoot}/test_ass.mp4'" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"
 
