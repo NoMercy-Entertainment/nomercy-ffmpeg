@@ -16,7 +16,7 @@ fi
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --disable-extra-programs \
     ${OPUS_EXTRA_FLAGS} --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --disable-extra-programs \
-    ${OPUS_EXTRA_FLAGS} --host=${CROSS_PREFIX%-} | log
+    ${OPUS_EXTRA_FLAGS} --host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

@@ -46,7 +46,7 @@ if [ ${TARGET_OS} == "windows" ]; then
 		--enable-pcre2-32 \
 		--disable-pcre2grep-libz \
 		--disable-pcre2grep-libbz2 \
-		--disable-pcre2test-libreadline | log
+		--disable-pcre2test-libreadline 2>&1 | log
 
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "pcre2 configure failed"
@@ -85,7 +85,7 @@ if [ ${TARGET_OS} == "windows" ]; then
 	--enable-static \
 	--disable-shared \
 	--with-libiconv-prefix=${PREFIX} \
-	--host=${CROSS_PREFIX%-} | log
+	--host=${CROSS_PREFIX%-} 2>&1 | log
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "gettext configure failed"
 		exit 1
@@ -122,7 +122,7 @@ if [ ${TARGET_OS} == "windows" ]; then
 		--disable-shared \
 		--without-docbook \
 		--without-examples \
-		--without-tests | log
+		--without-tests 2>&1 | log
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "expat configure failed"
 		exit 1
@@ -162,7 +162,7 @@ meson setup build --prefix=${PREFIX} \
 	--cross-file="/build/cross_file.txt" \
 	-Dtests=disabled \
 	-Ddemos=disabled \
-	-Dgtk=disabled | log
+	-Dgtk=disabled 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "pixman configure failed"
@@ -254,7 +254,7 @@ meson setup build --prefix=${PREFIX} \
 	-Dnls=enabled \
 	--wrap-mode=forcefallback \
 	--force-fallback-for=proxy-libintl \
-	--cross-file="/build/glib/cross_file.txt" | log
+	--cross-file="/build/glib/cross_file.txt" 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "$(cat /build/glib/build/meson-logs/meson-log.txt | tail -50)"
@@ -356,7 +356,7 @@ meson setup build --prefix=${PREFIX} \
 	-Dfreetype=enabled \
 	-Dfontconfig=enabled \
 	${CAIRO_EXTRA_FLAGS} \
-	--cross-file="/build/cairo/cross_file.txt" | log -a
+	--cross-file="/build/cairo/cross_file.txt" 2>&1 | log -a
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "$(tail -n 60 /build/cairo/build/meson-logs/meson-log.txt 2>/dev/null)"
@@ -419,7 +419,7 @@ if [[ ${TARGET_OS} != "darwin" ]]; then
 		-Dgio_sniffing=false \
 		-Dglycin=disabled \
 		-Dtests=false \
-		-Dinstalled_tests=false | log
+		-Dinstalled_tests=false 2>&1 | log
 
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "gdk-pixbuf configure failed"
@@ -483,7 +483,7 @@ meson setup build --prefix=${PREFIX} \
 	-Dbuild-testsuite=false \
 	-Dbuild-examples=false \
 	-Dman-pages=false \
-	${PANGO_EXTRA_FLAGS} | log
+	${PANGO_EXTRA_FLAGS} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "pango configure failed"
@@ -586,7 +586,7 @@ meson setup build --prefix=${PREFIX} \
 	-Ddocs=disabled \
 	-Dvala=disabled \
 	${LIBRSVG_EXTRA_FLAGS} \
-	-Dtests=false | log
+	-Dtests=false 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	LDFLAGS="${OLD_LDFLAGS}"

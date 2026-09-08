@@ -5,7 +5,7 @@ cd /build/jpeg
 
 # Configure and compile
 ./configure --disable-shared --enable-static \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libjpeg"
@@ -45,7 +45,7 @@ cmake -S .. -B . \
     -DBUILD_PKGCONFIG_FILES=ON \
     -DBUILD_CODEC=OFF \
     -DWITH_ASTYLE=OFF \
-    -DBUILD_TESTING=OFF | log
+    -DBUILD_TESTING=OFF 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build openjpeg"

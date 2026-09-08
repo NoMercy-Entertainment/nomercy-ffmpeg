@@ -13,7 +13,7 @@ cd /build/fdk-aac
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared \
     --host=${CROSS_PREFIX%-} ${FDK_AAC_TARGET}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared \
-    --host=${CROSS_PREFIX%-} ${FDK_AAC_TARGET} | log
+    --host=${CROSS_PREFIX%-} ${FDK_AAC_TARGET} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

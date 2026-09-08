@@ -42,7 +42,7 @@ fi
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "libgpg-error configure failed"
     exit 1
@@ -95,7 +95,7 @@ fi
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc ${EXTRA_FLAGS} \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic --disable-doc ${EXTRA_FLAGS} \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "libgcrypt configure failed"
     exit 1
@@ -157,7 +157,7 @@ fi
 ./bootstrap --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "libbdplus configure failed"
     exit 1
@@ -216,7 +216,7 @@ fi
 ./bootstrap --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --libdir=${PREFIX}/lib --enable-static --disable-shared --with-pic --disable-doc \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "libaacs configure failed"
     exit 1
@@ -301,7 +301,7 @@ meson setup build \
     -Denable_examples=false \
     -Denable_devtools=false \
     -Denable_docs=false \
-    --cross-file="/build/cross_file.txt" | log
+    --cross-file="/build/cross_file.txt" 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log -a "libbluray configure failed"

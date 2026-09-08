@@ -12,7 +12,7 @@ fi
 
 cd /build/libass
 ./autogen.sh --prefix="${PREFIX}" --enable-static --disable-shared --with-pic ${CONFIG}
-./configure --prefix="${PREFIX}" --enable-static --disable-shared --with-pic ${CONFIG} | log
+./configure --prefix="${PREFIX}" --enable-static --disable-shared --with-pic ${CONFIG} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

@@ -23,7 +23,7 @@ fi
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

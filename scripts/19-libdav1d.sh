@@ -3,7 +3,7 @@
 cd /build/libdav1d
 mkdir build && cd build
 meson --prefix=${PREFIX} --buildtype=release -Ddefault_library=static \
-    --cross-file="/build/cross_file.txt" .. | log
+    --cross-file="/build/cross_file.txt" .. 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

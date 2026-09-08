@@ -10,7 +10,7 @@ git clone https://forgejo.phillippepelzer.me/FiLL/omnidrive.git
 
 cd /build/omnidrive
 
-cmake -S libomnidrive -B libomnidrive/build ${CMAKE_COMMON_ARG} | log
+cmake -S libomnidrive -B libomnidrive/build ${CMAKE_COMMON_ARG} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi

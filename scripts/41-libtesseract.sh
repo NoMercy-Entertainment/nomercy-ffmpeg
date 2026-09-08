@@ -9,7 +9,7 @@ cd /build/leptonica
 ./configure --prefix=${PREFIX} --enable-static --disable-shared \
     --disable-programs \
     --without-libopenjpeg \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build leptonica"
@@ -75,7 +75,7 @@ fi
     --without-curl \
     --with-extra-includes=${PREFIX}/include \
     --with-extra-libraries=${PREFIX}/lib \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libtesseract"

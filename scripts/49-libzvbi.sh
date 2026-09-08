@@ -43,7 +43,7 @@ fi
 	--without-doxygen \
 	--without-x \
 	${EXTRA_FLAGS} \
-	--host=${CROSS_PREFIX%-} | log
+	--host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "libzvbi configure failed"

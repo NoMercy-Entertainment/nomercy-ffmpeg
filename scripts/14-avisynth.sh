@@ -11,7 +11,7 @@ cd /build/avisynth
 mkdir -p build && cd build
 cmake -S .. -B . \
     ${CMAKE_COMMON_ARG} \
-    -DHEADERS_ONLY=ON | log
+    -DHEADERS_ONLY=ON 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
