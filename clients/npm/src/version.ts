@@ -13,7 +13,7 @@ export const REPO = 'NoMercy-Entertainment/nomercy-ffmpeg';
  * Pinned fork release tag. Overridable via `NOMERCY_FFMPEG_VERSION` so a CI job
  * can bump the binary without a package release.
  */
-export const FORK_VERSION = process.env['NOMERCY_FFMPEG_VERSION'] ?? 'v1.0.38';
+export const FORK_VERSION = process.env['NOMERCY_FFMPEG_VERSION'] ?? 'v1.0.40';
 
 /**
  * Upstream ffmpeg version baked into the pinned fork release. Part of the asset
