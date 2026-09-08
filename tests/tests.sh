@@ -59,6 +59,7 @@ SampleVideo="${TestRoot}/sample.mp4"
 SampleAudio="${TestRoot}/sample.wav"
 SampleImage="${TestRoot}/sample.png"
 SampleSubs="${TestRoot}/sample.ass"
+SampleSvg="${TestRoot}/sample.svg"
 
 rm -rf "${TestRoot}"
 mkdir -p "${TestRoot}"
@@ -66,7 +67,7 @@ mkdir -p "${TestRoot}"
 # Counts the call sites at the bottom of this file so the progress counter can
 # read "[3/25]". Anchored at line start so the definitions above never count.
 get_test_runs_count() {
-	grep -cE '^(run_test|run_hw_test) "' "${BASH_SOURCE[0]}"
+	grep -cE '^(run_test|run_hw_test|run_platform_test) "' "${BASH_SOURCE[0]}"
 }
 
 TOTAL_RUNS=$(get_test_runs_count)
@@ -81,6 +82,7 @@ generate_samples() {
 	[[ ! -f "$SampleAudio" ]] && ((Total_Count++))
 	[[ ! -f "$SampleImage" ]] && ((Total_Count++))
 	[[ ! -f "$SampleSubs" ]] && ((Total_Count++))
+	[[ ! -f "$SampleSvg" ]] && ((Total_Count++))
 
 	# Generate samples
 	if [[ ! -f "$SampleVideo" ]]; then
@@ -147,6 +149,16 @@ generate_samples() {
 		} >$SampleSubs
 		End_Time=$(date +%s)
 		text_with_padding "✅ Sample subtitles generated" "[$((End_Time - Start_Time))s]" 1
+	fi
+
+	# A hand-written SVG: decoding it needs the librsvg decoder, so the librsvg
+	# test below can only pass when librsvg was actually compiled in.
+	if [[ ! -f "$SampleSvg" ]]; then
+		Start_Time=$(date +%s)
+		Current_Count=$((Current_Count + 1))
+		printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#3355ff"/></svg>' >"$SampleSvg"
+		End_Time=$(date +%s)
+		text_with_padding "✅ Sample SVG generated" "[$((End_Time - Start_Time))s]" 1
 	fi
 
 	if [ $Total_Count -gt 0 ]; then
@@ -232,6 +244,36 @@ run_hw_test() {
 	report_add "${name}" skipped 0 "${reason}"
 }
 
+# Same contract again, for a component only some platforms build. Where it IS
+# built, absence is a failure; everywhere else it is a skip carrying the reason,
+# so "we never build it here" can never be confused with "it went missing".
+# The platform list mirrors the build script's own guard — enabling a component
+# for another platform means adding that platform here, and this test is what
+# makes forgetting that visible.
+run_platform_test() {
+	local name=$1
+	local platforms=$2
+	local command=$3
+	local expected_output=$4
+	local reason
+
+	case " ${platforms} " in
+	*" ${Platform} "*)
+		run_test "$name" "$command" "$expected_output"
+		return
+		;;
+	esac
+
+	reason="not built for ${Platform}; built on: ${platforms}"
+	TOTAL_TESTS=$((TOTAL_TESTS + 1))
+	name=$(echo $name | tr '[:lower:]' '[:upper:]')
+	text_with_padding "🧪 Testing ${name}" "[${TOTAL_TESTS}/${TOTAL_RUNS}]" 1
+	text_with_padding "➖ ${name} was skipped" "[0s]" 1
+	echo "   ${reason}"
+	SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+	report_add "${name}" skipped 0 "${reason}"
+}
+
 # Main execution
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 printf "%s\n" "        _   _       __  __                      "
@@ -262,6 +304,7 @@ run_test "libopus" "-y -i ${SampleAudio} -c:a libopus ${TestRoot}/test_opus.opus
 run_test "libmp3lame" "-y -i ${SampleAudio} -c:a libmp3lame ${TestRoot}/test_mp3.mp3" "mp3"
 run_test "libwebp" "-y -i ${SampleImage} -c:v libwebp -f webp ${TestRoot}/test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i ${SampleImage} -c:v libopenjpeg ${TestRoot}/test_jp2.jp2" "openjpeg"
+run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"
 
@@ -282,6 +325,13 @@ run_test "libxml2" "-hide_banner -version | grep xml" "xml"
 # AV1 codec tests
 run_test "libdav1d" "-hide_banner -decoders" "dav1d"
 run_test "librav1e" "-hide_banner -encoders" "rav1e"
+
+# Stemsplit filter
+run_test "stemsplit" "-hide_banner -filters | grep stemsplit" "stemsplit"
+
+# Beat detection: a 174 BPM click track must come back as 174, not as the
+# 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).
+run_test "beatdetect" "-f lavfi -i \"aevalsrc=(sin(2*PI*1200*t)*exp(-45*mod(t\\,60/174))+0.9*sin(2*PI*70*t)*exp(-18*mod(t\\,60/174)))*0.7:s=44100:d=20\" -af beatdetect -f null -" "lavfi.beatdetect.bpm=17"
 
 # OCR subtitle encoder
 run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"

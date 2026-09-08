@@ -26,6 +26,7 @@ $SampleVideo = "$TestRoot\sample.mp4"
 $SampleAudio = "$TestRoot\sample.wav"
 $SampleImage = "$TestRoot\sample.png"
 $SampleSubs = "$TestRoot\sample.ass"
+$SampleSvg = "$TestRoot\sample.svg"
 $AssSubPath = $SampleSubs -replace '\\','/'
 $AssSubPath = $AssSubPath -replace ':','\\:'
 
@@ -36,7 +37,7 @@ New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out
 # read "[3/26]". Anchored at line start so the definitions above never count.
 function get_test_runs_count {
     $lines = Get-Content -Path $PSCommandPath
-    return @($lines | Where-Object { $_ -match '^(run_test|run_hw_test) "' }).Count
+    return @($lines | Where-Object { $_ -match '^(run_test|run_hw_test|run_platform_test) "' }).Count
 }
 
 $TOTAL_RUNS = get_test_runs_count
@@ -52,6 +53,7 @@ function generate_samples {
     if (-Not (Test-Path $SampleAudio)) { $Total_Count++ }
     if (-Not (Test-Path $SampleImage)) { $Total_Count++ }
     if (-Not (Test-Path $SampleSubs)) { $Total_Count++ }
+    if (-Not (Test-Path $SampleSvg)) { $Total_Count++ }
 
     # Generate samples
     if (-Not (Test-Path $SampleVideo)) {
@@ -93,10 +95,22 @@ function generate_samples {
             'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
             'Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Test subtitle'
         ) -join "`n"
-        [System.IO.File]::WriteAllText($SampleSubs, $assContent)  
+        [System.IO.File]::WriteAllText($SampleSubs, $assContent)
 
         $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
         text_with_padding "     $ICON_PASS Sample subtitles" "[${elapsed}s]"
+    }
+
+    # A hand-written SVG: decoding it needs the librsvg decoder, so the librsvg
+    # test below can only pass when librsvg was actually compiled in.
+    if (-Not (Test-Path $SampleSvg)) {
+        $Start_Time = Get-Date
+        $Current_Count++
+        $svgContent = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#3355ff"/></svg>'
+        [System.IO.File]::WriteAllText($SampleSvg, $svgContent)
+
+        $elapsed = (New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds.ToString('0')
+        text_with_padding "     $ICON_PASS Sample SVG" "[${elapsed}s]"
     }
 
     if ($Current_Count -gt 0) {
@@ -183,6 +197,35 @@ function run_hw_test {
     Report-Add -Name $name -Status skipped -DurationSeconds 0 -Reason $reason
 }
 
+# Same contract again, for a component only some platforms build. Where it IS
+# built, absence is a failure; everywhere else it is a skip carrying the reason,
+# so "we never build it here" can never be confused with "it went missing".
+# The platform list mirrors the build script's own guard — enabling a component
+# for another platform means adding that platform here, and this test is what
+# makes forgetting that visible.
+function run_platform_test {
+    param (
+        $name,
+        $platforms,
+        $command,
+        $expected_output
+    )
+
+    if (($platforms -split ' ') -contains $Platform) {
+        run_test $name $command $expected_output
+        return
+    }
+
+    $reason = "not built for ${Platform}; built on: $platforms"
+    $script:TOTAL_TESTS++
+    $name = $name.ToUpper()
+    text_with_padding "🧪 Testing ${name}" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+    text_with_padding "➖ ${name} was skipped" "[ 0s ]" 1
+    Write-Host "   $reason"
+    $script:SKIPPED_TESTS++
+    Report-Add -Name $name -Status skipped -DurationSeconds 0 -Reason $reason
+}
+
 # Main execution
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host '  NoMercy FFmpeg Test Suite'
@@ -203,6 +246,7 @@ run_test "libopus" "-y -i $SampleAudio -c:a libopus $TestRoot\test_opus.opus" "o
 run_test "libmp3lame" "-y -i $SampleAudio -c:a libmp3lame $TestRoot\test_mp3.mp3" "mp3"
 run_test "libwebp" "-y -i $SampleImage -c:v libwebp -f webp $TestRoot\test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i $SampleImage -c:v libopenjpeg $TestRoot\test_jp2.jp2" "openjpeg"
+run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i $SampleSvg -frames:v 1 $TestRoot\test_svg.png" "svg"
 run_test "libass" "-y -i '${SampleVideo}' -vf ass='${AssSubPath}' '${TestRoot}/test_ass.mp4'" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"
 
@@ -223,6 +267,13 @@ run_test "libxml2" "-hide_banner -version | findstr xml" "xml"
 # AV1 codec tests
 run_test "libdav1d" "-hide_banner -decoders" "dav1d"
 run_test "librav1e" "-hide_banner -encoders" "rav1e"
+
+# Stemsplit filter
+run_test "stemsplit" "-hide_banner -filters | findstr stemsplit" "stemsplit"
+
+# Beat detection: a 174 BPM click track must come back as 174, not as the
+# 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).
+run_test "beatdetect" "-f lavfi -i `"aevalsrc=(sin(2*PI*1200*t)*exp(-45*mod(t\,60/174))+0.9*sin(2*PI*70*t)*exp(-18*mod(t\,60/174)))*0.7:s=44100:d=20`" -af beatdetect -f null -" "lavfi.beatdetect.bpm=17"
 
 # OCR subtitle encoder
 run_test "ocr_subtitle" "-hide_banner -encoders" "ocr_subtitle"
