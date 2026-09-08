@@ -162,10 +162,22 @@ jobs:
           IMAGE="nomercyentertainment/ffmpeg-${{ inputs.platform }}"
 
           NO_CACHE_FLAG=""
+          CACHE_FROM_FLAG="--cache-from ${IMAGE}:latest"
           if [[ "${{ inputs.no_cache }}" == "true" ]]; then
             echo "🔥 No-cache build"
             NO_CACHE_FLAG="--no-cache"
+            CACHE_FROM_FLAG=""
           fi
+
+          # The fleet has one Docker per runner, so a job that lands on a runner
+          # which has not built this image before starts from nothing: for the
+          # base that means redoing ~70 network fetches, which is where the
+          # intermittent failures come from. Importing the cache from the image
+          # we published last time turns those steps into a metadata check.
+          # BUILDKIT_INLINE_CACHE=1 is what writes that metadata into the pushed
+          # image, so the two belong together. Both are harmless when the tag
+          # does not exist yet, and layer invalidation is unaffected: a changed
+          # instruction still rebuilds itself and everything after it.
 
           # Pin the platform Dockerfile's FROM base to an explicit tag when one
           # is supplied. Platform builds pass BASE_TAG=<sha> when the base was
@@ -193,6 +205,8 @@ jobs:
             --tag ${IMAGE}:latest \
             --tag ${IMAGE}:${{ github.sha }} \
             ${NO_CACHE_FLAG} \
+            ${CACHE_FROM_FLAG} \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
             ${BASE_TAG_FLAG} \
             --pull \
             --push \
