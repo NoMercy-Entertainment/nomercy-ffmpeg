@@ -18,8 +18,12 @@ defaults:
     working-directory: clients/npm
 
 jobs:
-  # Gate first: a binary-only release never bumps the npm client version, so
-  # this check skips the whole publish job — the npm CI ignores binary changes.
+  # The client version is not read from the repository: it is the release that
+  # was just published. Keeping it in package.json meant remembering to bump
+  # three files by hand for every release, which is exactly what did not happen
+  # for v1.0.39 and v1.0.40 — npm sat on 1.0.38, pointing at a fork release from
+  # before FFmpeg 9.0, for two months. Deriving it removes the step instead of
+  # documenting it.
   check:
     if: >-
       github.event_name != 'workflow_run' ||
@@ -28,6 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.version-check.outputs.skip }}
+      tag: ${{ steps.version-check.outputs.tag }}
+      version: ${{ steps.version-check.outputs.version }}
+      ffversion: ${{ steps.version-check.outputs.ffversion }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -37,17 +44,44 @@ jobs:
         with:
           node-version: 24
 
-      - name: Check if version is already published
+      - name: Resolve the release to ship, and whether it is already on npm
         id: version-check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
+          # The latest full release, whatever triggered this run: a release
+          # event, the pipeline finishing on master, or a manual dispatch.
+          # `gh release view` without a tag skips prereleases, so an RC never
+          # becomes an npm version.
+          TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          VERSION="${TAG#v}"
+
+          # The upstream ffmpeg version is part of every asset filename, so read
+          # it from the release rather than carrying a second constant that can
+          # drift: ffmpeg-9.0-linux-x86_64-v1.0.40.tar.gz -> 9.0
+          FFVERSION=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
+            | sed -n 's/^ffmpeg-\([0-9][0-9.]*\)-.*/\1/p' | head -1)
+          if [ -z "$FFVERSION" ]; then
+            echo "::error::Could not read the ffmpeg version from ${TAG}'s asset names."
+            exit 1
+          fi
+
           PACKAGE_NAME=$(node -p "require('./package.json').name")
-          LOCAL_VERSION=$(node -p "require('./package.json').version")
-          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$LOCAL_VERSION" version 2>/dev/null || echo "")
-          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
-            echo "Version $LOCAL_VERSION already published — skipping npm publish."
+          PUBLISHED=$(npm view "$PACKAGE_NAME@$VERSION" version 2>/dev/null || echo "")
+
+          {
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+            echo "ffversion=${FFVERSION}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$VERSION" = "$PUBLISHED" ]; then
+            echo "${PACKAGE_NAME}@${VERSION} is already published — nothing to do."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Publishing $LOCAL_VERSION (not yet on npm)."
+            echo "Publishing ${PACKAGE_NAME}@${VERSION} for fork release ${TAG} (ffmpeg ${FFVERSION})."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -67,6 +101,27 @@ jobs:
         with:
           node-version: 24
           registry-url: 'https://registry.npmjs.org'
+
+      # Stamp the release onto the package before anything is built or tested,
+      # so the tests run against what will actually ship. Nothing is committed:
+      # the repository keeps whatever placeholder it has, and the published
+      # package is always the release it downloads from.
+      - name: Stamp the release onto the client
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+          VERSION: ${{ needs.check.outputs.version }}
+          FFVERSION: ${{ needs.check.outputs.ffversion }}
+        run: |
+          set -euo pipefail
+          sed -i -E "s|(FORK_VERSION = process\.env\['NOMERCY_FFMPEG_VERSION'\] \?\? ')[^']*(')|\1${TAG}\2|" src/version.ts
+          sed -i -E "s|(FFMPEG_VERSION = process\.env\['NOMERCY_FFMPEG_FFVERSION'\] \?\? ')[^']*(')|\1${FFVERSION}\2|" src/version.ts
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version >/dev/null
+
+          # Fail loudly rather than publish a package that points somewhere else.
+          grep -q "?? '${TAG}'" src/version.ts \
+            && grep -q "?? '${FFVERSION}'" src/version.ts \
+            || { echo "::error::version.ts did not take the stamp"; cat src/version.ts; exit 1; }
+          echo "Publishing $(node -p "require('./package.json').version") for ${TAG} (ffmpeg ${FFVERSION})."
 
       # Do NOT self-upgrade npm here (`npm install -g npm@latest`): overwriting
       # the toolcache npm in place leaves a broken install — `npm publish

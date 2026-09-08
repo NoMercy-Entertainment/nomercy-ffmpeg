@@ -9,6 +9,14 @@
 import { describe, expect, it } from 'vitest';
 import { resolvePlatformTarget } from './platform.js';
 import { assetUrl } from './resolve.js';
+import { FFMPEG_VERSION, FORK_VERSION } from './version.js';
+
+// The release the package points at is stamped in at publish time, so these
+// assertions read it rather than repeating it. What they pin is the part that
+// can actually break: the host, the path, the per-platform slug, the extension,
+// and the fact that the tag appears both as the release directory and inside
+// the filename.
+const RELEASES = 'https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download';
 
 describe('resolvePlatformTarget', () => {
 	it('maps every supported OS+arch to the published artifact', () => {
@@ -57,14 +65,14 @@ describe('assetUrl', () => {
 	it('builds the windows release URL with the pinned fork + ffmpeg versions', () => {
 		const target = resolvePlatformTarget('win32', 'x64');
 		expect(assetUrl(target)).toBe(
-			'https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/v1.0.40/ffmpeg-9.0-windows-x86_64-v1.0.40.zip',
+			`${RELEASES}/${FORK_VERSION}/ffmpeg-${FFMPEG_VERSION}-windows-x86_64-${FORK_VERSION}.zip`,
 		);
 	});
 
 	it('builds a tarball release URL for unix targets', () => {
 		const target = resolvePlatformTarget('linux', 'arm64');
 		expect(assetUrl(target)).toBe(
-			'https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/v1.0.40/ffmpeg-9.0-linux-aarch64-v1.0.40.tar.gz',
+			`${RELEASES}/${FORK_VERSION}/ffmpeg-${FFMPEG_VERSION}-linux-aarch64-${FORK_VERSION}.tar.gz`,
 		);
 	});
 
@@ -76,7 +84,7 @@ describe('assetUrl', () => {
 		expect(target.slug).toBe('windows-aarch64');
 		expect(target.ffmpeg).toBe('ffmpeg.exe');
 		expect(assetUrl(target)).toBe(
-			'https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/v1.0.40/ffmpeg-9.0-windows-aarch64-v1.0.40.zip',
+			`${RELEASES}/${FORK_VERSION}/ffmpeg-${FFMPEG_VERSION}-windows-aarch64-${FORK_VERSION}.zip`,
 		);
 	});
 });
