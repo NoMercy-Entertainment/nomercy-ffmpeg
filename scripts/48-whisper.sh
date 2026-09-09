@@ -125,19 +125,19 @@ else
         -DWHISPER_BUILD_TOOLS=OFF \
         -DWHISPER_BUILD_SERVER=OFF \
         -DWHISPER_BUILD_EXAMPLES=OFF \
-        -DWHISPER_BUILD_TESTS=OFF -DVERBOSE=ON | log -a
+        -DWHISPER_BUILD_TESTS=OFF -DVERBOSE=ON 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Error: Whisper configure failed" >> /ffmpeg_build.log
         exit 1
     fi
 
-    cmake --build . -j${NPROC} --config Release --verbose | log -a
+    cmake --build . -j${NPROC} --config Release --verbose 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Error: Whisper build failed" >> /ffmpeg_build.log
         exit 1
     fi
 
-    cmake --install . --config Release | log -a
+    cmake --install . --config Release 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Error: Whisper install failed" >> /ffmpeg_build.log
         exit 1

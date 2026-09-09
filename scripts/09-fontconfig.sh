@@ -72,7 +72,7 @@ fi
 ./autogen.sh --prefix=${PREFIX} --disable-docs --enable-libxml2 --enable-static --disable-shared \
 	--host=${CROSS_PREFIX%-} ${EXTRA_FONTCONFIG_FLAGS}
 ./configure --prefix=${PREFIX} --disable-docs --enable-libxml2 --enable-static --disable-shared \
-	--host=${CROSS_PREFIX%-} ${EXTRA_FONTCONFIG_FLAGS} | log
+	--host=${CROSS_PREFIX%-} ${EXTRA_FONTCONFIG_FLAGS} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1

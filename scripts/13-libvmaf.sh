@@ -18,7 +18,7 @@ fi
 mkdir build && cd build
 meson --prefix=${PREFIX} \
     --buildtype=release --default-library=static -Dbuilt_in_models=true -Denable_tests=false -Denable_docs=false -Denable_avx512=true -Denable_float=true \
-    --cross-file="/build/cross_file.txt" ../libvmaf | log
+    --cross-file="/build/cross_file.txt" ../libvmaf 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

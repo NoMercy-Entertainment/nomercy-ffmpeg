@@ -8,7 +8,7 @@ fi
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --without-python --disable-maintainer-mode \
     --host=${CROSS_PREFIX%-} ${EXTRA_COMPILE_FLAGS}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --without-python --disable-maintainer-mode \
-    --host=${CROSS_PREFIX%-} ${EXTRA_COMPILE_FLAGS} | log
+    --host=${CROSS_PREFIX%-} ${EXTRA_COMPILE_FLAGS} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

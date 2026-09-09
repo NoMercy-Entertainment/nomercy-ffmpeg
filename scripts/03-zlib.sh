@@ -6,7 +6,7 @@ if [ ${TARGET_OS} == "darwin" ]; then
 fi
 
 cd /build/zlib
-./configure --prefix=${PREFIX} --static ${EXTRA_CONFIG} | log
+./configure --prefix=${PREFIX} --static ${EXTRA_CONFIG} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1

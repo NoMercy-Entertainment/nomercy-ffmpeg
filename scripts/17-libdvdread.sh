@@ -24,7 +24,7 @@ cd /build/libdvdcss
 
 autoreconf -i
 ./configure --prefix=${PREFIX} --prefix=${PREFIX} --enable-static --disable-shared ${EXTRA_FLAGS} \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
@@ -40,7 +40,7 @@ cd /build/libdvdread
 
 autoreconf -i
 ./configure --prefix=${PREFIX} --prefix=${PREFIX} --enable-static --disable-shared --with-libdvdcss ${EXTRA_FLAGS} \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
@@ -56,7 +56,7 @@ cd /build/libdvdnav
 
 autoreconf -i
 ./configure --prefix=${PREFIX} --prefix=${PREFIX} --enable-static --disable-shared --with-libdvdcss ${EXTRA_FLAGS} \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi

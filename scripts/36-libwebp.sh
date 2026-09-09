@@ -19,7 +19,7 @@ fi
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
     CPPFLAGS="${CPPFLAGS} -I${PREFIX}/include" \
     LDFLAGS="${LDFLAGS} -L${PREFIX}/lib -lz" \
-    ${LIBPNG_EXTRA_FLAGS} --host=${CROSS_PREFIX%-} | log
+    ${LIBPNG_EXTRA_FLAGS} --host=${CROSS_PREFIX%-} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libpng config"
     exit 1
@@ -163,7 +163,7 @@ cd /build/libtiff
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libtiff"
@@ -206,7 +206,7 @@ cd /build/libwebp
     LIBS="-lpng16 -lz" \
     PNG_INCLUDES="${PREFIX}/include" \
     PNG_LIBS="${PREFIX}/lib" \
-    --host=${CROSS_PREFIX%-} | log
+    --host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libwebp"

@@ -10,7 +10,7 @@ cmake -S .. -B . \
     -DWITHOUT_CAIRO=ON \
     -DWITHOUT_GAVL=ON \
     -DWITHOUT_FACERECOGNITION=ON \
-    -DBUILD_TESTING=OFF | log
+    -DBUILD_TESTING=OFF 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log -a "Error: frei0r cmake setup failed."

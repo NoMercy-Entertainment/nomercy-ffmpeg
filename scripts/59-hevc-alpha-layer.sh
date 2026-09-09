@@ -74,7 +74,7 @@ else
         exit 1
     fi
 
-    patch -p1 --forward -d /build/ffmpeg <"${PATCH}" | log -a
+    patch -p1 --forward -d /build/ffmpeg <"${PATCH}" 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "  ERROR: patch failed to apply"
         exit 1
@@ -128,7 +128,7 @@ else
         exit 1
     fi
 
-    patch -p1 --forward -d /build/ffmpeg <"${GETFMT_PATCH}" | log -a
+    patch -p1 --forward -d /build/ffmpeg <"${GETFMT_PATCH}" 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "  ERROR: get_format patch failed to apply"
         exit 1
@@ -165,7 +165,7 @@ else
         exit 1
     fi
 
-    patch -p1 --forward -d /build/ffmpeg <"${PIXFMT_PATCH}" | log -a
+    patch -p1 --forward -d /build/ffmpeg <"${PIXFMT_PATCH}" 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "  ERROR: stream pix_fmt patch failed to apply"
         exit 1

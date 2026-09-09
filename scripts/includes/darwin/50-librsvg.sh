@@ -51,7 +51,7 @@ build_libffi() {
         --disable-shared \
         --disable-docs \
         --disable-exec-static-tramp \
-        --host=${CROSS_PREFIX%-} | log -a
+        --host=${CROSS_PREFIX%-} 2>&1 | log -a
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "libffi configure failed"
@@ -91,7 +91,7 @@ build_pcre2() {
         -DPCRE2_BUILD_PCRE2GREP=OFF \
         -DPCRE2_BUILD_TESTS=OFF \
         -DPCRE2_SUPPORT_UNICODE=ON \
-        -DPCRE2_SUPPORT_JIT=ON | log -a
+        -DPCRE2_SUPPORT_JIT=ON 2>&1 | log -a
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "pcre2 configure failed"
@@ -160,7 +160,7 @@ build_glib2() {
         -Dgtk_doc=false \
         -Dbsymbolic_functions=false \
         -Dforce_posix_threads=true \
-        --cross-file="${glib_cross_file}" .. | log -a
+        --cross-file="${glib_cross_file}" .. 2>&1 | log -a
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "glib2 configure failed"
@@ -206,7 +206,7 @@ build_pixman() {
         -Dlibpng=enabled \
         -Dtests=disabled \
         -Ddemos=disabled \
-        --cross-file="/build/cross_file.txt" .. | log -a
+        --cross-file="/build/cross_file.txt" .. 2>&1 | log -a
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "pixman configure failed"
@@ -274,7 +274,7 @@ build_cairo() {
         --buildtype=release \
         --default-library=static \
         ${cairo_options} \
-        --cross-file="${cairo_cross_file}" .. | log -a
+        --cross-file="${cairo_cross_file}" .. 2>&1 | log -a
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "cairo configure failed"
@@ -354,7 +354,7 @@ build_pango() {
         -Dcairo=enabled \
         -Dlibthai=disabled \
         -Dsysprof=disabled \
-        --cross-file="${pango_cross_file}" .. | log -a
+        --cross-file="${pango_cross_file}" .. 2>&1 | log -a
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "pango configure failed"
@@ -415,7 +415,7 @@ build_gdk_pixbuf() {
         -Dpng=enabled \
         -Djpeg=disabled \
         -Dtiff=disabled \
-        --cross-file="${gdkpixbuf_cross_file}" .. | log -a
+        --cross-file="${gdkpixbuf_cross_file}" .. 2>&1 | log -a
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "gdk-pixbuf configure failed"
@@ -544,7 +544,7 @@ build_librsvg() {
         --buildtype=release \
         --default-library=static \
         ${rsvg_options} \
-        --cross-file="/build/cross_file.txt" .. | log -a
+        --cross-file="/build/cross_file.txt" .. 2>&1 | log -a
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "librsvg configure failed"
@@ -579,7 +579,7 @@ build_librsvg() {
         
         # Log what we find
         log "Searching for rsvg.h in source tree..."
-        find /build/librsvg -name "rsvg.h" -type f 2>/dev/null | log -a
+        find /build/librsvg -name "rsvg.h" -type f 2>/dev/null 2>&1 | log -a
         
         # Try multiple possible source locations for librsvg 2.61
         local header_dirs=(

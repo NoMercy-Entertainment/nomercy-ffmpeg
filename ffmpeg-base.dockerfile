@@ -154,13 +154,43 @@ RUN \
     && git config --global user.email "builder@nomercy.tv" \
     && git config --global user.name "Builder" \
     && git config --global advice.detachedHead false \
+    # Every download below runs through this. The image makes ~70 unauthenticated
+    # fetches, about sixty of them git clones from GitHub, and GitHub throttles a
+    # burst that size: the refusal lands late in the chain and looks like a
+    # missing repository ("could not read Username for 'https://github.com'").
+    # freetype, libsrt, leptonica and spirv-cross each failed a build that way.
+    # Five attempts, pausing 30, 60, 90 then 120 seconds, because a throttle
+    # outlasts a shorter wait. Output is captured rather than discarded, so a
+    # good build stays quiet and a failing one prints what the server actually
+    # said; the old `>/dev/null 2>&1` on every download is precisely why a
+    # throttled clone was indistinguishable from a deleted tag.
+    && printf '%s\n' \
+        '#!/bin/sh' \
+        'n=1' \
+        'out=$(mktemp)' \
+        'until "$@" >"$out" 2>&1; do' \
+        '  if [ "$n" -ge 5 ]; then' \
+        '    echo "retry: giving up after $n attempts: $*" >&2' \
+        '    tail -n 20 "$out" >&2' \
+        '    rm -f "$out"' \
+        '    exit 1' \
+        '  fi' \
+        '  echo "retry: attempt $n failed, waiting $((n * 30))s: $*" >&2' \
+        '  sleep $((n * 30))' \
+        '  n=$((n + 1))' \
+        'done' \
+        'rm -f "$out"' \
+        > /usr/local/bin/retry \
+    && chmod +x /usr/local/bin/retry \
     && echo "✅ Git configuration completed successfully"
 
 # Install meson >= 1.4.0 via pip (required for glib 2.86+)
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Installing Meson via pip" \
-    && python3 -m pip install --no-cache-dir --break-system-packages meson>=1.4.0 >/dev/null 2>&1 \
+    # Quoted: unquoted, the shell reads `>=1.4.0` as a redirect, writes a file
+    # called `=1.4.0` into /build and installs whatever meson pip offers.
+    && python3 -m pip install --no-cache-dir --break-system-packages 'meson>=1.4.0' >/dev/null 2>&1 \
     && echo "✅ Meson installation completed successfully ($(meson --version))" \
     && echo "------------------------------------------------------"
 
@@ -178,7 +208,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading iconv" \
-    && wget -O libiconv.tar.gz http://ftp.gnu.org/gnu/libiconv/libiconv-${iconv_version}.tar.gz >/dev/null 2>&1 \
+    && retry wget -O libiconv.tar.gz http://ftp.gnu.org/gnu/libiconv/libiconv-${iconv_version}.tar.gz \
     && tar -xvf libiconv.tar.gz >/dev/null 2>&1 && rm libiconv.tar.gz && mv libiconv-* iconv \
     # && git clone --branch v${iconv_version} https://git.savannah.gnu.org/git/libiconv.git iconv >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
@@ -188,7 +218,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libxml2" \
-    && git clone --branch ${libxml2_version} https://github.com/GNOME/libxml2.git libxml2 >/dev/null 2>&1 \
+    && retry git clone --branch ${libxml2_version} https://github.com/GNOME/libxml2.git libxml2 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -196,7 +226,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading zlib" \
-    && git clone --branch v${zlib_version} https://github.com/madler/zlib.git zlib >/dev/null 2>&1 \
+    && retry git clone --branch v${zlib_version} https://github.com/madler/zlib.git zlib \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -204,7 +234,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading fftw3" \
-    && wget -O fftw3.tar.gz http://www.fftw.org/fftw-${fftw3_version}.tar.gz >/dev/null 2>&1 \
+    && retry wget -O fftw3.tar.gz http://www.fftw.org/fftw-${fftw3_version}.tar.gz \
     && tar -xvf fftw3.tar.gz >/dev/null 2>&1 && rm fftw3.tar.gz && mv fftw-${fftw3_version} fftw3 \
     # && git clone --branch fftw-${fftw3_version} https://github.com/FFTW/fftw3.git fftw3 >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
@@ -233,7 +263,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading fribidi" \
-    && wget https://github.com/fribidi/fribidi/releases/download/v${fribidi_version}/fribidi-${fribidi_version}.tar.xz >/dev/null 2>&1 \
+    && retry wget https://github.com/fribidi/fribidi/releases/download/v${fribidi_version}/fribidi-${fribidi_version}.tar.xz \
     && tar -xJf fribidi-${fribidi_version}.tar.xz >/dev/null 2>&1 && rm fribidi-${fribidi_version}.tar.xz && mv fribidi-${fribidi_version} fribidi \
     # && git clone --branch v${fribidi_version} https://github.com/fribidi/fribidi.git fribidi >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
@@ -243,7 +273,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libogg" \
-    && git clone --branch v${libogg_version} https://github.com/xiph/ogg.git libogg >/dev/null 2>&1 \
+    && retry git clone --branch v${libogg_version} https://github.com/xiph/ogg.git libogg \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -251,14 +281,14 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading openssl" \
-    && git clone --branch openssl-${openssl_version} https://github.com/openssl/openssl.git openssl >/dev/null 2>&1 \
+    && retry git clone --branch openssl-${openssl_version} https://github.com/openssl/openssl.git openssl \
     && cd openssl && git submodule update --init --recursive --depth=1 >/dev/null 2>&1 && cd ..
 
 # Download fontconfig
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading fontconfig" \
-    && git clone --branch ${fontconfig_version} https://gitlab.freedesktop.org/fontconfig/fontconfig.git fontconfig >/dev/null 2>&1 \
+    && retry git clone --branch ${fontconfig_version} https://gitlab.freedesktop.org/fontconfig/fontconfig.git fontconfig \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -266,7 +296,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libpciaccess" \
-    && git clone --branch libpciaccess-${libpciaccess_version} https://gitlab.freedesktop.org/xorg/lib/libpciaccess.git libpciaccess >/dev/null 2>&1 \
+    && retry git clone --branch libpciaccess-${libpciaccess_version} https://gitlab.freedesktop.org/xorg/lib/libpciaccess.git libpciaccess \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -274,7 +304,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xcbproto" \
-    && git clone --branch xcb-proto-${xcbproto_version} https://gitlab.freedesktop.org/xorg/proto/xcbproto.git xcbproto >/dev/null 2>&1 \
+    && retry git clone --branch xcb-proto-${xcbproto_version} https://gitlab.freedesktop.org/xorg/proto/xcbproto.git xcbproto \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -282,7 +312,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xproto" \
-    && git clone --branch xorgproto-${xorgproto_version} https://gitlab.freedesktop.org/xorg/proto/xorgproto.git xproto >/dev/null 2>&1 \
+    && retry git clone --branch xorgproto-${xorgproto_version} https://gitlab.freedesktop.org/xorg/proto/xorgproto.git xproto \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -290,7 +320,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xtrans" \
-    && git clone --branch xtrans-${xtranx_version} https://gitlab.freedesktop.org/xorg/lib/libxtrans.git libxtrans >/dev/null 2>&1 \
+    && retry git clone --branch xtrans-${xtranx_version} https://gitlab.freedesktop.org/xorg/lib/libxtrans.git libxtrans \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -298,7 +328,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libxcb" \
-    && git clone --branch libxcb-${libxcb_version} https://gitlab.freedesktop.org/xorg/lib/libxcb.git libxcb >/dev/null 2>&1 \
+    && retry git clone --branch libxcb-${libxcb_version} https://gitlab.freedesktop.org/xorg/lib/libxcb.git libxcb \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -306,7 +336,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libx11" \
-    && git clone --branch libX11-${libx11_version} https://gitlab.freedesktop.org/xorg/lib/libx11.git libx11 >/dev/null 2>&1 \
+    && retry git clone --branch libX11-${libx11_version} https://gitlab.freedesktop.org/xorg/lib/libx11.git libx11 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -314,7 +344,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libxfixes" \
-    && git clone --branch libXfixes-${libXfixed_version} https://gitlab.freedesktop.org/xorg/lib/libxfixes.git /build/libxfixes >/dev/null 2>&1 \
+    && retry git clone --branch libXfixes-${libXfixed_version} https://gitlab.freedesktop.org/xorg/lib/libxfixes.git /build/libxfixes \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -322,7 +352,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libdrm" \
-    && git clone --branch libdrm-${libdrm_version} https://gitlab.freedesktop.org/mesa/drm.git libdrm >/dev/null 2>&1 \
+    && retry git clone --branch libdrm-${libdrm_version} https://gitlab.freedesktop.org/mesa/drm.git libdrm \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -330,7 +360,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading harfbuzz" \
-    && git clone --branch ${harfbuzz_version} https://github.com/harfbuzz/harfbuzz.git harfbuzz >/dev/null 2>&1 \
+    && retry git clone --branch ${harfbuzz_version} https://github.com/harfbuzz/harfbuzz.git harfbuzz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -338,7 +368,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading vulkan-headers" \
-    && git clone --branch v${vulkan_headers_version} https://github.com/KhronosGroup/Vulkan-Headers.git vulkan-headers >/dev/null 2>&1 \
+    && retry git clone --branch v${vulkan_headers_version} https://github.com/KhronosGroup/Vulkan-Headers.git vulkan-headers \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -346,7 +376,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libudfread" \
-    && git clone --branch ${libudfread_version} https://code.videolan.org/videolan/libudfread libudfread >/dev/null 2>&1 \
+    && retry git clone --branch ${libudfread_version} https://code.videolan.org/videolan/libudfread libudfread \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -354,7 +384,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libvorbis" \
-    && git clone --branch v${libvorbis_version} https://github.com/xiph/vorbis.git libvorbis >/dev/null 2>&1 \
+    && retry git clone --branch v${libvorbis_version} https://github.com/xiph/vorbis.git libvorbis \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -362,7 +392,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libvmaf" \
-    && git clone --branch v${libvmaf_version} https://github.com/Netflix/vmaf.git libvmaf >/dev/null 2>&1 \
+    && retry git clone --branch v${libvmaf_version} https://github.com/Netflix/vmaf.git libvmaf \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -370,7 +400,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading avisynth" \
-    && git clone --branch v${avisynth_version} https://github.com/AviSynth/AviSynthPlus.git avisynth >/dev/null 2>&1 \
+    && retry git clone --branch v${avisynth_version} https://github.com/AviSynth/AviSynthPlus.git avisynth \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -378,7 +408,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading chromaprint" \
-    && git clone --branch v${chromaprint_version} https://github.com/acoustid/chromaprint.git chromaprint >/dev/null 2>&1 \
+    && retry git clone --branch v${chromaprint_version} https://github.com/acoustid/chromaprint.git chromaprint \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -386,7 +416,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading shaderc" \
-    && git clone --branch v${shaderc_version} https://github.com/google/shaderc.git shaderc >/dev/null 2>&1 \
+    && retry git clone --branch v${shaderc_version} https://github.com/google/shaderc.git shaderc \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -394,7 +424,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libass" \
-    && git clone --branch ${libass_version} https://github.com/libass/libass.git libass >/dev/null 2>&1 \
+    && retry git clone --branch ${libass_version} https://github.com/libass/libass.git libass \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -402,7 +432,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libva" \
-    && git clone --branch ${libva_version} https://github.com/intel/libva.git libva >/dev/null 2>&1 \
+    && retry git clone --branch ${libva_version} https://github.com/intel/libva.git libva \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -410,7 +440,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libgpg-error" \
-    && git clone --branch libgpg-error-${libgpg_error_version} https://github.com/gpg/libgpg-error.git libgpg-error >/dev/null 2>&1 \
+    && retry git clone --branch libgpg-error-${libgpg_error_version} https://github.com/gpg/libgpg-error.git libgpg-error \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -418,7 +448,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libgcrypt" \
-    && git clone --branch libgcrypt-${libgcrypt_version} https://github.com/gpg/libgcrypt.git libgcrypt >/dev/null 2>&1 \
+    && retry git clone --branch libgcrypt-${libgcrypt_version} https://github.com/gpg/libgcrypt.git libgcrypt \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -426,7 +456,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libbdplus" \
-    && git clone --branch ${libbdplus_version} https://code.videolan.org/videolan/libbdplus.git libbdplus >/dev/null 2>&1 \
+    && retry git clone --branch ${libbdplus_version} https://code.videolan.org/videolan/libbdplus.git libbdplus \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -434,7 +464,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libaacs" \
-    && git clone --branch ${libaacs_version} https://code.videolan.org/videolan/libaacs.git libaacs >/dev/null 2>&1 \
+    && retry git clone --branch ${libaacs_version} https://code.videolan.org/videolan/libaacs.git libaacs \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -442,7 +472,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libbluray" \
-    && git clone --branch ${libbluray_version} https://code.videolan.org/videolan/libbluray.git libbluray >/dev/null 2>&1 \
+    && retry git clone --branch ${libbluray_version} https://code.videolan.org/videolan/libbluray.git libbluray \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -450,7 +480,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libcddb" \
-    && wget -O libcddb.tar.gz https://sourceforge.net/projects/libcddb/files/libcddb/${libcddb_version}/libcddb-${libcddb_version}.tar.gz/download >/dev/null 2>&1 \
+    && retry wget -O libcddb.tar.gz https://sourceforge.net/projects/libcddb/files/libcddb/${libcddb_version}/libcddb-${libcddb_version}.tar.gz/download \
     && tar -xvf libcddb.tar.gz >/dev/null 2>&1 && rm libcddb.tar.gz \
     && mv libcddb-* libcddb \
     && echo "✅ Download completed successfully" \
@@ -460,7 +490,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libcdio" \
-    && git clone --branch ${libcdio_version} https://github.com/libcdio/libcdio.git libcdio >/dev/null 2>&1 \
+    && retry git clone --branch ${libcdio_version} https://github.com/libcdio/libcdio.git libcdio \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -468,7 +498,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libcdio-paranoia" \
-    && git clone --branch release-10.2+${libcdio_paranoia_version} https://github.com/libcdio/libcdio-paranoia.git libcdio-paranoia >/dev/null 2>&1 \
+    && retry git clone --branch release-10.2+${libcdio_paranoia_version} https://github.com/libcdio/libcdio-paranoia.git libcdio-paranoia \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -476,7 +506,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading dav1d" \
-    && git clone --branch ${dav1d_version} https://code.videolan.org/videolan/dav1d.git libdav1d >/dev/null 2>&1 \
+    && retry git clone --branch ${dav1d_version} https://code.videolan.org/videolan/dav1d.git libdav1d \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -484,7 +514,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading davs2" \
-    && git clone --branch ${davs2_version} https://github.com/pkuvcl/davs2.git libdavs2 >/dev/null 2>&1 \
+    && retry git clone --branch ${davs2_version} https://github.com/pkuvcl/davs2.git libdavs2 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -492,7 +522,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading rav1e" \
-    && git clone --branch v${rav1e_version} https://github.com/xiph/rav1e.git librav1e >/dev/null 2>&1 \
+    && retry git clone --branch v${rav1e_version} https://github.com/xiph/rav1e.git librav1e \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -500,7 +530,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libsrt" \
-    && git clone --branch v${libsrt_version} https://github.com/Haivision/srt.git libsrt >/dev/null 2>&1 \
+    && retry git clone --branch v${libsrt_version} https://github.com/Haivision/srt.git libsrt \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -508,7 +538,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading twolame" \
-    && git clone --branch ${twolame_version} https://github.com/njh/twolame.git twolame >/dev/null 2>&1 \
+    && retry git clone --branch ${twolame_version} https://github.com/njh/twolame.git twolame \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -516,7 +546,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading mp3lame" \
-    && wget -O mp3lame.tar.gz https://downloads.sourceforge.net/project/lame/lame/${mp3lame_version}/lame-${mp3lame_version}.tar.gz >/dev/null 2>&1 \
+    && retry wget -O mp3lame.tar.gz https://downloads.sourceforge.net/project/lame/lame/${mp3lame_version}/lame-${mp3lame_version}.tar.gz \
     && tar -xzf mp3lame.tar.gz >/dev/null 2>&1 && rm mp3lame.tar.gz && mv lame-${mp3lame_version} lame \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -525,7 +555,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading fdk-aac" \
-    && wget -O fdk-aac.tar.gz https://github.com/mstorsjo/fdk-aac/archive/v${fdk_aac_version}.tar.gz >/dev/null 2>&1 \
+    && retry wget -O fdk-aac.tar.gz https://github.com/mstorsjo/fdk-aac/archive/v${fdk_aac_version}.tar.gz \
     && tar -xzf fdk-aac.tar.gz >/dev/null 2>&1 && rm fdk-aac.tar.gz && mv fdk-aac-* fdk-aac \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -534,7 +564,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading opus" \
-    && git clone --branch v${opus_version} https://github.com/xiph/opus.git opus >/dev/null 2>&1 \
+    && retry git clone --branch v${opus_version} https://github.com/xiph/opus.git opus \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -542,7 +572,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libaom" \
-    && git clone --branch v${libaom_version} https://aomedia.googlesource.com/aom libaom >/dev/null 2>&1 \
+    && retry git clone --branch v${libaom_version} https://aomedia.googlesource.com/aom libaom \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -550,7 +580,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libtheora" \
-    && git clone --branch v${libtheora_version} https://github.com/xiph/theora.git libtheora >/dev/null 2>&1 \
+    && retry git clone --branch v${libtheora_version} https://github.com/xiph/theora.git libtheora \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -558,7 +588,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libsvtav1" \
-    && git clone --branch v${libsvtav1_version} https://gitlab.com/AOMediaCodec/SVT-AV1.git libsvtav1 >/dev/null 2>&1 \
+    && retry git clone --branch v${libsvtav1_version} https://gitlab.com/AOMediaCodec/SVT-AV1.git libsvtav1 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -566,7 +596,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libvpx" \
-    && git clone --branch v${libvpx_version} https://chromium.googlesource.com/webm/libvpx.git libvpx >/dev/null 2>&1 \
+    && retry git clone --branch v${libvpx_version} https://chromium.googlesource.com/webm/libvpx.git libvpx \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -574,7 +604,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading x264" \
-    && git clone --branch ${x264_version} https://code.videolan.org/videolan/x264.git x264 >/dev/null 2>&1 \
+    && retry git clone --branch ${x264_version} https://code.videolan.org/videolan/x264.git x264 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -582,7 +612,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading x265" \
-    && git clone --branch Release_${x265_version} https://bitbucket.org/multicoreware/x265_git.git x265 >/dev/null 2>&1 \
+    && retry git clone --branch Release_${x265_version} https://bitbucket.org/multicoreware/x265_git.git x265 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -590,7 +620,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xavs2" \
-    && git clone --branch ${xavs2_version} https://github.com/pkuvcl/xavs2.git libxavs2 >/dev/null 2>&1 \
+    && retry git clone --branch ${xavs2_version} https://github.com/pkuvcl/xavs2.git libxavs2 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -598,7 +628,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xvidcore" \
-    && wget -O xvidcore.tar.gz https://downloads.xvid.com/downloads/xvidcore-${xvid_version}.tar.gz >/dev/null 2>&1 \
+    && retry wget -O xvidcore.tar.gz https://downloads.xvid.com/downloads/xvidcore-${xvid_version}.tar.gz \
     && tar -xzf xvidcore.tar.gz >/dev/null 2>&1 && rm xvidcore.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -607,7 +637,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libwebp" \
-    && wget -O libwebp.tar.gz https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-${libwebp_version}.tar.gz >/dev/null 2>&1 \
+    && retry wget -O libwebp.tar.gz https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-${libwebp_version}.tar.gz \
     && tar -xzf libwebp.tar.gz >/dev/null 2>&1 && rm libwebp.tar.gz && mv libwebp-${libwebp_version} libwebp \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -616,12 +646,12 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading openjpeg" \
-    && git clone --branch v${openjpeg_version} https://github.com/uclouvain/openjpeg.git openjpeg >/dev/null 2>&1 \
+    && retry git clone --branch v${openjpeg_version} https://github.com/uclouvain/openjpeg.git openjpeg \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------" \
     && echo "------------------------------------------------------" \
     && echo "🔄 Start downloading jpeg" \
-    && wget -O jpegsrc.v${jpegsrc_version}.tar.gz https://ijg.org/files/jpegsrc.v${jpegsrc_version}.tar.gz >/dev/null 2>&1 \
+    && retry wget -O jpegsrc.v${jpegsrc_version}.tar.gz https://ijg.org/files/jpegsrc.v${jpegsrc_version}.tar.gz \
     && tar -xzf jpegsrc.v${jpegsrc_version}.tar.gz >/dev/null 2>&1 && mv jpeg-${jpegsrc_version} jpeg && rm jpegsrc.v${jpegsrc_version}.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -630,7 +660,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading zimg" \
-    && git clone --branch release-${zimg_version} https://github.com/sekrit-twc/zimg.git zimg >/dev/null 2>&1 \
+    && retry git clone --branch release-${zimg_version} https://github.com/sekrit-twc/zimg.git zimg \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -638,7 +668,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading frei0r" \
-    && git clone --branch v${frei0r_version} https://github.com/dyne/frei0r.git frei0r >/dev/null 2>&1 \
+    && retry git clone --branch v${frei0r_version} https://github.com/dyne/frei0r.git frei0r \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -646,7 +676,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libvpl" \
-    && git clone --branch v${libvpl_version} https://github.com/intel/libvpl.git libvpl >/dev/null 2>&1 \
+    && retry git clone --branch v${libvpl_version} https://github.com/intel/libvpl.git libvpl \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -654,7 +684,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading amf" \
-    && git clone --branch v${amf_version} https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git amf >/dev/null 2>&1 \
+    && retry git clone --branch v${amf_version} https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git amf \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -662,7 +692,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading ffnvcodec" \
-    && git clone --branch n${nvcodec_version} https://github.com/FFmpeg/nv-codec-headers.git ffnvcodec >/dev/null 2>&1 \
+    && retry git clone --branch n${nvcodec_version} https://github.com/FFmpeg/nv-codec-headers.git ffnvcodec \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -670,7 +700,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading giflib" \
-    && wget -O giflib-5.2.2.tar.gz https://sourceforge.net/projects/giflib/files/giflib-5.2.2.tar.gz/download >/dev/null 2>&1 \
+    && retry wget -O giflib-5.2.2.tar.gz https://sourceforge.net/projects/giflib/files/giflib-5.2.2.tar.gz/download \
     && tar -xvzf giflib-5.2.2.tar.gz >/dev/null 2>&1 && mv giflib-5.2.2 giflib && rm giflib-5.2.2.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -679,7 +709,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libpng" \
-    && wget https://download.sourceforge.net/libpng/libpng-1.6.47.tar.gz >/dev/null 2>&1 \
+    && retry wget https://download.sourceforge.net/libpng/libpng-1.6.47.tar.gz \
     && tar -xvf libpng-1.6.47.tar.gz >/dev/null 2>&1 && mv libpng-1.6.47 libpng && rm -f libpng-1.6.47.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -688,7 +718,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libjpeg-turbo" \
-    && git clone --branch 3.1.0 https://github.com/libjpeg-turbo/libjpeg-turbo.git /build/libjpeg-turbo >/dev/null 2>&1 \
+    && retry git clone --branch 3.1.0 https://github.com/libjpeg-turbo/libjpeg-turbo.git /build/libjpeg-turbo \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -696,7 +726,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libtiff" \
-    && git clone --branch v4.7.0 https://gitlab.com/libtiff/libtiff.git /build/libtiff >/dev/null 2>&1 \
+    && retry git clone --branch v4.7.0 https://gitlab.com/libtiff/libtiff.git /build/libtiff \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -704,7 +734,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading leptonica" \
-    && git clone --branch ${leptonica_version} https://github.com/DanBloomberg/leptonica.git leptonica >/dev/null 2>&1 \
+    && retry git clone --branch ${leptonica_version} https://github.com/DanBloomberg/leptonica.git leptonica \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -712,7 +742,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libtesseract" \
-    && git clone --branch ${libtesseract_version} https://github.com/tesseract-ocr/tesseract.git libtesseract >/dev/null 2>&1 \
+    && retry git clone --branch ${libtesseract_version} https://github.com/tesseract-ocr/tesseract.git libtesseract \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -720,7 +750,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading SDL2" \
-    && git clone --branch release-${sdl2_version} https://github.com/libsdl-org/SDL.git sdl2 >/dev/null 2>&1 \
+    && retry git clone --branch release-${sdl2_version} https://github.com/libsdl-org/SDL.git sdl2 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -728,7 +758,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading spirv-cross" \
-    && git clone https://github.com/KhronosGroup/SPIRV-Cross.git spirv-cross >/dev/null 2>&1 \
+    && retry git clone https://github.com/KhronosGroup/SPIRV-Cross.git spirv-cross \
     && cd spirv-cross && git checkout ${spirv_cross_checkout} >/dev/null 2>&1 && cd .. \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -737,7 +767,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libplacebo" \
-    && git clone --branch release https://code.videolan.org/videolan/libplacebo.git libplacebo >/dev/null 2>&1 \
+    && retry git clone --branch release https://code.videolan.org/videolan/libplacebo.git libplacebo \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -745,7 +775,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading FFmpeg" \
-    && wget -O ffmpeg.tar.bz2 https://ffmpeg.org/releases/ffmpeg-${ffmpeg_version}.tar.bz2 >/dev/null 2>&1 \
+    && retry wget -O ffmpeg.tar.bz2 https://ffmpeg.org/releases/ffmpeg-${ffmpeg_version}.tar.bz2 \
     && tar -xjf ffmpeg.tar.bz2 >/dev/null 2>&1 && rm ffmpeg.tar.bz2 && mv ffmpeg-${ffmpeg_version} ffmpeg \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"

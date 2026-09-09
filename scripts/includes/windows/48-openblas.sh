@@ -39,19 +39,19 @@ cmake -S .. -B . \
     -DNUM_THREADS=64 \
     -DTARGET=NEHALEM \
     -DUTEST_CHECK=OFF \
-    -DVERBOSE=ON | log
+    -DVERBOSE=ON 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Error: OpenBLAS configure failed"
     exit 1
 fi
 
-cmake --build . -j$(nproc) --config Release | log -a
+cmake --build . -j$(nproc) --config Release 2>&1 | log -a
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Error: OpenBLAS build failed"
     exit 1
 fi
 
-cmake --install . --config Release | log -a
+cmake --install . --config Release 2>&1 | log -a
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Error: OpenBLAS install failed"
     exit 1
