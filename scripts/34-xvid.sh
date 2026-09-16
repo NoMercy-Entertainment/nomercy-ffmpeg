@@ -32,11 +32,11 @@ fi
 if [[ ${TARGET_OS} == "freebsd" ]]; then
     # lld refuses to link the (unused) shared lib from xvid's non-PIC asm
     # objects; build and install only the static library and the header
-    make -j$(nproc) libxvidcore.a || exit 1
+    make -j${BUILD_JOBS:-$(nproc)} libxvidcore.a || exit 1
     install -m 644 ./=build/libxvidcore.a ${PREFIX}/lib/libxvidcore.a
     install -m 644 ../../src/xvid.h ${PREFIX}/include/xvid.h
 else
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
 fi
 if [[ ${TARGET_OS} == "windows" ]]; then
     mv ${PREFIX}/lib/xvidcore.a ${PREFIX}/lib/libxvidcore.a

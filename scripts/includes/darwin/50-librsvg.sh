@@ -58,7 +58,7 @@ build_libffi() {
         return 1
     fi
 
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     if [ $? -ne 0 ]; then
         log "libffi build failed"
         return 1
@@ -98,7 +98,7 @@ build_pcre2() {
         return 1
     fi
 
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     if [ $? -ne 0 ]; then
         log "pcre2 build failed"
         return 1
@@ -167,7 +167,7 @@ build_glib2() {
         return 1
     fi
 
-    ninja -j$(nproc) 2>&1 | log -a && ninja install 2>&1 | log -a
+    ninja -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a && ninja install 2>&1 | log -a
     if [ $? -ne 0 ]; then
         log "glib2 build failed"
         return 1
@@ -213,7 +213,7 @@ build_pixman() {
         return 1
     fi
 
-    ninja -j$(nproc) 2>&1 | log -a && ninja install 2>&1 | log -a
+    ninja -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a && ninja install 2>&1 | log -a
     if [ $? -ne 0 ]; then
         log "pixman build failed"
         return 1
@@ -281,7 +281,7 @@ build_cairo() {
         return 1
     fi
 
-    ninja -j$(nproc) 2>&1 | log -a
+    ninja -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "cairo build failed"
         return 1
@@ -361,7 +361,7 @@ build_pango() {
         return 1
     fi
 
-    ninja -j$(nproc) 2>&1 | log -a && ninja install 2>&1 | log -a
+    ninja -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a && ninja install 2>&1 | log -a
     if [ $? -ne 0 ]; then
         log "pango build failed"
         return 1
@@ -424,7 +424,7 @@ build_gdk_pixbuf() {
 
     # Build only the static library target - utilities may fail due to static linking issues
     # but we only need the library for librsvg
-    ninja -j$(nproc) gdk-pixbuf/libgdk_pixbuf-2.0.a 2>&1 | log -a
+    ninja -j${BUILD_JOBS:-$(nproc)} gdk-pixbuf/libgdk_pixbuf-2.0.a 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "gdk-pixbuf library build failed"
         return 1

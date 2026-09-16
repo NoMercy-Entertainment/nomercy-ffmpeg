@@ -78,7 +78,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-make -j$(nproc) 2>&1 | log -a || { log "fontconfig build failed"; exit 1; }
+make -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a || { log "fontconfig build failed"; exit 1; }
 make install 2>&1 | log -a
 
 # Fix fontconfig.pc to include libxml2 in Libs.private for static linking

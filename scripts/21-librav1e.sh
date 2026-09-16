@@ -38,7 +38,7 @@ if [[ "${TARGET_OS}" == "windows" ]] \
     sed -i 's/,[[:space:]]*"git_version"//' /build/librav1e/Cargo.toml
 fi
 
-cargo cinstall -j$(nproc) -v ${LIBRAV1E_TARGET} --prefix=${PREFIX} --library-type=staticlib --crt-static --release 2>&1 | log -a
+cargo cinstall -j${BUILD_JOBS:-$(nproc)} -v ${LIBRAV1E_TARGET} --prefix=${PREFIX} --library-type=staticlib --crt-static --release 2>&1 | log -a
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	LDFLAGS="${OLD_LDFLAGS}"
 	RUSTFLAGS="${OLD_RUSTFLAGS}"

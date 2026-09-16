@@ -15,7 +15,7 @@ rm -rf build
 # chmod +x ./models/download-ggml-model.sh
 # ./models/download-ggml-model.sh base
 
-NPROC=$(nproc)
+NPROC=${BUILD_JOBS:-$(nproc)}
 
 WHISPER_CMAKE_COMMON_ARG=${CMAKE_COMMON_ARG}
 

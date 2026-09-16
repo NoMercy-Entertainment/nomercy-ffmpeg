@@ -28,7 +28,7 @@ cd /build/libjpeg-turbo
 mkdir build && cd build
 cmake -S .. -B . \
     ${CMAKE_COMMON_ARG}
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 if [[ ${TARGET_OS} != "linux" ]]; then
     sed -i 's/^Libs: \(.*\)[\r|\n]/Libs: \1 -lz/' ${PREFIX}/lib/pkgconfig/libjpeg.pc
 fi
@@ -52,7 +52,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) 2>&1 | log -a || { log -a "openjpeg build failed"; exit 1; }
+make -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a || { log -a "openjpeg build failed"; exit 1; }
 make install 2>&1 | log -a || { log -a "openjpeg install failed"; exit 1; }
 
 OPENJPEG_PC="${PREFIX}/lib/pkgconfig/libopenjp2.pc"

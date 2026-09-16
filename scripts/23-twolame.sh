@@ -11,7 +11,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 sed -i 's/Cflags:/Cflags: -DLIBTWOLAME_STATIC/' ${PREFIX}/lib/pkgconfig/twolame.pc
 rm -rf /build/twolame
 add_cflag "-DLIBTWOLAME_STATIC"

@@ -4,6 +4,13 @@
 ARG BASE_TAG=latest
 FROM nomercyentertainment/ffmpeg-base:${BASE_TAG} AS freebsd
 
+# Cap parallel compile jobs. The self-hosted runners expose all 56 host cores
+# but are bounded to 16 GiB of memory; at -j56 the C++ stages (~300 MB per
+# cc1plus) exceed that and the kernel kills the build. Override with
+# --build-arg BUILD_JOBS=<n>.
+ARG BUILD_JOBS=24
+ENV BUILD_JOBS=${BUILD_JOBS}
+
 LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.1"
 LABEL description="FFmpeg for Freebsd x86_64"

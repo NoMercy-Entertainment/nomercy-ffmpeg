@@ -4,6 +4,13 @@
 ARG BASE_TAG=latest
 FROM nomercyentertainment/ffmpeg-base:${BASE_TAG} AS windows
 
+# Cap parallel compile jobs. The self-hosted runners expose all 56 host cores
+# but are bounded to 16 GiB of memory; at -j56 the C++ stages (~300 MB per
+# cc1plus) exceed that and the kernel kills the build. Override with
+# --build-arg BUILD_JOBS=<n>.
+ARG BUILD_JOBS=24
+ENV BUILD_JOBS=${BUILD_JOBS}
+
 LABEL maintainer="Phillippe Pelzer"
 LABEL version="1.0.1"
 LABEL description="FFmpeg for Windows arm64"
@@ -242,7 +249,7 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
     || (cat "/ffmpeg_build.log" ; echo "--- ffbuild/config.log (tail) ---" ; tail -80 ffbuild/config.log 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
-    && make -j$(nproc) >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
+    && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \
     && echo "------------------------------------------------------" \
     && echo "✅ FFmpeg was built successfully" \

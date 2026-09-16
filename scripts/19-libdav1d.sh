@@ -9,7 +9,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-ninja -j$(nproc) && ninja install
+ninja -j${BUILD_JOBS:-$(nproc)} && ninja install
 rm -rf /build/libdav1d
 
 add_enable "--enable-libdav1d"

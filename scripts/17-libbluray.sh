@@ -48,7 +48,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) &>make.log || {
+make -j${BUILD_JOBS:-$(nproc)} &>make.log || {
     log "$(cat make.log)"
     log "Error: libgpg-error make failed."
     exit 1
@@ -101,7 +101,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) &>make.log || {
+make -j${BUILD_JOBS:-$(nproc)} &>make.log || {
     log "$(cat make.log)"
     log "Error: libgcrypt make failed."
     exit 1
@@ -163,7 +163,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) &>make.log || {
+make -j${BUILD_JOBS:-$(nproc)} &>make.log || {
     log "$(cat make.log)"
     log "Error: libbdplus make failed."
     exit 1
@@ -227,7 +227,7 @@ if [[ -f "src/file/keydb.c" ]]; then
     apply_sed "	src/file/keydbcfg.h \\" "a	src/file/keydb.c \\" "src/Makefile.am"
 fi
 
-make -j$(nproc) &>make.log || {
+make -j${BUILD_JOBS:-$(nproc)} &>make.log || {
     log "$(cat make.log)"
     log "Error: libaacs make failed."
     exit 1
@@ -308,7 +308,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-ninja -j$(nproc) -C build 2>&1 | log
+ninja -j${BUILD_JOBS:-$(nproc)} -C build 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log -a "libbluray build failed"

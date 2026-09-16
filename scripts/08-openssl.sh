@@ -29,7 +29,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 sed -i -e "/^CFLAGS=/s|=.*|=${CFLAGS}|" -e "/^LDFLAGS=/s|=[[:space:]]*$|=${LDFLAGS}|" Makefile
-make -j$(nproc) build_sw && make install_sw
+make -j${BUILD_JOBS:-$(nproc)} build_sw && make install_sw
 rm -rf /build/openssl
 export CFLAGS=${OLD_CFLAGS}
 export CXXFLAGS=${OLD_CXXFLAGS}

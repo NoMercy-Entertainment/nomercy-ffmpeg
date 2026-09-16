@@ -29,7 +29,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libdvdcss.pc
 rm -rf /build/libdvdcss && cd /build
 #endregion
@@ -45,7 +45,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 echo "Libs.private: -ldvdnav -ldvdcss -lstdc++" >>${PREFIX}/lib/pkgconfig/libdvdread.pc
 rm -rf /build/libdvdread && cd /build
 #endregion
@@ -61,7 +61,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 echo "Libs.private: -ldvdread -ldvdcss -lstdc++" >>${PREFIX}/lib/pkgconfig/libdvdnav.pc
 rm -rf /build/libdvdnav && cd /build
 #endregion

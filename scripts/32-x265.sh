@@ -63,14 +63,14 @@ fi
 cmake ${CMAKE_X265_ARG} -DHIGH_BIT_DEPTH=ON -DEXPORT_C_API=OFF -DENABLE_CLI=OFF -DMAIN12=ON -S ../../../source -B . \
     || die "x265 12-bit configure failed"
 
-make -j$(nproc) || die "x265 12-bit build failed"
+make -j${BUILD_JOBS:-$(nproc)} || die "x265 12-bit build failed"
 
 # build x265 10bit
 cd ../10bit
 cmake ${CMAKE_X265_ARG} -DHIGH_BIT_DEPTH=ON -DEXPORT_C_API=OFF -DENABLE_CLI=OFF -S ../../../source -B . \
     || die "x265 10-bit configure failed"
 
-make -j$(nproc) || die "x265 10-bit build failed"
+make -j${BUILD_JOBS:-$(nproc)} || die "x265 10-bit build failed"
 
 # build x265 8bit
 cd ../8bit
@@ -79,7 +79,7 @@ mv ../10bit/libx265.a ./libx265_main10.a || die "x265 10-bit build produced no l
 cmake ${CMAKE_X265_ARG} -DEXTRA_LIB="x265_main10.a;x265_main12.a" -DEXTRA_LINK_FLAGS=-L. -DLINKED_10BIT=ON -DLINKED_12BIT=ON -S ../../../source -B . \
     || die "x265 8-bit configure failed"
 
-make -j$(nproc) || die "x265 8-bit build failed"
+make -j${BUILD_JOBS:-$(nproc)} || die "x265 8-bit build failed"
 
 # install x265
 mv libx265.a libx265_main.a || die "x265 8-bit build produced no libx265.a"

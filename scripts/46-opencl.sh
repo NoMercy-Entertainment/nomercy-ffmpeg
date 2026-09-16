@@ -17,7 +17,7 @@ cmake ${CMAKE_COMMON_ARG} \
     -DOPENCL_ICD_LOADER_DISABLE_OPENCLON12=ON -DOPENCL_ICD_LOADER_PIC=ON \
     -DOPENCL_ICD_LOADER_BUILD_TESTING=OFF -DBUILD_TESTING=OFF ..
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 
 echo "prefix=${PREFIX}" >OpenCL.pc
 echo "exec_prefix=\${prefix}" >>OpenCL.pc

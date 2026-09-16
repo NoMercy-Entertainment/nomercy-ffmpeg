@@ -15,7 +15,7 @@ if [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "linux" ]]; then
         exit 1
     fi
 
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libcddb.pc
     rm -rf /build/libcddb
 fi
@@ -31,7 +31,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 if [[ ${TARGET_OS} == "darwin" ]]; then
     echo "Libs.private: -lstdc++ -framework DiskArbitration -framework IOKit" >>${PREFIX}/lib/pkgconfig/libcdio.pc
 else
@@ -50,7 +50,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 if [[ ${TARGET_OS} == "darwin" ]]; then
     echo "Libs.private: -lstdc++ -framework DiskArbitration -framework IOKit" >>${PREFIX}/lib/pkgconfig/libcdio_paranoia.pc
 else

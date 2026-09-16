@@ -45,7 +45,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-cmake --build . -j$(nproc) --config Release 2>&1 | log -a
+cmake --build . -j${BUILD_JOBS:-$(nproc)} --config Release 2>&1 | log -a
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Error: OpenBLAS build failed"
     exit 1

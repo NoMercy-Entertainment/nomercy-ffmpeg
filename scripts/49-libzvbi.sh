@@ -51,7 +51,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 if [ ${TARGET_OS} == "darwin" ]; then
-	make -C src -j$(nproc) 2>&1 | log
+	make -C src -j${BUILD_JOBS:-$(nproc)} 2>&1 | log
 
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "libzvbi build failed"
@@ -60,7 +60,7 @@ if [ ${TARGET_OS} == "darwin" ]; then
 
 	make -C src install 2>&1 | log
 else
-	make -j$(nproc) 2>&1 | log
+	make -j${BUILD_JOBS:-$(nproc)} 2>&1 | log
 
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "libzvbi build failed"

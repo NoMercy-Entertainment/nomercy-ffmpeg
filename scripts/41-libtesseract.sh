@@ -16,7 +16,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 
 if [ ! -f ${PREFIX}/lib/pkgconfig/lept.pc ]; then
     log "Failed to build leptonica"
@@ -82,7 +82,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) 2>&1 | log -a || { log -a "libtesseract build failed"; exit 1; }
+make -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a || { log -a "libtesseract build failed"; exit 1; }
 make install 2>&1 | log -a || { log -a "libtesseract install failed"; exit 1; }
 
 if [ ! -f ${PREFIX}/lib/pkgconfig/tesseract.pc ]; then

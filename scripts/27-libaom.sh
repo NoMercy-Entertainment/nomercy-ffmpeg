@@ -10,7 +10,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 echo "Requires.private: libvmaf" >>${PREFIX}/lib/pkgconfig/aom.pc
 rm -rf /build/libaom
 

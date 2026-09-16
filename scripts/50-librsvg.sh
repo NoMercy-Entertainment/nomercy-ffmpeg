@@ -53,7 +53,7 @@ if [ ${TARGET_OS} == "windows" ]; then
 		exit 1
 	fi
 
-	make -j$(nproc) 2>&1 | log -a
+	make -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "pcre2 build failed"
 		exit 1
@@ -91,7 +91,7 @@ if [ ${TARGET_OS} == "windows" ]; then
 		exit 1
 	fi
 
-	make -j$(nproc) 2>&1 | log -a
+	make -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "gettext build failed"
 		exit 1
@@ -128,7 +128,7 @@ if [ ${TARGET_OS} == "windows" ]; then
 		exit 1
 	fi
 
-	make -j$(nproc) 2>&1 | log -a
+	make -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "expat build failed"
 		exit 1
@@ -169,7 +169,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-ninja -j$(nproc) -C build 2>&1 | log -a
+ninja -j${BUILD_JOBS:-$(nproc)} -C build 2>&1 | log -a
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "pixman build failed"
@@ -262,7 +262,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-ninja -j$(nproc) -C build 2>&1 | log -a
+ninja -j${BUILD_JOBS:-$(nproc)} -C build 2>&1 | log -a
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "glib build failed"
@@ -366,7 +366,7 @@ fi
 
 echo "Compiling cairo..." > /ffmpeg_build.log
 
-ninja -j$(nproc) -C build 2>&1 | log -a
+ninja -j${BUILD_JOBS:-$(nproc)} -C build 2>&1 | log -a
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "cairo build failed"
@@ -426,7 +426,7 @@ if [[ ${TARGET_OS} != "darwin" ]]; then
 		exit 1
 	fi
 
-	ninja -j$(nproc) -C build 2>&1 | log -a
+	ninja -j${BUILD_JOBS:-$(nproc)} -C build 2>&1 | log -a
 
 	if [ ${PIPESTATUS[0]} -ne 0 ]; then
 		log "gdk-pixbuf build failed"
@@ -490,7 +490,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-ninja -j$(nproc) -C build 2>&1 | log -a
+ninja -j${BUILD_JOBS:-$(nproc)} -C build 2>&1 | log -a
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "pango build failed"
@@ -595,7 +595,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-ninja -j$(nproc) -C build 2>&1 | log -a
+ninja -j${BUILD_JOBS:-$(nproc)} -C build 2>&1 | log -a
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	LDFLAGS="${OLD_LDFLAGS}"

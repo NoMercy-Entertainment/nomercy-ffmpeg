@@ -18,7 +18,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libxxf86vm && cd /build
 
     # xrender
@@ -32,7 +32,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libxrender && cd /build
 
     # xscrnsaver
@@ -46,7 +46,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libxscrnsaver && cd /build
 
     # xrandr
@@ -60,7 +60,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libxrandr && cd /build
 
     # xi
@@ -74,7 +74,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libxi && cd /build
 
     # xinerama
@@ -88,7 +88,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libxinerama && cd /build
 
     # xcursor
@@ -102,7 +102,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libxcursor && cd /build
 
     # libsamplerate
@@ -115,7 +115,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libsamplerate && cd /build
 
     # libpulse
@@ -143,7 +143,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    ninja -j$(nproc) && ninja install
+    ninja -j${BUILD_JOBS:-$(nproc)} && ninja install
     echo "Libs.private: -lstdc++ -ldl -lrt" >>${PREFIX}/lib/pkgconfig/libpulse.pc
     echo "Libs.private: -lstdc++ -ldl -lrt" >>${PREFIX}/lib/pkgconfig/libpulse-simple.pc
     rm -rf /build/pulseaudio && cd /build
@@ -169,7 +169,7 @@ else
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j${BUILD_JOBS:-$(nproc)} && make install
     rm -rf /build/libsamplerate
 
     if [[ ${TARGET_OS} == "linux" ]]; then
@@ -217,7 +217,7 @@ cmake -S .. -B . \
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 
 if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" ]]; then
     sed -ri -e 's/\-Wl,\-\-no\-undefined.*//' -e 's/ \-l\/.+?\.a//g' ${PREFIX}/lib/pkgconfig/sdl2.pc

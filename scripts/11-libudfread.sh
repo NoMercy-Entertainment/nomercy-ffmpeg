@@ -12,7 +12,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-ninja -j$(nproc) 2>&1 | log -a || { log -a "libudfread build failed"; exit 1; }
+ninja -j${BUILD_JOBS:-$(nproc)} 2>&1 | log -a || { log -a "libudfread build failed"; exit 1; }
 ninja install 2>&1 | log -a || { log -a "libudfread install failed"; exit 1; }
 
 if [ ! -f ${PREFIX}/lib/pkgconfig/libudfread.pc ]; then

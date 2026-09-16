@@ -26,7 +26,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 make clean
-make -j$(nproc)
+make -j${BUILD_JOBS:-$(nproc)}
 make install
 
 if [ ! -f ${PREFIX}/lib/libpng.a ]; then
@@ -169,7 +169,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libtiff"
     exit 1
 fi
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 if [ ! -f ${PREFIX}/lib/pkgconfig/libtiff-4.pc ]; then
     log "Failed to build libtiff"
     exit 1
@@ -213,7 +213,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j${BUILD_JOBS:-$(nproc)} && make install
 rm -rf /build/libwebp
 
 cp ${PREFIX}/lib/pkgconfig/libsharpyuv.pc ${PREFIX}/lib/pkgconfig/sharpyuv.pc
