@@ -35,18 +35,8 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     OLD_CFLAGS=${CFLAGS}
     OLD_CXXFLAGS=${CXXFLAGS}
 
-    # -lgomp is GCC's OpenMP runtime. windows-aarch64 builds with llvm-mingw,
-    # which ships LLVM's libomp instead, so the flag does not resolve:
-    #   lld: error: unable to find library -lgomp
-    # OpenMP is turned off entirely for that target (GGML_OPENMP=OFF below),
-    # the same treatment freebsd already gets, so drop the library too.
-    WHISPER_OMP_LIB="-lgomp"
-    if [[ ${ARCH} == "aarch64" ]]; then
-        WHISPER_OMP_LIB=""
-    fi
-
-    CFLAGS="${CFLAGS} -lws2_32 -lwinpthread ${WHISPER_OMP_LIB} -lkernel32"
-    CXXFLAGS="${CXXFLAGS} -lws2_32 -lwinpthread ${WHISPER_OMP_LIB} -lkernel32"
+    CFLAGS="${CFLAGS} -lws2_32 -lwinpthread -lkernel32"
+    CXXFLAGS="${CXXFLAGS} -lws2_32 -lwinpthread -lkernel32"
 
     find . -name '*.cpp' -exec sed -i 's|%ld|%llu|g' {} +
     find . -name '*.cpp' -exec sed -i 's|%lld|%llu|g' {} +
@@ -62,10 +52,17 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     fi
     sed -i 's|#if _WIN32_WINNT >= 0x0602|#if 0 // disabled: mingw-w64 lacks THREAD_POWER_THROTTLING_STATE|' ggml/src/ggml-cpu/ggml-cpu.c
 
-    if [[ ${ARCH} == "aarch64" ]]; then
-        # No libgomp in llvm-mingw; use ggml's own threadpool instead of OpenMP.
-        WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_OPENMP=OFF"
-    fi
+    # windows-aarch64 (llvm-mingw) never linked libgomp: that toolchain ships
+    # LLVM's libomp instead, so -lgomp does not resolve there. windows-x64
+    # (GCC mingw) used to build ggml against GCC's libgomp, but that
+    # runtime's worker-pool teardown deadlocks intermittently at process
+    # exit on this MinGW build -- main thread stuck in doexit -> exit
+    # handler -> WaitForMultipleObjects, workers idle at 0% CPU -- so ffmpeg
+    # hangs after finishing its output until the caller's timeout kills it
+    # (reproduced on the owner's server 2026-09-16: ~9/14 baseline runs
+    # hung). Disable OpenMP on both windows targets and let ggml use its own
+    # threadpool instead, same as freebsd already does.
+    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_OPENMP=OFF"
 
     if [[ -f ${PREFIX}/lib/libopenblas.a ]]; then
         WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_BLAS=ON -DBLAS_VENDOR=OpenBLAS -DBLAS_LIBRARIES=${PREFIX}/lib/libopenblas.a -DBLAS_INCLUDE_DIRS=${PREFIX}/include/openblas"
@@ -179,17 +176,18 @@ lib_private_flags="Libs.private: -lstdc++"
         lib_flags+=" -lwinpthread -lws2_32"
         lib_private_flags+=" -lm -lwinpthread -lws2_32"
     else
-        lib_flags+=" -lggml-blas -lwinpthread -lgomp -lws2_32 -fopenmp"
-        lib_private_flags+=" -lm -lopenblas -lwinpthread -lgomp -lws2_32 -fopenmp"
+        # windows-x64: ggml no longer links libgomp/OpenMP here either (see
+        # the GGML_OPENMP=OFF comment above) -- its worker-pool teardown
+        # deadlocked intermittently at process exit on this MinGW build.
+        lib_flags+=" -lggml-blas -lwinpthread -lws2_32"
+        lib_private_flags+=" -lm -lopenblas -lwinpthread -lws2_32"
     fi
     echo "${lib_flags}"
     echo "${lib_private_flags}"
-    if [[ ${TARGET_OS} == "windows" && ${ARCH} == "aarch64" ]]; then
-        # OpenMP is off for this target, so consumers must not be told to
-        # compile with -fopenmp either.
+    if [[ ${TARGET_OS} == "windows" ]]; then
+        # OpenMP is off on both windows targets, so consumers must not be
+        # told to compile with -fopenmp either.
         echo "Cflags: -I\${includedir}"
-    elif [[ ${TARGET_OS} == "windows" ]]; then
-        echo "Cflags: -I\${includedir} -fopenmp"
     else
         echo "Cflags: -I\${includedir}"
     fi
