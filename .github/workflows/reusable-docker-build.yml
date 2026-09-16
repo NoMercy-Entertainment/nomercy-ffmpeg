@@ -201,12 +201,21 @@ jobs:
           # consumer (verify, export-artifacts) docker-pulls or docker-
           # creates on demand. Avoids keeping a ~5GB image on local disk
           # between build and push.
+          # The self-hosted runners build inside a Docker container capped at
+          # 16 GiB by a memory cgroup, but `nproc` inside that container still
+          # reports the host's 56 CPUs, so an uncapped `make -j$(nproc)` on a
+          # C++-heavy step (harfbuzz was the first) launches far more parallel
+          # compiles than 16 GiB holds and the kernel OOM-kills docker-buildx.
+          # BUILD_JOBS caps it; 12 is the default that fits at roughly 1 GiB
+          # per C++ compile job, and the repository variable FFMPEG_BUILD_JOBS
+          # can raise it later without touching this file.
           BUILD_ARGS="--file ${{ inputs.dockerfile }} \
             --tag ${IMAGE}:latest \
             --tag ${IMAGE}:${{ github.sha }} \
             ${NO_CACHE_FLAG} \
             ${CACHE_FROM_FLAG} \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg BUILD_JOBS=${{ vars.FFMPEG_BUILD_JOBS || 12 }} \
             ${BASE_TAG_FLAG} \
             --pull \
             --push \

@@ -83,6 +83,23 @@ mkdir -p /logs
 . /scripts/init/helpers.sh
 export -f hr text_with_padding add_enable add_cflag add_ldflag add_extralib join_lines split_lines clean_whitespace apply_sed check_enabled log
 
+# The self-hosted CI runners build inside a Docker container capped at 16 GiB
+# by a memory cgroup, but the container still reports the host's 56 CPUs, so
+# every "$(nproc)" in the build scripts launches far more parallel C++
+# compiles than the cgroup can hold (docker-buildx was OOM-killed at the
+# harfbuzz step three times in a row). This function shadows the real
+# nproc(1) with the CI-supplied cap when BUILD_JOBS is set to a positive
+# integer, and falls back to the real nproc everywhere else (including every
+# local/non-CI build).
+nproc() {
+    if [[ ${BUILD_JOBS} =~ ^[1-9][0-9]*$ ]]; then
+        echo "${BUILD_JOBS}"
+    else
+        command nproc
+    fi
+}
+export -f nproc
+
 text_with_padding "✅ Helper functions registered" ""
 hr # Print a horizontal line
 #endregion
