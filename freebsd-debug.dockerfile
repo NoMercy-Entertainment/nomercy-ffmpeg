@@ -46,7 +46,7 @@ RUN echo "------------------------------------------------------" \
 ENV TARGET_OS=freebsd
 ENV PREFIX=/ffmpeg_build/freebsd
 ENV ARCH=x86_64
-ENV FREEBSD_VERSION=14.5
+ENV FREEBSD_VERSION=14.4
 ENV SYSROOT=/opt/freebsd-sysroot
 ENV CROSS_PREFIX=${ARCH}-unknown-freebsd14-
 ENV CC=${CROSS_PREFIX}gcc
