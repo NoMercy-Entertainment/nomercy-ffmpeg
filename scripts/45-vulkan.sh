@@ -16,6 +16,10 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 ninja -j$(nproc) && ninja install
+if [ $? -ne 0 ]; then
+    echo "vulkan-headers failed to build or install"
+    exit 1
+fi
 rm -rf /build/vulkan-headers
 echo "prefix=${PREFIX}" >${PREFIX}/lib/pkgconfig/vulkan.pc
 echo "exec_prefix=\${prefix}" >>${PREFIX}/lib/pkgconfig/vulkan.pc
@@ -46,6 +50,14 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 ninja -j$(nproc) && ninja install
+if [ $? -ne 0 ]; then
+    echo "shaderc failed to build or install"
+    exit 1
+fi
+if [ ! -f "${PREFIX}/lib/pkgconfig/shaderc.pc" ]; then
+    echo "shaderc.pc is missing after install"
+    exit 1
+fi
 cp libshaderc_util/libshaderc_util.a ${PREFIX}/lib
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/shaderc.pc
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/shaderc_static.pc
@@ -68,6 +80,10 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 make -j$(nproc) && make install
+if [ $? -ne 0 ]; then
+    echo "spirv-cross failed to build or install"
+    exit 1
+fi
 echo "prefix=${PREFIX}" >${PREFIX}/lib/pkgconfig/spirv-cross.pc
 echo "exec_prefix=\${prefix}" >>${PREFIX}/lib/pkgconfig/spirv-cross.pc
 echo "libdir=\${prefix}/lib" >>${PREFIX}/lib/pkgconfig/spirv-cross.pc
@@ -109,6 +125,14 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 ninja -j$(nproc) && ninja install
+if [ $? -ne 0 ]; then
+    echo "libplacebo failed to build or install"
+    exit 1
+fi
+if [ ! -f "${PREFIX}/lib/pkgconfig/libplacebo.pc" ]; then
+    echo "libplacebo.pc is missing after install"
+    exit 1
+fi
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libplacebo.pc
 sed -i 's/-lshaderc_shared/-lshaderc_combined/' ${PREFIX}/lib/pkgconfig/libplacebo.pc
 rm -rf /build/libplacebo
