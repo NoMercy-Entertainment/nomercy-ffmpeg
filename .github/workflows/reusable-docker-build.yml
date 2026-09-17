@@ -291,7 +291,12 @@ jobs:
               exit 1
             fi
           done
-        timeout-minutes: 240  # 4 hour timeout — Windows cross-compile on fuse-overlayfs runs ~3h
+        # 6 hours. The windows-x86_64 cross-compile on fuse-overlayfs took ~3h
+        # when it built with -j$(nproc); capping the parallel jobs at 12 to fit
+        # the runners' 16 GiB cgroup roughly doubled that. Measured against the
+        # old 240 limit it ran 230, 237 and then 241 minutes, so it was passing
+        # on margin and finally timed out with nothing wrong in the build.
+        timeout-minutes: 360
 
       # No separate push step — `--push` in the build above pushes both
       # tags (:latest and :${{ github.sha }}) to DockerHub during the build.
