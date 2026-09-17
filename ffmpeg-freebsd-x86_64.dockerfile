@@ -48,7 +48,7 @@ ENV BUILD_JOBS=${BUILD_JOBS}
 ENV TARGET_OS=freebsd
 ENV PREFIX=/ffmpeg_build/freebsd
 ENV ARCH=x86_64
-ENV FREEBSD_VERSION=14.4
+ENV FREEBSD_VERSION=14.3
 ENV SYSROOT=/opt/freebsd-sysroot
 ENV CROSS_PREFIX=${ARCH}-unknown-freebsd14-
 ENV CC=${CROSS_PREFIX}gcc
@@ -198,7 +198,7 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --extra-cflags="-static" \
     --extra-ldflags="-static" \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
-    || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; false) \
+    || (cat "/ffmpeg_build.log" ; echo "--- last 150 lines of config.log ---" ; tail -150 "/build/ffmpeg/ffbuild/config.log" 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
     && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; cat "/build/ffmpeg/ffbuild/config.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \
