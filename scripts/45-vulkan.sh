@@ -135,6 +135,22 @@ if [ ! -f "${PREFIX}/lib/pkgconfig/libplacebo.pc" ]; then
 fi
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libplacebo.pc
 sed -i 's/-lshaderc_shared/-lshaderc_combined/' ${PREFIX}/lib/pkgconfig/libplacebo.pc
+
+# FFmpeg resolves libplacebo through pkg-config with --static, and reports
+# nothing but "not found" when that fails - 80 minutes after this script
+# said it succeeded. Ask the same question here, while the answer is cheap.
+if ! pkg-config --static --cflags --libs libplacebo >/dev/null 2>&1; then
+    echo "libplacebo is installed but pkg-config cannot resolve it:"
+    pkg-config --print-errors --static --cflags --libs libplacebo 2>&1 || true
+    exit 1
+fi
+libplacebo_installed_version=$(pkg-config --modversion libplacebo 2>/dev/null)
+if [ -z "${libplacebo_installed_version}" ]; then
+    echo "libplacebo.pc carries no version, so FFmpeg's version test cannot pass"
+    exit 1
+fi
+echo "libplacebo ${libplacebo_installed_version} resolves through pkg-config"
+
 rm -rf /build/libplacebo
 
 # FFmpeg 9.0 dropped --enable-libshaderc (and --enable-libglslang): it no longer
