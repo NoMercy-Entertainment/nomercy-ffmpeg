@@ -48,7 +48,7 @@ ENV BUILD_JOBS=${BUILD_JOBS}
 ENV TARGET_OS=freebsd
 ENV PREFIX=/ffmpeg_build/freebsd
 ENV ARCH=x86_64
-ENV FREEBSD_VERSION=14.3
+ENV FREEBSD_VERSION=14.5
 ENV SYSROOT=/opt/freebsd-sysroot
 ENV CROSS_PREFIX=${ARCH}-unknown-freebsd14-
 ENV CC=${CROSS_PREFIX}gcc
@@ -75,7 +75,10 @@ ENV LDFLAGS="-L${PREFIX}/lib -O2 -pipe -fstack-protector-strong -fstack-clash-pr
 RUN echo "------------------------------------------------------" \
     && echo "🔧 Start setting up FreeBSD sysroot and toolchain" \
     && mkdir -p ${SYSROOT} \
-    && wget -O /tmp/base.txz https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1 \
+    # download.freebsd.org drops a release once it goes end-of-life; the archive
+    # mirror keeps it, so fall back there instead of failing the build.
+    && (wget -O /tmp/base.txz https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1 \
+        || wget -O /tmp/base.txz https://archive.freebsd.org/old-releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1) \
     && tar -xJf /tmp/base.txz -C ${SYSROOT} ./lib ./usr/lib ./usr/include ./usr/libdata >/dev/null 2>&1 \
     && rm -f /tmp/base.txz \
     # -Qunused-arguments: -fuse-ld=lld is unused in compile-only invocations and
