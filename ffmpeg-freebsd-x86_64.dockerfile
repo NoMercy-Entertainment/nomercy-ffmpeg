@@ -43,6 +43,8 @@ RUN echo "------------------------------------------------------" \
     && echo "------------------------------------------------------"
 
 # Set environment variables for building ffmpeg
+ARG BUILD_JOBS=
+ENV BUILD_JOBS=${BUILD_JOBS}
 ENV TARGET_OS=freebsd
 ENV PREFIX=/ffmpeg_build/freebsd
 ENV ARCH=x86_64
@@ -73,7 +75,10 @@ ENV LDFLAGS="-L${PREFIX}/lib -O2 -pipe -fstack-protector-strong -fstack-clash-pr
 RUN echo "------------------------------------------------------" \
     && echo "🔧 Start setting up FreeBSD sysroot and toolchain" \
     && mkdir -p ${SYSROOT} \
-    && wget -O /tmp/base.txz https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1 \
+    # download.freebsd.org drops a release once it goes end-of-life; the archive
+    # mirror keeps it, so fall back there instead of failing the build.
+    && (wget -O /tmp/base.txz https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1 \
+        || wget -O /tmp/base.txz https://archive.freebsd.org/old-releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1) \
     && tar -xJf /tmp/base.txz -C ${SYSROOT} ./lib ./usr/lib ./usr/include ./usr/libdata >/dev/null 2>&1 \
     && rm -f /tmp/base.txz \
     # -Qunused-arguments: -fuse-ld=lld is unused in compile-only invocations and
@@ -193,9 +198,9 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --extra-cflags="-static" \
     --extra-ldflags="-static" \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
-    || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; false) \
+    || (cat "/ffmpeg_build.log" ; echo "--- last 150 lines of config.log ---" ; tail -150 "/build/ffmpeg/ffbuild/config.log" 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
-    && make -j$(nproc) >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; cat "/build/ffmpeg/ffbuild/config.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
+    && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; cat "/build/ffmpeg/ffbuild/config.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \
     && echo "------------------------------------------------------" \
     && echo "✅ FFmpeg was built successfully" \

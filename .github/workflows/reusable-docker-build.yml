@@ -201,12 +201,21 @@ jobs:
           # consumer (verify, export-artifacts) docker-pulls or docker-
           # creates on demand. Avoids keeping a ~5GB image on local disk
           # between build and push.
+          # The self-hosted runners build inside a Docker container capped at
+          # 16 GiB by a memory cgroup, but `nproc` inside that container still
+          # reports the host's 56 CPUs, so an uncapped `make -j$(nproc)` on a
+          # C++-heavy step (harfbuzz was the first) launches far more parallel
+          # compiles than 16 GiB holds and the kernel OOM-kills docker-buildx.
+          # BUILD_JOBS caps it; 12 is the default that fits at roughly 1 GiB
+          # per C++ compile job, and the repository variable FFMPEG_BUILD_JOBS
+          # can raise it later without touching this file.
           BUILD_ARGS="--file ${{ inputs.dockerfile }} \
             --tag ${IMAGE}:latest \
             --tag ${IMAGE}:${{ github.sha }} \
             ${NO_CACHE_FLAG} \
             ${CACHE_FROM_FLAG} \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg BUILD_JOBS=${{ vars.FFMPEG_BUILD_JOBS || 12 }} \
             ${BASE_TAG_FLAG} \
             --pull \
             --push \
@@ -282,7 +291,12 @@ jobs:
               exit 1
             fi
           done
-        timeout-minutes: 240  # 4 hour timeout — Windows cross-compile on fuse-overlayfs runs ~3h
+        # 6 hours. The windows-x86_64 cross-compile on fuse-overlayfs took ~3h
+        # when it built with -j$(nproc); capping the parallel jobs at 12 to fit
+        # the runners' 16 GiB cgroup roughly doubled that. Measured against the
+        # old 240 limit it ran 230, 237 and then 241 minutes, so it was passing
+        # on margin and finally timed out with nothing wrong in the build.
+        timeout-minutes: 360
 
       # No separate push step — `--push` in the build above pushes both
       # tags (:latest and :${{ github.sha }}) to DockerHub during the build.
