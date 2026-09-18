@@ -82,6 +82,8 @@ RUN echo "------------------------------------------------------" \
 RUN cd /build
 
 # Set environment variables for building ffmpeg
+ARG BUILD_JOBS=
+ENV BUILD_JOBS=${BUILD_JOBS}
 ENV TARGET_OS=darwin
 ENV PREFIX=/ffmpeg_build/darwin
 ENV ARCH=arm64
@@ -217,7 +219,7 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
     || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; false) \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
-    && make -j$(nproc) >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
+    && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \
     && echo "------------------------------------------------------" \
     && echo "✅ FFmpeg was built successfully" \
