@@ -220,7 +220,7 @@ such as FLAC's 65,535 samples. No rechunking filter is needed.
 | `bleed` | float | `0` | Smallest share of the mixture every stem keeps in any bin. Fills the deepest spectral holes; it is **not** a cure for ducking |
 | `smooth` | int | `0` | Smooth the masks over this many frequency bins either side |
 | `overlap` | duration | `0` | Crossfade between segments (e.g. `5`, `1.5`, `00:00:05.000`); `0` matches reference Spleeter's un-overlapped chunking |
-| `threads` | int | `0` | ggml CPU threads; `0` uses the filter's default |
+| `threads` | int | `0` | ggml CPU threads. `0` uses one thread per physical core the process may run on, capped by `-filter_threads` when that is set below 16. Hyperthreads and oversubscription slow it down: 8 threads on an 8-core/16-thread CPU is 24% faster than 16 |
 
 **Why `extend` is the default.** `passthrough` was, until it was measured. It
 loses nothing, but it hands *all* the unmodelled energy to one stem

@@ -45,11 +45,26 @@
  * driver entirely.
  */
 
+/* for sched_getaffinity() and the CPU_* macros; must precede every include */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/param.h>
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <sched.h>
+#endif
 
 #include <ggml.h>
 #include <ggml-alloc.h>
@@ -167,6 +182,7 @@ typedef struct StemSplitContext {
     int      smooth;
     int64_t  overlap;
     int      nb_threads;
+    int      ggml_threads;   /* resolved once, on the first inference */
     char    *dump_dir;
     char    *debug_input_path;
 
@@ -1443,6 +1459,119 @@ static int ss_dump_taps(AVFilterContext *ctx)
     return ret;
 }
 
+/* Physical cores this process may run on, or 0 when the platform cannot say.
+ *
+ * Only cores with at least one logical CPU in the process affinity count, so
+ * a pinned or cgroup-limited process is not told about cores it cannot use.
+ */
+static int ss_physical_cores(void)
+{
+#if defined(_WIN32)
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION *info;
+    DWORD_PTR proc_mask, sys_mask;
+    DWORD len = 0;
+    int i, n, cores = 0;
+
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask))
+        return 0;
+    GetLogicalProcessorInformation(NULL, &len);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || !len)
+        return 0;
+    info = av_malloc(len);
+    if (!info)
+        return 0;
+    if (GetLogicalProcessorInformation(info, &len)) {
+        n = len / sizeof(*info);
+        for (i = 0; i < n; i++)
+            if (info[i].Relationship == RelationProcessorCore &&
+                (info[i].ProcessorMask & proc_mask))
+                cores++;
+    }
+    av_free(info);
+    return cores;
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    int n = 0;
+    size_t size = sizeof(n);
+#if defined(__APPLE__)
+    const char *name = "hw.physicalcpu";
+#else
+    const char *name = "kern.smp.cores";
+#endif
+    return sysctlbyname(name, &n, &size, NULL, 0) == 0 && n > 0 ? n : 0;
+#elif defined(__linux__)
+    cpu_set_t set;
+    int cpu, cores = 0;
+
+    if (sched_getaffinity(0, sizeof(set), &set))
+        return 0;
+    /* A core counts once: at the lowest of its hyperthreads that the
+     * affinity mask allows. */
+    for (cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+        char path[96], list[256], *p;
+        int first = -1;
+        FILE *f;
+
+        if (!CPU_ISSET(cpu, &set))
+            continue;
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
+        f = fopen(path, "r");
+        if (!f)
+            return 0;
+        p = fgets(list, sizeof(list), f);
+        fclose(f);
+        if (!p)
+            return 0;
+        /* "0,28" or "0-1": walk every sibling, ranges included */
+        while (*p && first < 0) {
+            long lo = strtol(p, &p, 10), hi = lo, c;
+            if (*p == '-')
+                hi = strtol(p + 1, &p, 10);
+            for (c = lo; c <= hi && c < CPU_SETSIZE; c++)
+                if (CPU_ISSET(c, &set)) {
+                    first = c;
+                    break;
+                }
+            if (*p != ',')
+                break;
+            p++;
+        }
+        if (first == cpu)
+            cores++;
+    }
+    return cores;
+#else
+    return 0;
+#endif
+}
+
+/* FFmpeg sizes a filter graph's thread pool at min(cpus + 1, 16) unless told
+ * otherwise (MAX_AUTO_THREADS in libavutil/slicethread.c). */
+#define SS_FFMPEG_AUTO_THREADS 16
+
+/* ggml thread count for `threads=0`.
+ *
+ * ggml's own threadpool (windows-x64 builds without OpenMP, see #64) syncs on
+ * spin barriers, so a worker that shares a core with its hyperthread twin, or
+ * with FFmpeg's own threads, stalls every other worker. Measured (#67): 8 on
+ * an 8-core/16-thread desktop is 24% faster than 16, and 28 on a 28-core/
+ * 56-thread server is 12% faster than FFmpeg's 16 while 56 is 7x slower. The
+ * physical core count wins on both.
+ *
+ * A graph thread count below FFmpeg's automatic ceiling was lowered on purpose
+ * (-filter_threads, or the filter's own `threads` context option), so it stays
+ * a cap. `threads=N` on the filter overrides all of this.
+ */
+static int ss_default_threads(AVFilterContext *ctx)
+{
+    const int graph = FFMAX(1, ff_filter_get_nb_threads(ctx));
+    const int cores = ss_physical_cores();
+
+    if (cores <= 0)
+        return graph;
+    return graph < SS_FFMPEG_AUTO_THREADS ? FFMIN(cores, graph) : cores;
+}
+
 /* Runs both networks over one segment's magnitude spectrogram.
  *
  * `mag` is [C=2][T=512][F=1024] float32, frequency contiguous -- byte for byte
@@ -1465,8 +1594,13 @@ static int ss_infer(AVFilterContext *ctx, const float *mag,
 
     ggml_backend_tensor_set(s->g_input, mag, 0, bytes);
 
-    ggml_backend_cpu_set_n_threads(s->backend, s->nb_threads > 0 ? s->nb_threads
-                                   : FFMAX(1, ff_filter_get_nb_threads(ctx)));
+    if (!s->ggml_threads) {
+        s->ggml_threads = s->nb_threads > 0 ? s->nb_threads
+                                            : ss_default_threads(ctx);
+        av_log(ctx, AV_LOG_VERBOSE, "stemsplit: %d ggml threads%s.\n",
+               s->ggml_threads, s->nb_threads > 0 ? " (threads option)" : "");
+    }
+    ggml_backend_cpu_set_n_threads(s->backend, s->ggml_threads);
 
     if (ggml_backend_graph_compute(s->backend, s->graph) != GGML_STATUS_SUCCESS) {
         av_log(ctx, AV_LOG_ERROR, "stemsplit: graph computation failed.\n");
