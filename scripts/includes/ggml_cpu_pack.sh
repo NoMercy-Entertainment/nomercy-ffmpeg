@@ -11,6 +11,20 @@
 #          COMDAT section symbols, which corrupts the section names and makes
 #          the link produce an empty binary with no error.
 #
+#          Renaming the symbol alone is not enough on COFF: vague-linkage
+#          definitions (C++ vtables, template instantiations, the compiler's
+#          auto-generated ".refptr.<sym>" indirection cells for cross-TU
+#          globals) live in COMDAT sections named "<kind>$<sym>", e.g.
+#          ".rdata$_ZTVsomething" or ".text$_ZSt...". The final linker folds
+#          COMDAT groups together by matching these SECTION NAMES, not symbol
+#          names, so two variants that keep the same section name collide and
+#          get folded into one, leaving the other variant's (correctly
+#          prefixed) symbol references dangling ("undefined reference").
+#          Renaming the matching "<kind>$<sym>" section alongside its symbol,
+#          for every section kind gcc/mingw is known to emit, avoids the
+#          collision without touching the base segment names (.text, .data,
+#          .rdata, ...) themselves or any section outside this pattern.
+#
 # Tools are taken from NM_NM / NM_OBJCOPY / NM_LD so the same code serves the
 # cross toolchains (mingw, llvm-mingw, aarch64-linux-gnu).
 
@@ -36,7 +50,16 @@ nm_pack_variant() {
     coff)
         "${nm}" --defined-only "${tmp}" \
             | awk -v p="${prefix}" '$2 ~ /^[TDBRWV]$/ { print $3 " " p $3 }' > "${tmp}.redef"
-        "${objcopy}" --redefine-syms="${tmp}.redef" "${tmp}" "${output}" || return 1
+        : > "${tmp}.secargs"
+        while read -r old new; do
+            for kind in text data rdata bss pdata xdata; do
+                printf -- '--rename-section=.%s$%s=.%s$%s\n' "${kind}" "${old}" "${kind}" "${new}" >> "${tmp}.secargs"
+            done
+        done < "${tmp}.redef"
+        # objcopy silently skips --rename-section entries whose old name does
+        # not exist in this object, so it is safe to try every section kind
+        # for every renamed symbol rather than knowing which kind applies.
+        "${objcopy}" --redefine-syms="${tmp}.redef" $(cat "${tmp}.secargs") "${tmp}" "${output}" || return 1
         ;;
     *)
         echo "nm_pack_variant: unknown object format: ${format}" >&2
