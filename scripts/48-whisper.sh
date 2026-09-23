@@ -228,7 +228,18 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
     source /scripts/includes/ggml_cpu_pack.sh
 
     NM_OBJ_FORMAT=elf
-    [[ ${TARGET_OS} == windows ]] && NM_OBJ_FORMAT=coff
+    NM_VARIANT_EXT=o
+    if [[ ${TARGET_OS} == windows ]]; then
+        if [[ ${ARCH} == aarch64 ]]; then
+            # llvm-mingw's ld.lld has no -r and its objcopy refuses
+            # --rename-section on COFF, so this platform packs whole
+            # archives instead of merged objects. See ggml_cpu_pack.sh.
+            NM_OBJ_FORMAT=coff-archive
+            NM_VARIANT_EXT=a
+        else
+            NM_OBJ_FORMAT=coff
+        fi
+    fi
     # Not every platform image exports NM/LD/CROSS_PREFIX (only the cross
     # dockerfiles do), so fall back to the plain binutils names rather than
     # requiring them.
@@ -257,8 +268,9 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
 
         nm_archive=$(find ${nm_variant_dir}/build-${nm_tag} -name 'libggml-cpu.a' -o -name 'ggml-cpu.a' | head -1)
         nm_pack_variant ${NM_OBJ_FORMAT} "${nm_archive}" "nm_v${nm_index}_" \
-            ${nm_variant_dir}/variant-${nm_tag}.o || { log "Error: packing ${nm_tag} failed"; exit 1; }
-        nm_objects="${nm_objects} ${nm_variant_dir}/variant-${nm_tag}.o"
+            ${nm_variant_dir}/variant-${nm_tag}.${NM_VARIANT_EXT} \
+            || { log "Error: packing ${nm_tag} failed"; exit 1; }
+        nm_objects="${nm_objects} ${nm_variant_dir}/variant-${nm_tag}.${NM_VARIANT_EXT}"
         printf '    X(nm_v%s_, "%s", %s) \\\n' "${nm_index}" "${nm_tag}" "${nm_feat}" >> ${nm_header}
         nm_index=$((nm_index + 1))
     done < <(nm_variant_matrix)
@@ -283,8 +295,38 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: dispatcher build failed"; exit 1; fi
 
     rm -f ${PREFIX}/lib/libggml-cpu-variants.a
-    ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o ${nm_objects} \
-        || { log "Error: archiving libggml-cpu-variants.a failed"; exit 1; }
+    if [[ ${NM_OBJ_FORMAT} == coff-archive ]]; then
+        # The variants are archives here, not objects, so they are merged with
+        # an MRI script (ADDLIB splices in every member of another archive)
+        # rather than appended with `ar rcs`. Member basenames collide both
+        # inside one variant (two quants.c.obj, two repack.cpp.obj) and across
+        # variants; that is fine in an ar archive -- duplicate member names are
+        # legal and lookup goes through the symbol index -- as long as nothing
+        # ever extracts them to a directory, which this path does not.
+        {
+            echo "CREATE ${PREFIX}/lib/libggml-cpu-variants.a"
+            echo "ADDMOD ${nm_variant_dir}/dispatch.o"
+            for nm_obj in ${nm_objects}; do
+                echo "ADDLIB ${nm_obj}"
+            done
+            echo "SAVE"
+            echo "END"
+        } | ${AR:-ar} -M || { log "Error: MRI merge of libggml-cpu-variants.a failed"; exit 1; }
+        ${RANLIB:-ranlib} ${PREFIX}/lib/libggml-cpu-variants.a \
+            || { log "Error: indexing libggml-cpu-variants.a failed"; exit 1; }
+        # `ar -M` reports a failed script on stdout and still exits 0 in some
+        # binutils versions, so confirm the result really exists and really
+        # carries every variant's entry point.
+        nm_reg_count=$(${NM_NM} --defined-only ${PREFIX}/lib/libggml-cpu-variants.a 2>/dev/null \
+            | grep -c "nm_v[0-9]*_ggml_backend_cpu_reg$")
+        if [[ ${nm_reg_count} -ne ${nm_index} ]]; then
+            log "Error: libggml-cpu-variants.a has ${nm_reg_count} prefixed ggml_backend_cpu_reg symbols, expected ${nm_index}"
+            exit 1
+        fi
+    else
+        ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o ${nm_objects} \
+            || { log "Error: archiving libggml-cpu-variants.a failed"; exit 1; }
+    fi
     rm -f ${PREFIX}/lib/libggml-cpu.a ${PREFIX}/lib/ggml-cpu.a
 else
     # NM_SKIP_VARIANTS platforms (currently only darwin) still get their

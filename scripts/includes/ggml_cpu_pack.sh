@@ -1,8 +1,9 @@
 #!/bin/bash
-# Pack one ggml CPU backend build into a single object whose symbols cannot
-# clash with another variant of the same backend in the same binary.
+# Pack one ggml CPU backend build into a single object (or, on
+# coff-archive, a rewritten archive) whose symbols cannot clash with another
+# variant of the same backend in the same binary.
 #
-# The two recipes differ because the object formats do:
+# The three recipes differ because the object formats and the linkers do:
 #
 #   ELF  - prefix EVERY symbol, which keeps COMDAT groups internally
 #          consistent, then restore the names of the undefined references so
@@ -25,6 +26,48 @@
 #          collision without touching the base segment names (.text, .data,
 #          .rdata, ...) themselves or any section outside this pattern.
 #
+#   COFF-ARCHIVE - windows-aarch64 only. Same "rename defined symbols"
+#          intent as COFF, but it cannot partial-link first and it does not
+#          rename sections. Both differences are forced by llvm-mingw, the
+#          only working Windows-on-ARM toolchain (see
+#          ffmpeg-windows-aarch64.dockerfile for why GCC was abandoned):
+#
+#          1. Its linker is ld.lld, whose MinGW driver does not implement -r
+#             at all ("lld: error: unknown argument: -r", verified against the
+#             pinned llvm-mingw 20260728). No other tool in the image can
+#             partial-link aarch64 PE: GNU ld has no aarch64 PE emulation
+#             ("relocatable linking with relocations from format
+#             pe-aarch64-little to format elf64-littleaarch64 is not
+#             supported"). So the rename is applied to the ARCHIVE instead --
+#             objcopy rewrites every member in place and writes a new archive.
+#             This also sidesteps extracting members to a directory, which
+#             would be lossy: ggml-cpu.a really does contain two members
+#             called quants.c.obj and two called repack.cpp.obj (the generic
+#             and the arch/arm copies).
+#
+#          2. llvm-objcopy rejects --rename-section on COFF outright ("option
+#             is not supported for COFF"), so the "<kind>$<symbol>" renames
+#             above are simply not available. They are not needed here: they
+#             exist because GNU ld folds COMDAT groups by SECTION NAME,
+#             whereas ld.lld folds COFF COMDATs by their leader SYMBOL name --
+#             which --redefine-syms has already made unique per variant.
+#             Verified on the real ggml-cpu backend: the two-variant link
+#             resolves with zero undefined symbols, each variant keeps its own
+#             512 text symbols at distinct addresses, and dotprod/fp16
+#             instructions appear only inside the armv8.2 variant's functions.
+#             (Cross-checked against a GNU-binutils build that DID rename the
+#             sections: identical symbol counts and identical dotprod split,
+#             so nothing is lost by dropping them.)
+#
+#          Because a member's reference to another member's symbol is an
+#          UNDEFINED symbol rather than an internal relocation (there is no
+#          partial link to resolve it), the rename list has to be the union of
+#          the defined symbols of the WHOLE archive, applied to every member.
+#          That renames definitions and cross-member references alike -- the
+#          same end state `ld -r` plus a per-object rename produces -- while
+#          genuinely external undefined symbols (libc, libc++, ggml-base) are
+#          not in the list and stay untouched.
+#
 # Tools are taken from NM_NM / NM_OBJCOPY / NM_LD so the same code serves the
 # cross toolchains (mingw, llvm-mingw, aarch64-linux-gnu).
 
@@ -38,7 +81,11 @@ nm_pack_variant() {
         return 1
     fi
 
-    "${ld}" -r --whole-archive "${archive}" -o "${tmp}" || return 1
+    # coff-archive never partial-links; the other two recipes start from one
+    # merged object.
+    if [[ ${format} != coff-archive ]]; then
+        "${ld}" -r --whole-archive "${archive}" -o "${tmp}" || return 1
+    fi
 
     case "${format}" in
     elf)
@@ -87,6 +134,28 @@ nm_pack_variant() {
         # unquoted command substitution full of mangled C++ names.
         "${objcopy}" --redefine-syms="${tmp}.redef" "@${tmp}.secargs" "${tmp}" "${output}" || return 1
         ;;
+    coff-archive)
+        # sort -u, unlike the merged-object recipes: nm runs over a whole
+        # archive here, and a COMDAT definition (vtable, template
+        # instantiation, inline function) is emitted into every member that
+        # needed it, so the same "old new" pair comes out many times.
+        # llvm-objcopy tolerates exact duplicates (checked), but GNU objcopy
+        # rejects a redefine list with a repeated old name outright, so the
+        # recipe stays portable if this platform's toolchain ever changes --
+        # and the list is a fraction of the size either way.
+        "${nm}" --defined-only "${archive}" \
+            | awk -v p="${prefix}" '$2 ~ /^[TDBRWV]$/ { print $3 " " p $3 }' \
+            | sort -u > "${output}.redef"
+        if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo "nm_pack_variant: ${nm} --defined-only failed on ${archive}" >&2
+            return 1
+        fi
+        if [[ ! -s ${output}.redef ]]; then
+            echo "nm_pack_variant: no defined symbols found in ${archive}; ${nm} may have failed silently" >&2
+            return 1
+        fi
+        "${objcopy}" --redefine-syms="${output}.redef" "${archive}" "${output}" || return 1
+        ;;
     *)
         echo "nm_pack_variant: unknown object format: ${format}" >&2
         return 1
@@ -98,5 +167,5 @@ nm_pack_variant() {
         echo "nm_pack_variant: ${prefix}ggml_backend_cpu_reg missing from ${output}" >&2
         return 1
     fi
-    rm -f "${tmp}" "${tmp}".*
+    rm -f "${tmp}" "${tmp}".* "${output}.redef"
 }

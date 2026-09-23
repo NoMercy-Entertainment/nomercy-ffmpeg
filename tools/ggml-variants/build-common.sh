@@ -107,11 +107,48 @@ fi
 # CC/CXX/AR/NM/LD/etc. env vars point at, so this harness reaches the same
 # compiler the real image would have. No-op on every other TARGET_OS.
 windows_setup=""
-if [[ ${TARGET_OS} == windows ]]; then
+if [[ ${TARGET_OS} == windows && ${ARCH} == x86_64 ]]; then
     windows_setup='
 apt-get update >/tmp/apt.log 2>&1 || { cat /tmp/apt.log; exit 1; }
 apt-get install -y --no-install-recommends mingw-w64 mingw-w64-tools mingw-w64-x86-64-dev mingw-w64-common >>/tmp/apt.log 2>&1 \
     || { cat /tmp/apt.log; exit 1; }
+'
+elif [[ ${TARGET_OS} == windows && ${ARCH} == aarch64 ]]; then
+    # Windows-on-ARM does not use mingw-w64/GCC at all: apt has no aarch64
+    # mingw cross-toolchain and the research-grade GCC port this project used
+    # to build was dropped (see ffmpeg-windows-aarch64.dockerfile). The real
+    # image downloads a pinned llvm-mingw release; mirror exactly that, taking
+    # the version from the dockerfile's own ARG so the harness cannot drift
+    # from what CI builds.
+    llvm_mingw_version=$(sed -n 's/^ARG LLVM_MINGW_VERSION=\(.*\)$/\1/p' "${DOCKERFILE}" | head -1)
+    [[ -n ${llvm_mingw_version} ]] || { echo "build-common.sh: LLVM_MINGW_VERSION not found in ${DOCKERFILE}" >&2; exit 1; }
+    windows_setup="
+TARBALL=llvm-mingw-${llvm_mingw_version}-ucrt-ubuntu-22.04-x86_64.tar.xz
+curl -fsSL --retry 5 --retry-delay 5 -o /tmp/llvm-mingw.tar.xz \
+    \"https://github.com/mstorsjo/llvm-mingw/releases/download/${llvm_mingw_version}/\${TARBALL}\" \
+    || { echo 'llvm-mingw download failed'; exit 1; }
+mkdir -p \"\${LLVM_MINGW_DIR}\"
+tar -xJf /tmp/llvm-mingw.tar.xz -C \"\${LLVM_MINGW_DIR}\" --strip-components=1
+rm -f /tmp/llvm-mingw.tar.xz
+# Same libstdc++ -> libc++ alias the real dockerfile installs: llvm-mingw
+# ships no libstdc++ at all, and 48-whisper.sh writes '-lstdc++' into
+# whisper.pc on every platform.
+ln -sf libc++.a \"\${LLVM_MINGW_DIR}/aarch64-w64-mingw32/lib/libstdc++.a\"
+export PATH=\"\${LLVM_MINGW_DIR}/bin:\${PATH}\"
+\${CC} --version >/tmp/cc_version.log 2>&1 || { cat /tmp/cc_version.log; exit 1; }
+"
+fi
+
+# linux-aarch64: the base image only carries the native x86_64 toolchain; the
+# platform dockerfile apt-installs the aarch64 cross-GCC its ENV CC/CXX/LD/AR
+# point at. No-op for linux-x86_64, whose toolchain the base image already has.
+linux_setup=""
+if [[ ${TARGET_OS} == linux && ${ARCH} == aarch64 ]]; then
+    linux_setup='
+apt-get update >/tmp/apt.log 2>&1 || { cat /tmp/apt.log; exit 1; }
+apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu >>/tmp/apt.log 2>&1 \
+    || { cat /tmp/apt.log; exit 1; }
+${CC} --version >/tmp/cc_version.log 2>&1 || { cat /tmp/cc_version.log; exit 1; }
 '
 fi
 
@@ -214,14 +251,20 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     "${env_args[@]}" -e TARGET_OS="${TARGET_OS}" -e ARCH="${ARCH}" \
     -e NM_FFMPEG_TARGET_OS="${ffmpeg_target_os}" -e NM_EXTRA_LIBS="${extra_libs}" \
     -e NM_WINDOWS_SETUP="${windows_setup}" -e NM_FREEBSD_SETUP="${freebsd_setup}" \
-    -e NM_DARWIN_SETUP="${darwin_setup}" \
+    -e NM_DARWIN_SETUP="${darwin_setup}" -e NM_LINUX_SETUP="${linux_setup}" \
     "${IMAGE}" bash -c '
 set -eu
 eval "${NM_WINDOWS_SETUP}"
 eval "${NM_FREEBSD_SETUP}"
 eval "${NM_DARWIN_SETUP}"
+eval "${NM_LINUX_SETUP}"
 if [[ ${TARGET_OS} == darwin ]]; then
     export PATH="${PREFIX}/bin:${SDK_PATH}/usr/bin:${PREFIX}/osxcross/bin:${PATH}"
+elif [[ ${TARGET_OS} == windows && ${ARCH} == aarch64 ]]; then
+    # llvm-mingw lives outside the image PATH; the platform dockerfile puts it
+    # there with its own ENV PATH line, which the ENV-lifting loop above
+    # deliberately skips (see its comment).
+    export PATH="${PREFIX}/bin:${LLVM_MINGW_DIR}/bin:${PATH}"
 else
     export PATH="${PREFIX}/bin:${PATH}"
 fi
@@ -238,6 +281,13 @@ cd /build
 export -f hr text_with_padding add_enable add_cflag add_ldflag add_extralib join_lines split_lines clean_whitespace apply_sed check_enabled log
 
 bash /scripts/48-whisper.sh
+# Snapshot the log before 60-stemsplit.sh runs: its first statement is
+# "echo ... > /ffmpeg_build.log", which TRUNCATES the file, so on a
+# successful build the per-variant "Building ggml CPU variant <tag>" lines
+# 48-whisper.sh wrote are gone by the time anything can read them. Without
+# this copy the only surviving evidence of which variants were built is the
+# packed archive itself.
+cp /ffmpeg_build.log /out/whisper_build.log 2>/dev/null || true
 bash /scripts/60-stemsplit.sh
 
 cd /build/ffmpeg
@@ -312,5 +362,8 @@ cp /ffmpeg_build.log /out/ffmpeg_build.log 2>/dev/null || true
 # it for real (e.g. -lggml-blas / -lggml-cpu-variants) instead of only
 # reading the generator script that produced it.
 cp ${PREFIX}/lib/pkgconfig/whisper.pc /out/whisper.pc 2>/dev/null || true
+# Verification-only: the packed archive itself, so a harness can count the
+# prefixed entry points with the right cross-nm instead of trusting the log.
+cp ${PREFIX}/lib/libggml-cpu-variants.a /out/libggml-cpu-variants.a 2>/dev/null || true
 '
 echo "built into ${WORK}"

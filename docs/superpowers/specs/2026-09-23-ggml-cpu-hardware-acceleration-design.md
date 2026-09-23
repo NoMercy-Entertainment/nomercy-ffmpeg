@@ -317,6 +317,59 @@ and compute correctly (relative difference 0.004, consistent with fp16
 arithmetic). Speed on ARM is **not** measured yet; emulation makes local timing
 meaningless. See §11.1.
 
+**Amended 2026-09-23, during Task 7 — windows-aarch64 needs a third recipe,
+`coff-archive`.** Open question 2 below is now answered, and the answer is "no":
+the COFF recipe above cannot run at all under llvm-mingw, the only working
+Windows-on-ARM toolchain. Two independent blockers, both verified against the
+pinned llvm-mingw 20260728:
+
+1. `aarch64-w64-mingw32-ld` is `ld.lld`, whose MinGW driver does not implement
+   `-r` (`lld: error: unknown argument: -r`). Nothing else in the image can
+   partial-link aarch64 PE either — GNU `ld` has no aarch64 PE emulation
+   (`relocatable linking with relocations from format pe-aarch64-little to
+   format elf64-littleaarch64 is not supported`).
+2. `llvm-objcopy` rejects `--rename-section` (and `--prefix-symbols`) on COFF
+   outright: `llvm-objcopy: error: option is not supported for COFF`. Only
+   `--redefine-sym`/`--redefine-syms` work there.
+
+The recipe therefore renames the **archive** rather than a merged object, and
+does not rename sections:
+
+```sh
+aarch64-w64-mingw32-nm --defined-only libggml-cpu.a \
+  | awk '$2 ~ /^[TDBRWV]$/ { print $3 " nm_v1_" $3 }' | sort -u > redefine.txt
+aarch64-w64-mingw32-objcopy --redefine-syms=redefine.txt libggml-cpu.a variant.a
+```
+
+Three things make this equivalent rather than a weakening:
+
+- `llvm-objcopy` rewrites every member of an archive in place, so no member has
+  to be extracted to a directory — which would be lossy, because ggml-cpu.a
+  really does contain two members named `quants.c.obj` and two named
+  `repack.cpp.obj` (the generic and the `arch/arm` copies).
+- The rename list is the union of the defined symbols of the *whole* archive,
+  applied to every member. Without a partial link, a member's reference to
+  another member's symbol is an *undefined* symbol rather than an internal
+  relocation, so it has to be renamed too; external undefined symbols (libc,
+  libc++, ggml-base) are not in the list and stay intact.
+- The section renames exist because **GNU ld** folds COMDAT groups by section
+  name. **ld.lld** folds COFF COMDATs by their leader *symbol* name, which
+  `--redefine-syms` has already made unique per variant. Verified on the real
+  backend: the two-variant ffmpeg.exe links with zero undefined symbols, each
+  variant keeps its own 512 text symbols at distinct addresses, and
+  dotprod/fp16 instructions appear only inside the armv8.2 variant's functions
+  (0 in `nm_v0_*`, 921 in `nm_v1_*`). Cross-checked against a build that *did*
+  rename the sections, using GNU `aarch64-linux-gnu-objcopy` (whose BFD does
+  carry the `pe-aarch64-little` target): identical symbol counts and identical
+  dotprod split, so nothing is lost by dropping them — and the extra
+  cross-toolchain rewrite of clang-produced PE objects is avoided.
+
+Because the packed variants are archives, they are merged into
+`libggml-cpu-variants.a` with an `ar` MRI script (`CREATE` / `ADDMOD
+dispatch.o` / `ADDLIB variant-*.a` / `SAVE`) instead of `ar rcs`. Duplicate
+member names inside the result are legal and harmless; lookup goes through the
+symbol index.
+
 **Mach-O (darwin x2):** not needed. Darwin uses fixed levels (§7.5) because its
 floor is known. `llvm-objcopy` does carry the required flags, so darwin can adopt
 dispatch later without redesign.
@@ -478,8 +531,13 @@ the variant matrix for ARM is considered final.
 
 1. Is `ggml_backend_score()` emitted for a statically built variant, or must the
    dispatcher do its own feature detection? (§7.3)
-2. Does `windows-aarch64`'s llvm-mingw toolchain (llvm-nm/llvm-objcopy) accept the
-   COFF recipe, or does it need the ELF one? Not yet tested.
+2. ~~Does `windows-aarch64`'s llvm-mingw toolchain (llvm-nm/llvm-objcopy) accept the
+   COFF recipe, or does it need the ELF one? Not yet tested.~~
+   **Answered in Task 7: neither.** `llvm-nm`'s column layout matches what the
+   COFF `awk` expects, but `ld.lld` has no `-r` and `llvm-objcopy` refuses
+   `--rename-section`/`--prefix-symbols` on COFF, so that platform gets its own
+   `coff-archive` recipe (§7.2). Runtime dispatch is kept; no platform falls
+   back to a fixed level except the two darwin targets.
 3. Should the four x86 variants be trimmed to three (`x64`, `ivybridge`,
    `haswell`) given `sse42` buys 1.3x over `x64`? Decide with the size measurement
    in hand.
