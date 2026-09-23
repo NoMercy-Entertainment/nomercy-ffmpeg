@@ -134,5 +134,32 @@ print(f"  variant difference: {db:.1f} dB relative")
 sys.exit(0 if db < -80 else 1)
 PY
 
+echo "== filter-level cpu variant metadata (Task 4) =="
+# NOTE 1: the task-4 brief'"'"'s snippet referenced ${MODEL}/${INPUT}/${WORK}/ffmpeg,
+# none of which exist in this script -- it hardcodes spleeter-2stems-f16.gguf,
+# input.mp3 and ./ffmpeg (see the rest of this file). Adapted to match, and
+# forced to NOMERCY_GGML_CPU=x64 so this also proves the metadata carries the
+# variant actually in use rather than a hardcoded string.
+# NOTE 2: the brief'"'"'s snippet (and every other check above) runs at
+# "-loglevel error", but ametadata'"'"'s mode=print writes its output via
+# av_log(ctx, AV_LOG_INFO, ...) (libavfilter/f_metadata.c) -- at "error"
+# level that print is silently swallowed along with our own "cpu variant"
+# log line, so the grep found nothing no matter how correct the filter code
+# was. Confirmed by reading f_metadata.c and reproducing manually. This
+# check needs -loglevel info.
+meta=$(NOMERCY_GGML_CPU=x64 ./ffmpeg -hide_banner -loglevel info -nostats -t 12 -i input.mp3 -vn \
+    -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment,ametadata=mode=print:key=lavfi.stemsplit.cpu_variant" \
+    -f null - 2>&1 | grep -oE "lavfi.stemsplit.cpu_variant=[a-z0-9.+_]+" | head -1)
+echo "  metadata: ${meta:-<none>}"
+[[ -n ${meta} ]] || { echo "  FAIL: no cpu_variant metadata"; fail=1; }
+[[ ${meta} == "lavfi.stemsplit.cpu_variant=x64" ]] || { echo "  FAIL: forced x64 not reflected in metadata (got ${meta})"; fail=1; }
+
+echo "== stemsplit log line has the required shape =="
+logline=$(NOMERCY_GGML_CPU=x64 ./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn \
+    -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment" -f null - 2>&1 \
+    | grep -oE "cpu variant '"'"'x64'"'"'" | head -1)
+echo "  log: ${logline:-<none>}"
+[[ -n ${logline} ]] || { echo "  FAIL: no \"cpu variant '"'"'...'"'"'\" log line"; fail=1; }
+
 [[ ${fail} -eq 0 ]] && echo PASS || { echo FAILED; exit 1; }
 '

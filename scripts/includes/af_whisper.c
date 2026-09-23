@@ -23,6 +23,7 @@
 #include <stdlib.h>
 
 #include <whisper.h>
+#include "nm_ggml_cpu.h"
 
 #include "libavutil/avutil.h"
 #include "libavutil/opt.h"
@@ -115,6 +116,13 @@ static int init(AVFilterContext *ctx)
         av_log(ctx, AV_LOG_ERROR, "Failed to initialize whisper context from model: %s\n", wctx->model_path);
         return AVERROR(EIO);
     }
+
+    // ggml_backend_cpu_init() inside whisper.cpp resolves to the
+    // instruction-set variant ggml_cpu_dispatch.c selected for this
+    // machine; report it once so the media server can tell what actually
+    // ran without scraping logs.
+    av_log(ctx, AV_LOG_INFO, "whisper: ggml cpu variant '%s'.\n",
+           nm_ggml_cpu_variant_name());
 
     // Init buffer
     wctx->audio_buffer_queue_size = av_rescale(wctx->queue, WHISPER_SAMPLE_RATE, AV_TIME_BASE);
@@ -363,6 +371,8 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
             av_dict_set(metadata, "lavfi.whisper.language", wctx->detected_language, 0);
             char *confidence_text = av_asprintf("%f", wctx->language_confidence);
             av_dict_set(metadata, "lavfi.whisper.language_confidence", confidence_text, AV_DICT_DONT_STRDUP_VAL);
+            av_dict_set(metadata, "lavfi.whisper.cpu_variant",
+                        nm_ggml_cpu_variant_name(), 0);
         }
     }
     av_freep(&segments_text);

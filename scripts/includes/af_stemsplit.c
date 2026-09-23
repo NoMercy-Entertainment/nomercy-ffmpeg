@@ -71,6 +71,7 @@
 #include <ggml-backend.h>
 #include <ggml-cpu.h>
 #include <gguf.h>
+#include "nm_ggml_cpu.h"
 
 #include "libavutil/avassert.h"
 #include "libavutil/file_open.h"
@@ -874,8 +875,12 @@ static int ss_model_load(AVFilterContext *ctx)
         }
     }
 
-    /* ---- backend: CPU only (design non-goal: no GPU backends) ---- */
+    /* ---- backend: CPU only (design non-goal: no GPU backends) ----
+     * ggml_backend_cpu_init() resolves to the instruction-set variant that
+     * ggml_cpu_dispatch.c selected for this machine. */
     s->backend = ggml_backend_cpu_init();
+    av_log(ctx, AV_LOG_INFO, "stemsplit: ggml cpu variant '%s'.\n",
+           nm_ggml_cpu_variant_name());
     if (!s->backend) {
         av_log(ctx, AV_LOG_ERROR,
                "Could not initialize the ggml CPU backend.\n");
@@ -2357,6 +2362,13 @@ static int ss_push_outputs(AVFilterContext *ctx, AVFrame **out)
         if (!frame)
             continue;
         out[j] = NULL;
+        /* This is the single point every stemsplit output frame passes
+         * through on the way to ff_filter_frame -- normal emission, drain
+         * and silence fill-in all funnel here -- so tagging it here, rather
+         * than at any one of those producers, guarantees the media server
+         * reads the variant on the same frame that was actually sent. */
+        av_dict_set(&frame->metadata, "lavfi.stemsplit.cpu_variant",
+                    nm_ggml_cpu_variant_name(), 0);
         ret = ff_filter_frame(ctx->outputs[j], frame);
         if (ret < 0)
             return ret;
