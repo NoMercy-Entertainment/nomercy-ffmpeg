@@ -41,25 +41,61 @@
 # 3, but here against the real, filter-integrated, shipped binary). Absent a
 # model, that second half is a SKIP with the reason recorded -- never a
 # silent pass -- via run_custom_test's exit-code-2 protocol in tests.sh.
-test_cpu_variant() {
-	local platform="${Platform:-}"
-	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
-	local baseline value out code
+#
+# The always-on half (cpu_variant_is_darwin / cpu_variant_baseline /
+# cpu_variant_startup_ok below) is factored out so tests/smoke.sh -- the
+# script CI actually runs on every platform, unlike this one -- can assert
+# the same startup guarantee without duplicating it. See smoke.sh for why it
+# needs its own copy of the darwin/baseline decision instead of calling
+# test_cpu_variant() directly: smoke.sh has its own fail()/note()/ok()
+# reporting and its own cross-exec platform handling that must run first.
 
-	case "${platform}" in
-	*darwin*)
-		echo "SKIP: ${platform} carries no ggml cpu dispatcher (fixed instruction level, Task 6); NOMERCY_GGML_CPU is a no-op there"
-		return 2
-		;;
+# True if the platform tag carries no ggml cpu dispatcher at all (fixed
+# instruction level, Task 6) -- NOMERCY_GGML_CPU is a no-op there.
+cpu_variant_is_darwin() {
+	case "$1" in
+	*darwin*) return 0 ;;
+	*) return 1 ;;
 	esac
+}
 
-	case "${platform}" in
-	*aarch64* | *arm64*) baseline="armv8.0" ;;
-	*) baseline="x64" ;;
+# Prints the baseline variant name for a platform tag: the one guaranteed to
+# run on every machine the binary supports, x86_64 or aarch64.
+cpu_variant_baseline() {
+	case "$1" in
+	*aarch64* | *arm64*) echo "armv8.0" ;;
+	*) echo "x64" ;;
 	esac
-	echo "platform baseline: ${baseline}"
+}
 
-	# --- always-on guarantee: the variable can never make a machine unbootable ---
+# True if the binary was actually compiled with the dispatcher. Added after a
+# first round of review pointed out that cpu_variant_startup_ok below is
+# trivially true for ANY binary, old or new: an old, pre-dispatcher binary
+# never reads NOMERCY_GGML_CPU at all, so it "starts cleanly" with it set for
+# exactly the wrong reason, and a smoke check built only on that can never
+# fail -- which manufactures false confidence instead of catching a
+# regression. NOMERCY_GGML_CPU is read via getenv() exactly once, inside
+# nm_select() (scripts/includes/ggml_cpu_dispatch.c), so the literal
+# environment-variable name survives as a string constant in the binary even
+# stripped of symbols -- confirmed empirically (see task-8 report): 0
+# occurrences in a real pre-dispatcher release binary, 1 in a
+# dispatcher-enabled build, on both the linux and windows binaries tested.
+# Deliberately not asserted on darwin: NM_GGML_CPU_FIXED mode (Task 6)
+# compiles out nm_select()/getenv() entirely there, so a darwin binary
+# legitimately never contains this string -- that is the correct state, not
+# a failure, so darwin skips this check the same way it skips the rest.
+cpu_variant_dispatcher_compiled_in() {
+	grep -aq "NOMERCY_GGML_CPU" "$1"
+}
+
+# The always-on guarantee: NOMERCY_GGML_CPU can never stop the binary from
+# starting, unset, forced to the platform baseline, or forced to garbage.
+# Needs no model, so it is reachable everywhere the binary can be executed at
+# all. $1 = ffmpeg path, $2 = baseline name. Prints one line per attempt on
+# failure and returns 1; prints nothing on success (callers report success in
+# their own voice) and returns 0.
+cpu_variant_startup_ok() {
+	local ffmpeg="$1" baseline="$2" value out code
 	for value in "" "${baseline}" "definitely-not-a-real-variant"; do
 		if [[ -n "${value}" ]]; then
 			out=$(NOMERCY_GGML_CPU="${value}" "${ffmpeg}" -hide_banner -version 2>&1)
@@ -73,6 +109,26 @@ test_cpu_variant() {
 			return 1
 		fi
 	done
+	return 0
+}
+
+test_cpu_variant() {
+	local platform="${Platform:-}"
+	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
+	local baseline
+
+	if cpu_variant_is_darwin "${platform}"; then
+		echo "SKIP: ${platform} carries no ggml cpu dispatcher (fixed instruction level, Task 6); NOMERCY_GGML_CPU is a no-op there"
+		return 2
+	fi
+
+	baseline="$(cpu_variant_baseline "${platform}")"
+	echo "platform baseline: ${baseline}"
+
+	# --- always-on guarantee: the variable can never make a machine unbootable ---
+	if ! cpu_variant_startup_ok "${ffmpeg}" "${baseline}"; then
+		return 1
+	fi
 	echo "startup guarantee held: default, forced baseline (${baseline}) and a nonsense override all start cleanly"
 
 	# --- model-gated: does the dispatcher actually pick what it claims to? ---

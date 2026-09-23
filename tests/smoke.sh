@@ -16,6 +16,10 @@
 # always executed, so a broken native binary can never slip through.
 set -uo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/cpu-variant.sh
+source "${HERE}/lib/cpu-variant.sh"
+
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
 PLATFORM="${3:-}"
@@ -85,4 +89,58 @@ assert_version() {  # bin, banner
 
 assert_version "${ffmpeg_bin}" "ffmpeg version"
 assert_version "${ffprobe_bin}" "ffprobe version"
+
+# ggml CPU variant dispatcher: two checks, in order.
+#
+# 1. The binary must actually carry the dispatcher. This is what makes the
+#    check below able to fail at all: a binary that never reads
+#    NOMERCY_GGML_CPU "starts cleanly" with it set to anything, trivially, so
+#    a check built only on process exit codes can never distinguish a
+#    dispatcher-enabled build from an old one that predates this feature --
+#    it would always pass, manufacturing confidence rather than catching a
+#    regression. cpu_variant_dispatcher_compiled_in greps the binary for the
+#    literal env-var name instead (see its comment in lib/cpu-variant.sh for
+#    why that's reliable even stripped, and the empirical before/after
+#    counts). Skipped on darwin: it legitimately never contains that string.
+#
+# 2. NOMERCY_GGML_CPU must never stop the binary from starting, unset, forced
+#    to the platform baseline (old hardware keeps working), or forced to
+#    garbage (a bad override can't brick a machine). Needs no model, so
+#    unlike tests/tests.sh's fuller, model-gated check (run manually, on real
+#    hardware, with a real model) this runs on every CI build.
+assert_cpu_variant_dispatcher_present() {  # bin, platform
+  local bin="$1" platform="$2"
+
+  if cpu_variant_is_darwin "${platform}"; then
+    note "$(basename "${bin}"): ${platform} carries no ggml cpu dispatcher (fixed instruction level); dispatcher-presence check skipped"
+    return
+  fi
+
+  if cpu_variant_dispatcher_compiled_in "${bin}"; then
+    ok "$(basename "${bin}"): carries the ggml cpu dispatcher (NOMERCY_GGML_CPU compiled in)"
+  else
+    fail "$(basename "${bin}"): does not carry the ggml cpu dispatcher (NOMERCY_GGML_CPU not found in the binary)"
+  fi
+}
+
+assert_cpu_variant_startup() {  # bin, platform
+  local bin="$1" platform="$2" baseline
+
+  if cpu_variant_is_darwin "${platform}"; then
+    note "$(basename "${bin}"): ${platform} carries no ggml cpu dispatcher (fixed instruction level); NOMERCY_GGML_CPU startup check skipped"
+    return
+  fi
+
+  baseline="$(cpu_variant_baseline "${platform}")"
+  local diag
+  if diag="$(cpu_variant_startup_ok "${bin}" "${baseline}")"; then
+    ok "$(basename "${bin}"): starts cleanly with NOMERCY_GGML_CPU unset, forced to baseline (${baseline}), and forced to a nonsense value"
+  else
+    echo "${diag}" >&2
+    fail "$(basename "${bin}"): NOMERCY_GGML_CPU startup guarantee failed (baseline ${baseline})"
+  fi
+}
+
+assert_cpu_variant_dispatcher_present "${ffmpeg_bin}" "${PLATFORM}"
+assert_cpu_variant_startup "${ffmpeg_bin}" "${PLATFORM}"
 ok "Smoke test passed."

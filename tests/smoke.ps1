@@ -15,6 +15,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+$HERE = Split-Path -Parent $PSCommandPath
+. "$HERE/lib/cpu-variant.ps1"
+
 function Fail($msg) { Write-Host "❌ $msg"; exit 1 }
 function Note($msg) { Write-Host "ℹ️  $msg" }
 
@@ -82,5 +85,57 @@ function Assert-Version($bin, $banner) {
 
 Assert-Version $ffmpeg  'ffmpeg version'
 Assert-Version $ffprobe 'ffprobe version'
+
+# ggml CPU variant dispatcher: two checks, in order.
+#
+# 1. The binary must actually carry the dispatcher. This is what makes the
+#    check below able to fail at all: a binary that never reads
+#    NOMERCY_GGML_CPU "starts cleanly" with it set to anything, trivially, so
+#    a check built only on process exit codes can never distinguish a
+#    dispatcher-enabled build from an old one that predates this feature --
+#    it would always pass, manufacturing confidence rather than catching a
+#    regression. Test-CpuVariantDispatcherPresent searches the binary for the
+#    literal env-var name instead (see its comment in lib/cpu-variant.ps1 for
+#    why that's reliable even stripped, and the empirical before/after
+#    counts). Skipped on darwin: it legitimately never contains that string
+#    (darwin never reaches this script today, but the shape mirrors smoke.sh
+#    in case that changes).
+#
+# 2. NOMERCY_GGML_CPU must never stop the binary from starting, unset, forced
+#    to the platform baseline (old hardware keeps working), or forced to
+#    garbage (a bad override can't brick a machine). Needs no model, so
+#    unlike tests/tests.ps1's fuller, model-gated check (run manually, on
+#    real hardware, with a real model) this runs on every CI build.
+function Assert-CpuVariantDispatcherPresent($bin, $platform) {
+    if (Test-CpuVariantIsDarwin $platform) {
+        Note "$(Split-Path $bin -Leaf): $platform carries no ggml cpu dispatcher (fixed instruction level); dispatcher-presence check skipped"
+        return
+    }
+
+    if (Test-CpuVariantDispatcherPresent -Bin $bin) {
+        Write-Host "✅ $(Split-Path $bin -Leaf): carries the ggml cpu dispatcher (NOMERCY_GGML_CPU compiled in)"
+    } else {
+        Fail "$(Split-Path $bin -Leaf): does not carry the ggml cpu dispatcher (NOMERCY_GGML_CPU not found in the binary)"
+    }
+}
+
+function Assert-CpuVariantStartup($bin, $platform) {
+    if (Test-CpuVariantIsDarwin $platform) {
+        Note "$(Split-Path $bin -Leaf): $platform carries no ggml cpu dispatcher (fixed instruction level); NOMERCY_GGML_CPU startup check skipped"
+        return
+    }
+
+    $baseline = Get-CpuVariantBaseline $platform
+    $result = Test-CpuVariantStartup -FFmpegExe $bin -Baseline $baseline
+    if ($result.Ok) {
+        Write-Host "✅ $(Split-Path $bin -Leaf): starts cleanly with NOMERCY_GGML_CPU unset, forced to baseline ($baseline), and forced to a nonsense value"
+    } else {
+        Write-Host $result.Output
+        Fail "$(Split-Path $bin -Leaf): NOMERCY_GGML_CPU startup guarantee failed (baseline $baseline)"
+    }
+}
+
+Assert-CpuVariantDispatcherPresent $ffmpeg $Platform
+Assert-CpuVariantStartup $ffmpeg $Platform
 Write-Host '✅ Smoke test passed.'
 exit 0
