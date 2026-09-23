@@ -34,22 +34,23 @@ mkdir -p "${WORK}"
 #      for a ggml-blas.a that was never built.
 # build-common.sh now installs the mingw-w64 packages itself when
 # TARGET_OS=windows, and accepts an optional NM_SEED_PREFIX host directory
-# copied into PREFIX before the build -- used here to seed a prebuilt
-# windows-x86_64 OpenBLAS (libopenblas.a + headers) out of the project's
-# ffblas-vol docker volume, exactly what a real earlier-numbered-script run
-# would have put there.
+# copied into PREFIX before the build.
+#
+# NM_SEED_PREFIX itself is populated by seed-windows-openblas.sh, which
+# builds a windows-x86_64 OpenBLAS by literally running the repo's current
+# scripts/includes/windows/48-openblas.sh -- not by copying an artifact out
+# of ffblas-vol keyed on a directory name. An earlier version of this script
+# did copy ffblas-vol's "pfx-cur" directory, which turned out (caught in
+# review) to be a PRE-fix build (NUM_THREADS=64, no BUFFERSIZE cap -- the
+# ~7 GB-per-process memory issue #70/commit b52078d fixed), silently
+# unrepresentative of what 48-openblas.sh currently produces
+# (NUM_THREADS=16, BUFFERSIZE=20). seed-windows-openblas.sh stamps its
+# output with a hash of 48-openblas.sh and refuses to reuse a stale seed;
+# see that script and task-5-report.md's "Fix: OpenBLAS seed provenance"
+# section for the full story.
 if [[ -z "${NM_SEED_PREFIX:-}" && "${NM_SKIP_OPENBLAS_SEED:-0}" != "1" ]]; then
     seed="${WORK}/openblas-seed"
-    if [[ ! -f "${seed}/lib/libopenblas.a" ]]; then
-        mkdir -p "${seed}/lib/pkgconfig" "${seed}/include"
-        MSYS_NO_PATHCONV=1 docker run --rm -v ffblas-vol:/vol:ro -v "$(cygpath -w "${seed}")":/out alpine sh -c '
-            set -eu
-            [[ -f /vol/pfx-cur/lib/libopenblas.a ]] || { echo "no prebuilt windows OpenBLAS in ffblas-vol:/pfx-cur"; exit 1; }
-            cp /vol/pfx-cur/lib/libopenblas.a /out/lib/
-            cp -r /vol/pfx-cur/include/openblas /out/include/
-            cp /vol/pfx-cur/lib/pkgconfig/openblas.pc /out/lib/pkgconfig/ 2>/dev/null || true
-        '
-    fi
+    bash "${REPO}/tools/ggml-variants/seed-windows-openblas.sh" "${seed}"
     export NM_SEED_PREFIX="${seed}"
 fi
 
