@@ -173,6 +173,11 @@ typedef struct SSNet {
 #define SS_NB_INSTRUMENTS 2
 #define SS_KERNEL         5
 
+/* 13 layers per instrument (conv1..6, up1..6, out), at most 4 tensors each
+ * (weight, bias, bn_a, bn_b). An upper bound, not an exact count: `out` has no
+ * BatchNorm, so the real total is 100. */
+#define SS_NB_WEIGHTS     (SS_NB_INSTRUMENTS * 13 * 4)
+
 typedef struct StemSplitContext {
     const AVClass *class;
     char    *model_path;
@@ -184,6 +189,13 @@ typedef struct StemSplitContext {
     int64_t  overlap;
     int      nb_threads;
     int      ggml_threads;   /* resolved once, on the first inference */
+    int      use_gpu;        /* option: allow a GPU backend at all */
+    /* Whether a GPU is what actually ended up running this filter. Separate
+     * from use_gpu because the answer can be "no" for three different reasons
+     * -- no device, a software device, or a graph this device cannot run --
+     * and the log line and lavfi.stemsplit.backend metadata must report what
+     * ran, not what was asked for. */
+    int      gpu_active;
     char    *dump_dir;
     char    *debug_input_path;
 
@@ -211,10 +223,24 @@ typedef struct StemSplitContext {
     struct ggml_context        *gguf_ctx;    /* owns all tensor metadata and data;
                                                * created by gguf_init_from_file with
                                                * no_alloc=false, freed in ss_model_free */
-    struct ggml_backend        *backend;     /* CPU backend */
+    struct ggml_backend        *backend;     /* CPU or GPU, see nm_ggml_backend_init */
     SSNet    nets[SS_NB_INSTRUMENTS];
     int      nb_instruments;
     char    *instrument_names[SS_NB_INSTRUMENTS];
+
+    /* GPU weight residency. gguf_init_from_file() is called with
+     * no_alloc=false, so every weight lands in ordinary host memory with no
+     * ggml_backend_buffer behind it. The CPU backend computes straight out of
+     * that; a GPU backend cannot -- ggml-vulkan dereferences tensor->buffer
+     * for each operand -- so the weights have to be copied into a buffer the
+     * device owns first, and the SSNet pointers repointed at the copies.
+     * Untouched, and all NULL, on the CPU path: the CPU run stays byte for
+     * byte the run it was before this existed. */
+    struct ggml_context        *weights_ctx;
+    struct ggml_backend_buffer *weights_buf;
+    struct ggml_tensor         *weights_host[SS_NB_WEIGHTS];
+    struct ggml_tensor        **weights_slot[SS_NB_WEIGHTS];
+    int                         nb_weights;
 
     /* Compute graph (design 6.3: "built once and reused"). Both instruments'
      * networks live in ONE graph sharing ONE input tensor, so ggml_gallocr's
@@ -637,9 +663,31 @@ static void ss_join_instruments(const StemSplitContext *s, char *buf, size_t buf
     }
 }
 
+/* Points every SSNet slot back at the host tensor it came from and releases the
+ * device-side copies. Safe to call when nothing was ever uploaded. */
+static void ss_weights_release(StemSplitContext *s)
+{
+    int i;
+
+    for (i = 0; i < s->nb_weights; i++)
+        *s->weights_slot[i] = s->weights_host[i];
+    s->nb_weights = 0;
+
+    if (s->weights_buf)
+        ggml_backend_buffer_free(s->weights_buf);
+    s->weights_buf = NULL;
+
+    if (s->weights_ctx)
+        ggml_free(s->weights_ctx);
+    s->weights_ctx = NULL;
+}
+
 static void ss_model_free(StemSplitContext *s)
 {
     int i;
+
+    /* Before the backend: the buffer these tensors live in belongs to it. */
+    ss_weights_release(s);
 
     if (s->backend)
         ggml_backend_free(s->backend);
@@ -875,18 +923,27 @@ static int ss_model_load(AVFilterContext *ctx)
         }
     }
 
-    /* ---- backend: CPU only (design non-goal: no GPU backends) ----
-     * ggml_backend_cpu_init() resolves to the instruction-set variant that
-     * ggml_cpu_dispatch.c selected for this machine. */
-    s->backend = ggml_backend_cpu_init();
-    av_log(ctx, AV_LOG_INFO, "stemsplit: ggml cpu variant '%s'.\n",
-           nm_ggml_cpu_variant_name());
+    /* ---- backend ----
+     * A GPU when one is usable and `use_gpu` allows it, otherwise the
+     * instruction-set variant ggml_cpu_dispatch.c selected for this machine.
+     * The choice can still be revoked later, in ss_graph_build(), if the
+     * device turns out not to support every op this network needs. */
+    s->backend = nm_ggml_backend_init(s->use_gpu);
     if (!s->backend) {
         av_log(ctx, AV_LOG_ERROR,
-               "Could not initialize the ggml CPU backend.\n");
+               "Could not initialize a ggml backend.\n");
         ret = AVERROR(ENOMEM);
         goto done;
     }
+    /* Asked AFTER the init, not before: a device that enumerated but failed to
+     * open is retired inside nm_ggml_backend_init(), and this has to reflect
+     * what we were actually handed. */
+    s->gpu_active = s->use_gpu && nm_ggml_gpu_usable();
+    av_log(ctx, AV_LOG_INFO, "stemsplit: ggml cpu variant '%s'.\n",
+           nm_ggml_cpu_variant_name());
+    av_log(ctx, AV_LOG_INFO, "stemsplit: ggml backend '%s' (%s).\n",
+           s->gpu_active ? nm_ggml_backend_name() : "cpu",
+           s->gpu_active ? nm_ggml_backend_device() : nm_ggml_cpu_variant_name());
 
     ss_join_instruments(s, avail, sizeof(avail));
     av_log(ctx, AV_LOG_INFO,
@@ -1334,6 +1391,134 @@ static void ss_graph_free(StemSplitContext *s)
     memset(s->g_up,   0, sizeof(s->g_up));
 }
 
+/* Collects a pointer to every non-NULL weight-tensor slot in s->nets.
+ *
+ * Slots, not tensors: the upload below has to REPOINT them, and `out` carries
+ * no BatchNorm, so the list is built by walking rather than by index
+ * arithmetic. */
+static int ss_collect_weight_slots(StemSplitContext *s, struct ggml_tensor ***slots)
+{
+    int n = 0, k, i, j;
+
+    for (k = 0; k < s->nb_instruments; k++) {
+        SSLayer *layers[13];
+        int nl = 0;
+
+        for (i = 0; i < 6; i++)
+            layers[nl++] = &s->nets[k].conv[i];
+        for (i = 0; i < 6; i++)
+            layers[nl++] = &s->nets[k].up[i];
+        layers[nl++] = &s->nets[k].out;
+
+        for (i = 0; i < nl; i++) {
+            struct ggml_tensor **cand[4] = {
+                &layers[i]->w, &layers[i]->b, &layers[i]->bn_a, &layers[i]->bn_b,
+            };
+
+            for (j = 0; j < 4; j++)
+                if (*cand[j] && n < SS_NB_WEIGHTS)
+                    slots[n++] = cand[j];
+        }
+    }
+
+    return n;
+}
+
+/* Copies the model's weights into memory the backend owns and repoints the
+ * SSNet slots at the copies.
+ *
+ * Only ever called for a non-CPU backend. The host originals stay alive in
+ * gguf_ctx -- they are what ss_weights_release() restores, and what a later
+ * downgrade to the CPU backend computes from -- so this costs one extra copy
+ * of the model (~20 MiB for spleeter-2stems-f16), not a reload.
+ */
+static int ss_weights_to_backend(AVFilterContext *ctx)
+{
+    StemSplitContext *s = ctx->priv;
+    struct ggml_tensor **slots[SS_NB_WEIGHTS];
+    struct ggml_tensor *dev[SS_NB_WEIGHTS];
+    struct ggml_init_params ip = { 0 };
+    int n, i;
+
+    av_assert0(!s->weights_ctx && !s->nb_weights);
+
+    n = ss_collect_weight_slots(s, slots);
+    if (!n)
+        return AVERROR(EINVAL);
+
+    /* Metadata only; ggml_backend_alloc_ctx_tensors owns the data. The slack
+     * is ggml's own per-context bookkeeping allowance. */
+    ip.mem_size   = ggml_tensor_overhead() * (size_t) (n + 8);
+    ip.mem_buffer = NULL;
+    ip.no_alloc   = true;
+
+    s->weights_ctx = ggml_init(ip);
+    if (!s->weights_ctx)
+        return AVERROR(ENOMEM);
+
+    for (i = 0; i < n; i++) {
+        dev[i] = ggml_dup_tensor(s->weights_ctx, *slots[i]);
+        if (!dev[i]) {
+            ggml_free(s->weights_ctx);
+            s->weights_ctx = NULL;
+            return AVERROR(ENOMEM);
+        }
+        ggml_set_name(dev[i], ggml_get_name(*slots[i]));
+    }
+
+    s->weights_buf = ggml_backend_alloc_ctx_tensors(s->weights_ctx, s->backend);
+    if (!s->weights_buf) {
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: could not allocate model weights on '%s'.\n",
+               nm_ggml_backend_device());
+        ggml_free(s->weights_ctx);
+        s->weights_ctx = NULL;
+        return AVERROR(ENOMEM);
+    }
+
+    /* Record before repointing: ss_weights_release() needs both halves. */
+    for (i = 0; i < n; i++) {
+        s->weights_slot[i] = slots[i];
+        s->weights_host[i] = *slots[i];
+    }
+    s->nb_weights = n;
+
+    for (i = 0; i < n; i++)
+        ggml_backend_tensor_set(dev[i], s->weights_host[i]->data, 0,
+                                ggml_nbytes(s->weights_host[i]));
+    for (i = 0; i < n; i++)
+        *slots[i] = dev[i];
+
+    av_log(ctx, AV_LOG_VERBOSE,
+           "stemsplit: %d model tensors uploaded to '%s'.\n",
+           n, nm_ggml_backend_device());
+
+    return 0;
+}
+
+/* Every op this graph needs, asked of the device before anything runs.
+ *
+ * ggml_backend_graph_compute() does NOT check: an op the backend cannot handle
+ * is a GGML_ABORT inside ggml, i.e. the process dies. Checking here turns that
+ * into a downgrade to the CPU, which is the behaviour every other fallback in
+ * this file already has. Returns the first unsupported node, or NULL. */
+static const struct ggml_tensor *ss_first_unsupported(ggml_backend_t be,
+                                                      struct ggml_cgraph *gf)
+{
+    ggml_backend_dev_t dev = ggml_backend_get_device(be);
+    int i;
+
+    if (!dev)
+        return NULL;
+    for (i = 0; i < ggml_graph_n_nodes(gf); i++) {
+        struct ggml_tensor *node = ggml_graph_node(gf, i);
+
+        if (node && !ggml_backend_dev_supports_op(dev, node))
+            return node;
+    }
+    return NULL;
+}
+
 static int ss_graph_build(AVFilterContext *ctx)
 {
     StemSplitContext *s = ctx->priv;
@@ -1354,6 +1539,19 @@ static int ss_graph_build(AVFilterContext *ctx)
     int k, n;
 
     av_assert0(!s->graph_ctx);
+
+    /* Weights first: the graph nodes below capture the tensor pointers, so a
+     * swap afterwards would leave the graph reading host memory the device
+     * cannot see. A failed upload is not fatal -- it just means the CPU. */
+    if (s->gpu_active && !s->nb_weights && ss_weights_to_backend(ctx) < 0) {
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: falling back to the CPU backend.\n");
+        ggml_backend_free(s->backend);
+        s->backend = ggml_backend_cpu_init();
+        s->gpu_active = 0;
+        if (!s->backend)
+            return AVERROR(ENOMEM);
+    }
 
     g = ggml_init(ip);
     if (!g)
@@ -1402,6 +1600,27 @@ static int ss_graph_build(AVFilterContext *ctx)
     }
 
     s->graph = gf;
+
+    /* Last chance to change our mind, and the only one that is still cheap:
+     * past this point an unsupported op is a GGML_ABORT, not an error code. */
+    if (s->gpu_active) {
+        const struct ggml_tensor *bad = ss_first_unsupported(s->backend, gf);
+
+        if (bad) {
+            av_log(ctx, AV_LOG_WARNING,
+                   "stemsplit: '%s' cannot run '%s' (%s); using the CPU "
+                   "backend instead.\n", nm_ggml_backend_device(),
+                   ggml_op_name(bad->op), ggml_get_name(bad));
+            ss_graph_free(s);
+            ss_weights_release(s);
+            ggml_backend_free(s->backend);
+            s->backend = ggml_backend_cpu_init();
+            s->gpu_active = 0;
+            if (!s->backend)
+                return AVERROR(ENOMEM);
+            return ss_graph_build(ctx);
+        }
+    }
 
     s->galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(s->backend));
     if (!s->galloc || !ggml_gallocr_alloc_graph(s->galloc, gf)) {
@@ -1605,7 +1824,10 @@ static int ss_infer(AVFilterContext *ctx, const float *mag,
         av_log(ctx, AV_LOG_VERBOSE, "stemsplit: %d ggml threads%s.\n",
                s->ggml_threads, s->nb_threads > 0 ? " (threads option)" : "");
     }
-    ggml_backend_cpu_set_n_threads(s->backend, s->ggml_threads);
+    /* CPU-only call: ggml_backend_cpu_set_n_threads() asserts the backend IS
+     * the CPU one, so calling it on a Vulkan backend aborts the process. */
+    if (ggml_backend_is_cpu(s->backend))
+        ggml_backend_cpu_set_n_threads(s->backend, s->ggml_threads);
 
     if (ggml_backend_graph_compute(s->backend, s->graph) != GGML_STATUS_SUCCESS) {
         av_log(ctx, AV_LOG_ERROR, "stemsplit: graph computation failed.\n");
@@ -2354,6 +2576,7 @@ static int ss_emit_samples(AVFilterContext *ctx, AVFrame **out, int off, int n,
  * error path cannot double-free one that has already been sent. */
 static int ss_push_outputs(AVFilterContext *ctx, AVFrame **out)
 {
+    const StemSplitContext *s = ctx->priv;
     int j, ret;
 
     for (j = 0; j < ctx->nb_outputs; j++) {
@@ -2369,6 +2592,8 @@ static int ss_push_outputs(AVFilterContext *ctx, AVFrame **out)
          * reads the variant on the same frame that was actually sent. */
         av_dict_set(&frame->metadata, "lavfi.stemsplit.cpu_variant",
                     nm_ggml_cpu_variant_name(), 0);
+        av_dict_set(&frame->metadata, "lavfi.stemsplit.backend",
+                    s->gpu_active ? nm_ggml_backend_name() : "cpu", 0);
         ret = ff_filter_frame(ctx->outputs[j], frame);
         if (ret < 0)
             return ret;
@@ -3090,6 +3315,10 @@ static const AVOption stemsplit_options[] = {
     { "smooth", "smooth the masks over this many frequency bins either side (0 disables)", OFFSET(smooth), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 32, FLAGS },
     { "overlap", "segment overlap as a duration, crossfaded on output", OFFSET(overlap), AV_OPT_TYPE_DURATION, { .i64 = 0 }, 0, 60000000, FLAGS },
     { "threads", "number of ggml threads", OFFSET(nb_threads), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
+    /* Spelled and defaulted exactly like whisper's, so one filtergraph can
+     * turn both filters back to the CPU the same way. use_gpu=0 is the hard
+     * override; everything else about the choice is automatic. */
+    { "use_gpu", "use a GPU backend when one is available", OFFSET(use_gpu), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, FLAGS },
     { "dump", "Internal: directory to dump intermediate tensors to for parity testing; empty disables", OFFSET(dump_dir), AV_OPT_TYPE_STRING, { .str = "" }, .flags = FLAGS },
     { "debug_input", "Internal: raw [C][T][F] float32 spectrogram to inject as the "
                      "network input, bypassing the STFT",

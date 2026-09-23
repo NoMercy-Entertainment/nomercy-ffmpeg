@@ -424,9 +424,25 @@ cat > /build/nm_probe.c <<"CEOF"
 #include "nm_ggml_cpu.h"
 int main(void) { printf("%s\n", nm_ggml_cpu_variant_name()); return 0; }
 CEOF
+# -lggml-vulkan joins the group wherever that archive exists (every platform
+# but darwin and freebsd -- see 48-whisper.sh NM_VULKAN). Task 3 made
+# ggml_cpu_dispatch.c call ggml_backend_dev_count(), which drags
+# ggml-backend-reg.cpp.o out of libggml.a, and that object references
+# ggml_backend_vk_reg unconditionally once ggml was configured with Vulkan.
+# Without this both probe links below fail with "undefined reference to
+# ggml_backend_vk_reg" -- while the real ffmpeg link, which gets
+# -lggml-vulkan from whisper.pc, succeeds. Harness-only; production links
+# through whisper.pc and was never affected.
+#
+# -lggml-blas is here for the same reason: ggml-backend-reg.cpp references
+# ggml_backend_blas_reg wherever ggml was configured with BLAS, which is
+# windows-x86_64 and darwin. Same symptom, same cause, same one-line cure.
+nm_vk_probe_lib=""
+[[ -f ${PREFIX}/lib/libggml-vulkan.a ]] && nm_vk_probe_lib="-lggml-vulkan"
+[[ -f ${PREFIX}/lib/libggml-blas.a ]] && nm_vk_probe_lib="${nm_vk_probe_lib} -lggml-blas -lopenblas"
 if [[ -f ${PREFIX}/lib/libggml-cpu-variants.a ]]; then
     ${CC} -O2 -I${PREFIX}/include -static /build/nm_probe.c -o /out/nm-probe \
-        -L${PREFIX}/lib -Wl,--start-group -lggml-cpu-variants -lggml-base -lggml -Wl,--end-group \
+        -L${PREFIX}/lib -Wl,--start-group -lggml-cpu-variants ${nm_vk_probe_lib} -lggml-base -lggml -Wl,--end-group \
         ${NM_EXTRA_LIBS}
 fi
 # Verification-only, opt-in with NM_COMPUTE_PROBE=1 (Task 7 uses it for
@@ -438,7 +454,7 @@ fi
 # the platforms that cannot run their own binary get nothing from it.
 if [[ ${NM_COMPUTE_PROBE} == 1 && -f ${PREFIX}/lib/libggml-cpu-variants.a ]]; then
     ${CC} -O2 -I${PREFIX}/include -static /tools/compute-probe.c -o /out/nm-compute \
-        -L${PREFIX}/lib -Wl,--start-group -lggml-cpu-variants -lggml-base -lggml -Wl,--end-group \
+        -L${PREFIX}/lib -Wl,--start-group -lggml-cpu-variants ${nm_vk_probe_lib} -lggml-base -lggml -Wl,--end-group \
         ${NM_EXTRA_LIBS} -lm
 fi
 cp /ffmpeg_build.log /out/ffmpeg_build.log 2>/dev/null || true

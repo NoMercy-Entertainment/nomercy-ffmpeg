@@ -47,6 +47,11 @@ typedef struct WhisperContext {
     bool translate;
     bool use_gpu;
     int gpu_device;
+    /* What we actually handed whisper.cpp: use_gpu AND'ed with our own
+     * judgement of whether a GPU is usable at all. The log line and the
+     * lavfi.whisper.backend metadata report this, never the request - a run
+     * that asked for a GPU and quietly got the CPU must not claim otherwise. */
+    int gpu_active;
     char *vad_model_path;
     float vad_threshold;
     int64_t vad_min_speech_duration;
@@ -97,6 +102,16 @@ static int init(AVFilterContext *ctx)
     WhisperContext *wctx = ctx->priv;
 
     static AVOnce init_static_once = AV_ONCE_INIT;
+
+    // Ask FIRST, before ggml_backend_load_all() or anything else can reach
+    // ggml's backend registry. nm_ggml_gpu_usable()'s first call is what
+    // neutralises software Vulkan ICDs, and on a Linux box with Mesa installed
+    // the loader segfaults inside its own driver probe - i.e. inside the
+    // registry's constructor, which ggml_backend_load_all() would trigger.
+    // Once that guard has run, the order stops mattering; before it, this is
+    // the difference between a CPU fallback and exit 139.
+    wctx->gpu_active = wctx->use_gpu && nm_ggml_gpu_usable();
+
     ff_thread_once(&init_static_once, ggml_backend_load_all);
 
     whisper_log_set(cb_log, ctx);
@@ -108,7 +123,12 @@ static int init(AVFilterContext *ctx)
     }
 
     struct whisper_context_params params = whisper_context_default_params();
-    params.use_gpu = wctx->use_gpu;
+    // whisper.cpp picks its own backend from this flag - it is never handed
+    // one - so the decision has to be made here. nm_ggml_gpu_usable() refuses
+    // software rasterisers, which whisper.cpp would otherwise happily select
+    // (whisper_backend_init_gpu() takes the Nth GPU/IGPU device with no check
+    // of its own) and which crash inside a static binary.
+    params.use_gpu = wctx->gpu_active;
     params.gpu_device = wctx->gpu_device;
 
     wctx->ctx_wsp = whisper_init_from_file_with_params(wctx->model_path, params);
@@ -123,6 +143,9 @@ static int init(AVFilterContext *ctx)
     // ran without scraping logs.
     av_log(ctx, AV_LOG_INFO, "whisper: ggml cpu variant '%s'.\n",
            nm_ggml_cpu_variant_name());
+    av_log(ctx, AV_LOG_INFO, "whisper: ggml backend '%s' (%s).\n",
+           wctx->gpu_active ? nm_ggml_backend_name() : "cpu",
+           wctx->gpu_active ? nm_ggml_backend_device() : nm_ggml_cpu_variant_name());
 
     // Init buffer
     wctx->audio_buffer_queue_size = av_rescale(wctx->queue, WHISPER_SAMPLE_RATE, AV_TIME_BASE);
@@ -369,6 +392,11 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
         av_dict_set(metadata, "lavfi.whisper.duration", duration_text, AV_DICT_DONT_STRDUP_VAL);
         av_dict_set(metadata, "lavfi.whisper.cpu_variant",
                     nm_ggml_cpu_variant_name(), 0);
+        // Deliberately outside the language branch below, and keyed off
+        // gpu_active rather than use_gpu: this reports what ran, not what was
+        // asked for.
+        av_dict_set(metadata, "lavfi.whisper.backend",
+                    wctx->gpu_active ? nm_ggml_backend_name() : "cpu", 0);
         if (wctx->detected_language) {
             av_dict_set(metadata, "lavfi.whisper.language", wctx->detected_language, 0);
             char *confidence_text = av_asprintf("%f", wctx->language_confidence);

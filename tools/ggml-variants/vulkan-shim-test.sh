@@ -72,13 +72,27 @@ LIBBASE="$(libpath ggml-base)"
 echo "== undefined vulkan symbols in the built archive (expect exactly 3):"
 nm --undefined-only "${LIBVULKAN}" 2>/dev/null | grep -oE '\bvk[A-Za-z0-9]+' | sort -u
 
-${CC} -O2 -I"${WORK}/inst/include" -I"${WORK}/vkinc" -static \
+# ggml_cpu_dispatch.c comes along so the probe's `select` mode exercises the
+# PRODUCTION selector (nm_ggml_backend_init) rather than a copy of it. It is
+# compiled in NM_GGML_CPU_FIXED mode: this harness builds stock whisper.cpp, so
+# libggml-cpu.a already defines ggml_backend_cpu_init() and the rest, and the
+# variant-forwarding half of that file would be a duplicate-symbol error here.
+# The backend-selection half - all this probe cares about - is outside that
+# split and is byte for byte the code the real filters link.
+${CC} -O2 -I"${WORK}/inst/include" -I"${WORK}/vkinc" -I"${REPO}/scripts/includes" \
+    -DNM_GGML_CPU_FIXED='"harness"' -static \
     "${REPO}/tools/ggml-variants/vulkan-probe.c" "${REPO}/scripts/includes/vk_loader_shim.c" \
+    "${REPO}/scripts/includes/ggml_cpu_dispatch.c" \
     "${LIBGGML}" "${LIBVULKAN}" "${LIBCPU}" "${LIBBASE}" ${EXTRA} -o "${BIN}"
 echo "built ${BIN}"
 
 if [[ ${FORMAT} == elf ]]; then
     echo "== linkage (must say statically linked):"; file "${BIN}"
-    echo "== case A: no loader present at all"; "${BIN}"; echo "exit=$?"
+    # NOTE: this container has libvulkan-dev (and therefore libvulkan1)
+    # installed above, so the loader IS present here with zero registered ICDs.
+    # The genuinely loader-less case needs a bare image and is driven from
+    # backend-select-test.sh, which runs the static binary this built.
+    echo "== registry probe, loader present, no ICD"; "${BIN}"; echo "exit=$?"
+    echo "== selector, loader present, no ICD"; "${BIN}" select; echo "exit=$?"
 fi
 exit 0

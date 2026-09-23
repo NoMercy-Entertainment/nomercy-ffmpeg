@@ -161,6 +161,75 @@ logline=$(NOMERCY_GGML_CPU=x64 ./ffmpeg -hide_banner -loglevel info -nostats -t 
 echo "  log: ${logline:-<none>}"
 [[ -n ${logline} ]] || { echo "  FAIL: no \"cpu variant '"'"'...'"'"'\" log line"; fail=1; }
 
+echo "== filter-level backend reporting (Task 3) =="
+# Both filters must name the backend they actually ran on, and publish it as
+# metadata. This container has no GPU, so the only correct answer is "cpu" --
+# which is also the assertion that matters most: global constraint 1 is that a
+# GPU-less machine behaves exactly as it did before this code existed.
+ss_out=$(./ffmpeg -hide_banner -loglevel info -nostats -t 12 -i input.mp3 -vn \
+    -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment,ametadata=mode=print:key=lavfi.stemsplit.backend" \
+    -f null - 2>&1)
+ss_meta=$(echo "${ss_out}" | grep -oE "lavfi.stemsplit.backend=[a-z0-9_]+" | head -1)
+ss_log=$(echo "${ss_out}" | grep -oE "stemsplit: ggml backend .[a-z0-9_]+. \([^)]*\)" | head -1)
+echo "  stemsplit metadata: ${ss_meta:-<none>}"
+echo "  stemsplit log: ${ss_log:-<none>}"
+[[ ${ss_meta} == "lavfi.stemsplit.backend=cpu" ]] || { echo "  FAIL: stemsplit backend metadata is not cpu on a GPU-less host"; fail=1; }
+[[ -n ${ss_log} ]] || { echo "  FAIL: stemsplit did not log a backend"; fail=1; }
+
+# whisper publishes its metadata only on a frame that actually carried a
+# transcript, so this needs a model and an input that produce one. The 586 KB
+# ggml-base.en.bin this harness requires is a stub that transcribes nothing:
+# with it NEITHER lavfi.whisper.cpu_variant NOR lavfi.whisper.backend appears,
+# and asserting on the backend key alone would have reported a bug that is not
+# there (it did, on the first run of this check). Use a real model and jfk.wav
+# when they are present in WORK -- optional inputs, exactly as they were for
+# Task 2 -- and in every case assert the structural property that holds either
+# way: the backend key appears wherever the already-verified cpu_variant key
+# appears, i.e. beside lavfi.whisper.text and NOT inside the language branch.
+wh_model=ggml-base.en.bin
+wh_input=input.mp3
+[[ -f ggml-base.en-real.bin ]] && wh_model=ggml-base.en-real.bin
+[[ -f jfk.wav ]] && wh_input=jfk.wav
+wh_out=$(./ffmpeg -hide_banner -loglevel info -nostats -t 12 -i ${wh_input} -vn \
+    -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=${wh_model}:language=en:queue=3,ametadata=mode=print" \
+    -f null - 2>&1)
+wh_status=$?
+wh_cpuvar_n=$(echo "${wh_out}" | grep -c "lavfi.whisper.cpu_variant=" || true)
+wh_backend_n=$(echo "${wh_out}" | grep -c "lavfi.whisper.backend=" || true)
+wh_meta=$(echo "${wh_out}" | grep -oE "lavfi.whisper.backend=[a-z0-9_]+" | head -1)
+wh_log=$(echo "${wh_out}" | grep -oE "whisper: ggml backend .[a-z0-9_]+. \([^)]*\)" | head -1)
+echo "  whisper model: ${wh_model}, input: ${wh_input}"
+echo "  whisper exit code: ${wh_status}"
+echo "  whisper cpu_variant keys: ${wh_cpuvar_n}, backend keys: ${wh_backend_n}"
+echo "  whisper metadata: ${wh_meta:-<none>}"
+echo "  whisper log: ${wh_log:-<none>}"
+[[ ${wh_status} -eq 0 ]] || { echo "  FAIL: whisper run did not exit 0"; fail=1; }
+[[ ${wh_backend_n} -eq ${wh_cpuvar_n} ]] || { echo "  FAIL: backend key does not accompany cpu_variant on every transcribed frame"; fail=1; }
+if [[ ${wh_cpuvar_n} -gt 0 ]]; then
+    [[ ${wh_meta} == "lavfi.whisper.backend=cpu" ]] || { echo "  FAIL: whisper backend metadata is not cpu on a GPU-less host"; fail=1; }
+else
+    echo "  NOTE: this model transcribed nothing, so the check above is structural only."
+    echo "        Put a real ggml-base.en-real.bin and jfk.wav in WORK to check the value too."
+fi
+[[ -n ${wh_log} ]] || { echo "  FAIL: whisper did not log a backend"; fail=1; }
+
+echo "== use_gpu=0 is accepted by both filters =="
+# The hard override has to exist and parse even where there is no GPU to
+# override; a typo in either AVOption would only ever show up here.
+if ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn \
+    -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment:use_gpu=0" -f null - >/dev/null 2>&1; then
+    echo "  ok: stemsplit use_gpu=0"
+else
+    echo "  FAIL: stemsplit rejected use_gpu=0"; fail=1
+fi
+if ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn \
+    -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=ggml-base.en.bin:language=en:queue=3:use_gpu=0" -f null - >/dev/null 2>&1; then
+    echo "  ok: whisper use_gpu=0"
+else
+    echo "  FAIL: whisper rejected use_gpu=0"; fail=1
+fi
+
+
 echo "== ggml vulkan backend linked into the binary =="
 # DEVIATION 4 from the plan (task-2-brief.md Step 2): its suggested check
 # ("-f lavfi -i anullsrc=... | grep -qi vulkan") does not work against this

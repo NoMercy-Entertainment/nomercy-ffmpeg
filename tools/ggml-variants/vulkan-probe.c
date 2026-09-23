@@ -1,6 +1,12 @@
 /* Probe: what does ggml's registry offer, and does it compute correctly?
  * Exits 0 whether or not a GPU exists - "no GPU" is a valid, expected answer.
- * Exits non-zero only on a crash or a wrong result, which is what we test for. */
+ * Exits non-zero only on a crash or a wrong result, which is what we test for.
+ *
+ * Two modes:
+ *   (no argument)      the registry/matmul probe this file started as.
+ *   select [use_gpu]   exercise the PRODUCTION selector, nm_ggml_backend_init(),
+ *                      so the filters and this probe share one code path and a
+ *                      machine that crashes here would have crashed FFmpeg. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -8,6 +14,8 @@
 #include <ggml.h>
 #include <ggml-alloc.h>
 #include <ggml-backend.h>
+#include <ggml-cpu.h>   /* ggml_backend_is_cpu */
+#include "nm_ggml_cpu.h"
 
 #define M 256
 #define K 256
@@ -43,7 +51,55 @@ static float *run_on(ggml_backend_t be, const char *label, float *a_src, float *
     return out;
 }
 
-int main(void)
+/* What nm_ggml_backend_init() actually chose. This is the function both filters
+ * call, so this is the thing that has to be right. Reporting is deliberately
+ * done the same way the filters do it - the request AND'ed with what is
+ * available - so a "cpu" here means a "cpu" there. */
+static int mode_select(int use_gpu)
+{
+    ggml_backend_t be;
+    int usable;
+
+    /* Ask before creating anything: this is the call that runs the software-ICD
+     * guard, and on a Mesa machine the process died right here before it
+     * existed. */
+    usable = nm_ggml_gpu_usable();
+    printf("gpu_usable=%d\n", usable);
+
+    be = nm_ggml_backend_init(use_gpu);
+    if (!be) {
+        printf("FAIL: no backend at all\n");
+        return 1;
+    }
+
+    printf("requested_gpu=%d\n", use_gpu);
+    printf("selected_backend=%s\n", (use_gpu && usable) ? nm_ggml_backend_name() : "cpu");
+    printf("selected_device=%s\n", (use_gpu && usable) ? nm_ggml_backend_device()
+                                                       : nm_ggml_cpu_variant_name());
+    printf("is_cpu=%d\n", ggml_backend_is_cpu(be) ? 1 : 0);
+
+    /* A selection that cannot compute is not a selection. Runs the same matmul
+     * the default mode does, on whatever was chosen. */
+    {
+        float *a = malloc(sizeof(float) * M * K), *b = malloc(sizeof(float) * K * N);
+        float *out;
+        size_t i;
+
+        srand(99);
+        for (i = 0; i < (size_t) M * K; i++) a[i] = (rand() / (float) RAND_MAX) - 0.5f;
+        for (i = 0; i < (size_t) K * N; i++) b[i] = (rand() / (float) RAND_MAX) - 0.5f;
+        out = run_on(be, "selected", a, b);
+        free(a); free(b);
+        if (!out) { ggml_backend_free(be); return 1; }
+        free(out);
+    }
+
+    ggml_backend_free(be);
+    printf("PASS\n");
+    return 0;
+}
+
+static int mode_registry(void)
 {
     float *a = malloc(sizeof(float) * M * K), *b = malloc(sizeof(float) * K * N);
     srand(99);
@@ -92,4 +148,11 @@ int main(void)
     ggml_backend_free(cpu_be);
     printf("PASS\n");
     return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1 && !strcmp(argv[1], "select"))
+        return mode_select(argc > 2 ? atoi(argv[2]) : 1);
+    return mode_registry();
 }

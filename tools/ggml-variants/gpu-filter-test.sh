@@ -1,0 +1,123 @@
+#!/bin/bash
+# Both filters, on a machine that HAS a GPU: do they use it, do they say so,
+# and do they still produce the right numbers?
+#
+# The three no-GPU conditions are covered by backend-select-test.sh, which runs
+# in containers. This one needs real hardware, so it runs wherever that
+# hardware is - on this project's Windows host (Git Bash), against the
+# ffmpeg.exe build-windows-x86_64.sh produced, or on any Linux box with a
+# working Vulkan driver against the ffmpeg build-linux-x86_64.sh produced.
+#
+# Usage:  bash tools/ggml-variants/gpu-filter-test.sh <workdir> [ffmpeg-name]
+# <workdir> must hold ffmpeg(.exe), spleeter-2stems-f16.gguf and input.mp3;
+# the whisper half additionally needs a real model and a speech clip
+# (ggml-base.en-real.bin and jfk.wav, the same optional inputs
+# build-linux-x86_64.sh uses), because whisper only publishes metadata on a
+# frame that actually carried a transcript.
+set -eu
+WORK="${1:?usage: gpu-filter-test.sh <workdir> [ffmpeg-name]}"
+FF="${WORK}/${2:-ffmpeg.exe}"
+fail=0
+
+[[ -x ${FF} ]] || { echo "no such ffmpeg: ${FF}" >&2; exit 1; }
+cd "${WORK}"
+
+MODEL=spleeter-2stems-f16.gguf
+WMODEL=ggml-base.en.bin
+WINPUT=input.mp3
+[[ -f ggml-base.en-real.bin ]] && WMODEL=ggml-base.en-real.bin
+[[ -f jfk.wav ]] && WINPUT=jfk.wav
+
+rms_db() {   # rms_db <a.wav> <b.wav> <threshold-db> <label>
+    python3 - "$1" "$2" "$3" "$4" <<"PY"
+import sys, wave, math, array
+
+def rd(path):
+    w = wave.open(path, "rb")
+    a = array.array("h")
+    a.frombytes(w.readframes(w.getnframes()))
+    return a
+
+a, b = rd(sys.argv[1]), rd(sys.argv[2])
+limit, label = float(sys.argv[3]), sys.argv[4]
+n = min(len(a), len(b))
+sig = diff = 0.0
+for i in range(n):
+    sig += a[i] * a[i]
+    d = a[i] - b[i]
+    diff += d * d
+rms_sig = math.sqrt(sig / n) if n else 0.0
+rms_diff = math.sqrt(diff / n) if n else 0.0
+db = 20 * math.log10(rms_diff / rms_sig) if rms_diff and rms_sig else -999.0
+print(f"  {label}: {db:.1f} dB relative over {n} samples (limit {limit:.0f})")
+sys.exit(0 if db < limit else 1)
+PY
+}
+
+echo "== stemsplit on the GPU =="
+ss_gpu=$("${FF}" -hide_banner -loglevel info -nostats -y -t 30 -i input.mp3 -vn \
+    -af "stemsplit=model=${MODEL}:stem=accompaniment,ametadata=mode=print:key=lavfi.stemsplit.backend" \
+    -f wav gpu.wav 2>&1) || true
+echo "${ss_gpu}" | grep -E "stemsplit: ggml backend|lavfi.stemsplit.backend=" | head -3 | sed "s/^/  /"
+ss_gpu_meta=$(echo "${ss_gpu}" | grep -oE "lavfi.stemsplit.backend=[a-z0-9_]+" | head -1)
+[[ ${ss_gpu_meta} == "lavfi.stemsplit.backend=vulkan" ]] \
+    || { echo "  FAIL: expected lavfi.stemsplit.backend=vulkan, got ${ss_gpu_meta:-<none>}"; fail=1; }
+
+echo "== stemsplit forced to the CPU (use_gpu=0) =="
+ss_cpu=$("${FF}" -hide_banner -loglevel info -nostats -y -t 30 -i input.mp3 -vn \
+    -af "stemsplit=model=${MODEL}:stem=accompaniment:use_gpu=0,ametadata=mode=print:key=lavfi.stemsplit.backend" \
+    -f wav cpu.wav 2>&1) || true
+echo "${ss_cpu}" | grep -E "stemsplit: ggml backend|lavfi.stemsplit.backend=" | head -3 | sed "s/^/  /"
+ss_cpu_meta=$(echo "${ss_cpu}" | grep -oE "lavfi.stemsplit.backend=[a-z0-9_]+" | head -1)
+[[ ${ss_cpu_meta} == "lavfi.stemsplit.backend=cpu" ]] \
+    || { echo "  FAIL: use_gpu=0 did not force the CPU (got ${ss_cpu_meta:-<none>})"; fail=1; }
+
+echo "== GPU output vs CPU output =="
+# Not bit-identical by construction, and the gap is bigger than "different
+# order of operations" would suggest. ggml-vulkan's cooperative-matrix conv2d
+# shader accumulates in float16 (vulkan-shaders/conv2d_mm.comp: ACC_TYPE
+# float16_t under COOPMAT2, coopmat<float16_t, ..., gl_MatrixUseAccumulator>
+# under COOPMAT), so on any GPU that advertises KHR_coopmat the whole U-Net
+# runs with FP16 accumulators. Measured on an RTX 3070: -58.8 dB with the
+# coopmat path, -98.7 dB with GGML_VK_DISABLE_COOPMAT=1, at the same speed
+# (1023 ms vs 1032 ms over 30 s of audio).
+#
+# So -55 dB is the threshold for the DEFAULT path - chosen from that
+# measurement with headroom, not from a wish - and the second comparison below
+# is what actually proves the arithmetic is right: with the FP16 accumulator
+# out of the way the GPU agrees with the CPU to -90 dB or better. A regression
+# in our own code would move BOTH numbers; only the accumulator moves the first
+# one alone.
+rms_db gpu.wav cpu.wav -55 "gpu (default, coopmat) vs cpu" || fail=1
+
+echo "== GPU output vs CPU output, FP16 accumulator disabled =="
+GGML_VK_DISABLE_COOPMAT=1 "${FF}" -hide_banner -loglevel error -nostats -y -t 30 -i input.mp3 -vn \
+    -af "stemsplit=model=${MODEL}:stem=accompaniment" -f wav gpu_nocoop.wav >/dev/null 2>&1 || true
+rms_db gpu_nocoop.wav cpu.wav -90 "gpu (GGML_VK_DISABLE_COOPMAT=1) vs cpu" || fail=1
+
+echo "== whisper on the GPU =="
+wh_gpu=$("${FF}" -hide_banner -loglevel info -nostats -t 12 -i ${WINPUT} -vn \
+    -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=${WMODEL}:language=en:queue=3,ametadata=mode=print" \
+    -f null - 2>&1) || true
+echo "${wh_gpu}" | grep -E "whisper: ggml backend|lavfi.whisper.backend=" | head -3 | sed "s/^/  /"
+wh_gpu_meta=$(echo "${wh_gpu}" | grep -oE "lavfi.whisper.backend=[a-z0-9_]+" | head -1)
+[[ ${wh_gpu_meta} == "lavfi.whisper.backend=vulkan" ]] \
+    || { echo "  FAIL: expected lavfi.whisper.backend=vulkan, got ${wh_gpu_meta:-<none>} (is ${WMODEL} a real model, and ${WINPUT} speech?)"; fail=1; }
+
+echo "== whisper forced to the CPU (use_gpu=0) =="
+wh_cpu=$("${FF}" -hide_banner -loglevel info -nostats -t 12 -i ${WINPUT} -vn \
+    -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=${WMODEL}:language=en:queue=3:use_gpu=0,ametadata=mode=print" \
+    -f null - 2>&1) || true
+echo "${wh_cpu}" | grep -E "whisper: ggml backend|lavfi.whisper.backend=" | head -3 | sed "s/^/  /"
+wh_cpu_meta=$(echo "${wh_cpu}" | grep -oE "lavfi.whisper.backend=[a-z0-9_]+" | head -1)
+[[ ${wh_cpu_meta} == "lavfi.whisper.backend=cpu" ]] \
+    || { echo "  FAIL: use_gpu=0 did not force the CPU (got ${wh_cpu_meta:-<none>})"; fail=1; }
+
+echo "== whisper transcribed the same words on both backends =="
+wh_gpu_text=$(echo "${wh_gpu}" | grep -oE "lavfi.whisper.text=.*" | head -4)
+wh_cpu_text=$(echo "${wh_cpu}" | grep -oE "lavfi.whisper.text=.*" | head -4)
+echo "  gpu: $(echo "${wh_gpu_text}" | head -1)"
+echo "  cpu: $(echo "${wh_cpu_text}" | head -1)"
+[[ -n ${wh_gpu_text} ]] || { echo "  FAIL: the GPU run transcribed nothing"; fail=1; }
+
+[[ ${fail} -eq 0 ]] && echo PASS || { echo FAILED; exit 1; }
