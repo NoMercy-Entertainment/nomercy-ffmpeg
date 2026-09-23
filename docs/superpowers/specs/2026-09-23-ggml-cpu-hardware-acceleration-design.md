@@ -291,9 +291,26 @@ x86_64-w64-mingw32-objcopy --redefine-syms=redefine.txt variant.o variant_fin.o
 ```
 
 On COFF only *defined* symbols are renamed and section symbols are left alone —
-renaming those corrupts COMDAT section names and the link silently produces an
+blanket-prefixing corrupts COMDAT section names and the link silently produces an
 empty binary. Result, run on real Windows: `lo` 65.90 ms/matmul, `hi` 4.44
 ms/matmul, **14.86x**, relative difference 8.9e-07.
+
+**Amended 2026-09-23, during Task 1 — that COFF recipe is necessary but not
+sufficient.** It holds when one variant is left untouched, which is how it was
+first measured, but not when *both* are packed, which is what the real build does.
+PE/COFF puts every vague-linkage definition — C++ vtables, libstdc++ template
+instantiations, and the `.refptr.<sym>` indirection cells gcc emits for cross-TU
+globals — in a COMDAT section named `<kind>$<symbol>`, and the linker folds COMDAT
+groups by matching **section names, not symbol names**. Two packed variants still
+carry identically named sections, so the linker keeps one and the other variant's
+correctly renamed symbols vanish: ~30 `undefined reference to 'hi_...'` errors at
+the application link. The fix is narrow — for each symbol already being renamed,
+also rename its matching `<kind>$<symbol>` section with `objcopy
+--rename-section`, across the kinds mingw emits (`text`, `data`, `rdata`, `bss`,
+`pdata`, `xdata`). `objcopy` no-ops a rename whose old section does not exist, so
+the base `.text`/`.data`/`.rdata` segments are never touched. Verified on real
+Windows with both variants packed: `lo` 65.63 ms/matmul, `hi` 4.58 ms/matmul,
+**14.32x**.
 
 **aarch64 ELF:** same recipe as ELF, verified under qemu — both variants coexist
 and compute correctly (relative difference 0.004, consistent with fp16
@@ -445,6 +462,7 @@ only vectorised matmul in the build.
 | ggml's per-variant score symbol is unavailable in a static build | Implementation step 1 confirms it; explicit per-OS feature detection is the documented fallback (§7.3) |
 | A whisper.cpp upgrade changes symbol layout | The packing is generated from `nm` output at build time, not from a checked-in list, so it adapts automatically; the build fails loudly on a link error rather than silently mis-selecting |
 | Two variants' weak/COMDAT code merged silently, so the fast variant runs slow code | The packing recipes were chosen specifically to avoid this; verification asserts a per-variant speed difference, not just correctness |
+| A cmake invocation sets `CMAKE_SYSTEM_NAME` without `CMAKE_SYSTEM_PROCESSOR`, so `ggml_get_system_arch()` returns `UNKNOWN` and **every** variant silently builds the generic backend regardless of its instruction flags | Found during Task 1, in the plan's own harness. All seven platform dockerfiles are safe (five set `CMAKE_SYSTEM_PROCESSOR`, the two darwin ones set `CMAKE_OSX_ARCHITECTURES`, which ggml checks first), but any new cmake invocation must set one of the two. The speed assertion in the self-test is what catches it — a link check never would |
 | Archive/binary growth | ~4 MB per binary measured against 145-244 MB archives; recorded per §9.3 |
 
 ### 11.1 Known unmeasured
