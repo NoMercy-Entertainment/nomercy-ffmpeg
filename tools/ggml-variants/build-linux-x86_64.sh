@@ -161,5 +161,58 @@ logline=$(NOMERCY_GGML_CPU=x64 ./ffmpeg -hide_banner -loglevel info -nostats -t 
 echo "  log: ${logline:-<none>}"
 [[ -n ${logline} ]] || { echo "  FAIL: no \"cpu variant '"'"'...'"'"'\" log line"; fail=1; }
 
+echo "== ggml vulkan backend linked into the binary =="
+# DEVIATION 4 from the plan (task-2-brief.md Step 2): its suggested check
+# ("-f lavfi -i anullsrc=... | grep -qi vulkan") does not work against this
+# harness build for the exact same reason as DEVIATION 3 above: lavfi is an
+# input device this minimal --disable-everything ffmpeg never enables (no
+# --enable-indev=lavfi, no anullsrc filter), so the run fails before ggml even
+# initialises. Two checks instead, neither depending on lavfi:
+#   1. the pre-strip binary carries exactly one defined ggml_backend_vk_reg
+#      symbol -- proves the backend was actually linked in, not merely
+#      configured (a configure-only failure would leave this symbol absent).
+#   2. actually running the whisper filter makes ggml'"'"'s backend registry
+#      enumerate devices, which unconditionally fprintf'"'"'s a "ggml_vulkan:"
+#      line straight to stderr -- this is a raw ggml fprintf, not behind
+#      av_log, so it appears regardless of -loglevel.
+# FOUND WHILE VERIFYING: this probe originally ran stemsplit (already
+# exercised above for timing/metadata), on the assumption that linking
+# ggml-vulkan in is enough by itself to trigger device enumeration on ANY
+# ggml use. Empirically false: stemsplit produced zero "ggml_vulkan:" output
+# (0/0 ffmpeg exit, otherwise healthy) -- NoMercy'"'"'s stemsplit path drives
+# ggml-cpu directly through the variant dispatcher and never calls
+# whisper.cpp'"'"'s own backend auto-selection at all. The whisper filter does
+# (it goes through unmodified whisper.cpp, which probes for a GPU backend on
+# every init unless told not to), and reliably printed "ggml_vulkan: Error:
+# Vulkan 1.2 required." here -- confirmed by hand first, see task-2-report.md.
+# That message, not "No devices found.", is what a real loader with zero
+# registered ICDs (this image ships libvulkan1 via libvulkan-dev but no GPU
+# driver, no mesa-vulkan-drivers) actually produces: ggml_vulkan still treats
+# it as an ordinary, handled Vulkan error, not a crash -- ffmpeg exits 0 and
+# the transcription completes on CPU either way, which is the real thing this
+# check needs to prove (global constraint 1: no regression for a GPU-less
+# user). NM_SKIP_VARIANTS-style "No devices found." would also be acceptable;
+# the assertion below matches on the "ggml_vulkan:" prefix common to both.
+vk_reg=$(nm --defined-only ffmpeg_g 2>/dev/null | grep -cE " T ggml_backend_vk_reg$")
+echo "  defined ggml_backend_vk_reg in ffmpeg_g: ${vk_reg}"
+[[ ${vk_reg} -eq 1 ]] || { echo "  FAIL: expected exactly 1 ggml_backend_vk_reg, got ${vk_reg}"; fail=1; }
+
+vk_probe_out=$(./ffmpeg -hide_banner -loglevel error -nostats -y -t 2 -i input.mp3 -vn \
+    -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=ggml-base.en.bin:language=en:queue=3" \
+    -f null - 2>&1)
+vk_status=$?
+vk_lines=$(echo "${vk_probe_out}" | grep -c "ggml_vulkan:" || true)
+echo "  whisper run exit code: ${vk_status}"
+echo "  ggml_vulkan: lines seen at runtime: ${vk_lines}"
+echo "${vk_probe_out}" | grep "ggml_vulkan:" | head -5 | sed "s/^/  /"
+[[ ${vk_status} -eq 0 ]] || { echo "  FAIL: whisper run crashed/exited non-zero with vulkan built in"; fail=1; }
+[[ ${vk_lines} -gt 0 ]] || { echo "  FAIL: no ggml_vulkan: output seen at runtime"; fail=1; }
+
+echo "== still static (vulkan build) =="
+if file ./ffmpeg | grep -q "statically linked"; then echo "  ok: static"; else echo "  FAIL: not static"; fail=1; fi
+
+echo "== no vulkan loader import (must stay fully static) =="
+if ldd ./ffmpeg 2>&1 | grep -qi vulkan; then echo "  FAIL: links the loader"; fail=1; else echo "  ok: no loader dependency"; fi
+
 [[ ${fail} -eq 0 ]] && echo PASS || { echo FAILED; exit 1; }
 '

@@ -139,6 +139,27 @@ export PATH=\"\${LLVM_MINGW_DIR}/bin:\${PATH}\"
 "
 fi
 
+# ggml's Vulkan backend (scripts/48-whisper.sh's NM_VULKAN block) needs glslc
+# (a build-time-only shader compiler) and the Vulkan headers to satisfy
+# find_package(Vulkan). Step 1 of task-2-brief.md found both absent from
+# nomercyentertainment/ffmpeg-base:latest as pulled locally. The permanent fix
+# is in ffmpeg-base.dockerfile (glslc, libvulkan-dev, spirv-headers added to
+# the main apt-get install list) so the real CI image carries them, but that
+# image is not rebuilt for every harness iteration here -- rebuilding it costs
+# far more than 30 minutes given everything else it installs. Mirror
+# linux_setup/windows_setup below: apt-get install the same three packages
+# inside this ephemeral container instead. Gated the same way 48-whisper.sh
+# gates NM_VULKAN (everything but darwin), so this harness and the real
+# pipeline can never disagree about which platforms get Vulkan.
+vulkan_setup=""
+if [[ ${TARGET_OS} != darwin ]]; then
+    vulkan_setup='
+apt-get update >/tmp/apt.log 2>&1 || { cat /tmp/apt.log; exit 1; }
+apt-get install -y --no-install-recommends glslc libvulkan-dev spirv-headers >>/tmp/apt.log 2>&1 \
+    || { cat /tmp/apt.log; exit 1; }
+'
+fi
+
 # linux-aarch64: the base image only carries the native x86_64 toolchain; the
 # platform dockerfile apt-installs the aarch64 cross-GCC its ENV CC/CXX/LD/AR
 # point at. No-op for linux-x86_64, whose toolchain the base image already has.
@@ -253,6 +274,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     -e NM_FFMPEG_TARGET_OS="${ffmpeg_target_os}" -e NM_EXTRA_LIBS="${extra_libs}" \
     -e NM_WINDOWS_SETUP="${windows_setup}" -e NM_FREEBSD_SETUP="${freebsd_setup}" \
     -e NM_DARWIN_SETUP="${darwin_setup}" -e NM_LINUX_SETUP="${linux_setup}" \
+    -e NM_VULKAN_SETUP="${vulkan_setup}" \
     -e NM_COMPUTE_PROBE="${NM_COMPUTE_PROBE:-0}" \
     "${IMAGE}" bash -c '
 set -eu
@@ -260,6 +282,7 @@ eval "${NM_WINDOWS_SETUP}"
 eval "${NM_FREEBSD_SETUP}"
 eval "${NM_DARWIN_SETUP}"
 eval "${NM_LINUX_SETUP}"
+eval "${NM_VULKAN_SETUP}"
 if [[ ${TARGET_OS} == darwin ]]; then
     export PATH="${PREFIX}/bin:${SDK_PATH}/usr/bin:${PREFIX}/osxcross/bin:${PATH}"
 elif [[ ${TARGET_OS} == windows && ${ARCH} == aarch64 ]]; then

@@ -27,9 +27,49 @@ fi
 #     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_CUDA=ON -DCUDA_TOOLKIT_ROOT_DIR=${PREFIX}/lib -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc"
 # fi
 
-# if check_enabled "vulkan"; then
-#     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_VULKAN=ON -DVulkan_LIBRARY=${PREFIX}/lib/libvulkan.a -DVulkan_INCLUDE_DIR=${PREFIX}/include"
-# fi
+# --- Vulkan GPU backend ----------------------------------------------------
+#
+# ggml's Vulkan backend needs three symbols from the Vulkan loader. Linking the
+# real loader would make these static binaries depend on a shared library most
+# machines do not have, so scripts/includes/vk_loader_shim.c supplies those three
+# and opens the system loader at first use instead. The binary stays static and
+# Vulkan stays optional: no driver simply means the CPU backend is used.
+#
+# find_package(Vulkan) still has to be satisfied at configure time. ggml-vulkan is
+# built as a static archive, so Vulkan_LIBRARY is never linked - it only has to
+# exist as a path, hence the empty stub archive.
+#
+# This has to run here, before the cmake invocations below, not down in the
+# "CPU backend variants" section further down: WHISPER_CMAKE_COMMON_ARG here
+# feeds the ONE cmake configure (windows branch or the else branch, whichever
+# runs) that produces libggml-vulkan.a via `cmake --install`. The variant loop
+# below only ever rebuilds the `ggml-cpu` target at different instruction
+# levels into throwaway prefixes and never touches Vulkan at all, so setting
+# these flags there instead would silently build nothing Vulkan-related.
+NM_VULKAN=0
+if [[ ${TARGET_OS} != darwin ]]; then
+    NM_VULKAN=1
+fi
+
+if [[ ${NM_VULKAN} == 1 ]]; then
+    nm_vk_dir=/build/vulkan-stub
+    mkdir -p ${nm_vk_dir}/include
+    # Copy only the architecture-independent Vulkan headers. Pointing
+    # Vulkan_INCLUDE_DIR at /usr/include drags glibc's stdint.h ahead of the cross
+    # toolchain's own and breaks the mingw build.
+    for d in vulkan vk_video spirv; do
+        [[ -d /usr/include/${d} ]] && cp -r /usr/include/${d} ${nm_vk_dir}/include/
+    done
+    : > ${nm_vk_dir}/empty.c
+    gcc -c ${nm_vk_dir}/empty.c -o ${nm_vk_dir}/empty.o
+    ar rcs ${nm_vk_dir}/libvulkan-stub.a ${nm_vk_dir}/empty.o
+
+    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_VULKAN=ON"
+    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_INCLUDE_DIR=${nm_vk_dir}/include"
+    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_LIBRARY=${nm_vk_dir}/libvulkan-stub.a"
+    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_GLSLC_EXECUTABLE=$(command -v glslc)"
+    log "Vulkan backend enabled for ${TARGET_OS}-${ARCH}"
+fi
 
 if [[ ${TARGET_OS} == "windows" ]]; then
     OLD_CFLAGS=${CFLAGS}
@@ -294,6 +334,21 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
         -c /scripts/includes/ggml_cpu_dispatch.c -o ${nm_variant_dir}/dispatch.o 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: dispatcher build failed"; exit 1; fi
 
+    # The Vulkan loader shim rides along in this same archive (see
+    # scripts/includes/vk_loader_shim.c's header comment): ggml-vulkan is a
+    # separate, unmodified archive named directly in whisper.pc's Libs: line
+    # (below), but its three undefined loader symbols need to resolve against
+    # something, and this is that something.
+    nm_vk_shim_obj=""
+    if [[ ${NM_VULKAN} == 1 ]]; then
+        ${CC:-cc} ${CFLAGS} -I${nm_vk_dir}/include -c /scripts/includes/vk_loader_shim.c \
+            -o ${nm_variant_dir}/vk_loader_shim.o 2>&1 | log -a
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: vulkan shim build failed"; exit 1; fi
+        nm_vk_archive=$(find ${PREFIX}/lib -name 'libggml-vulkan.a' -o -name 'ggml-vulkan.a' | head -1)
+        if [[ -z ${nm_vk_archive} ]]; then log "Error: GGML_VULKAN=ON but no ggml-vulkan archive was produced"; exit 1; fi
+        nm_vk_shim_obj=${nm_variant_dir}/vk_loader_shim.o
+    fi
+
     rm -f ${PREFIX}/lib/libggml-cpu-variants.a
     if [[ ${NM_OBJ_FORMAT} == coff-archive ]]; then
         # The variants are archives here, not objects, so they are merged with
@@ -306,6 +361,11 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
         {
             echo "CREATE ${PREFIX}/lib/libggml-cpu-variants.a"
             echo "ADDMOD ${nm_variant_dir}/dispatch.o"
+            # vk_loader_shim.o is a plain object, not an archive. ADDLIB (used
+            # below for the per-variant archives) expects an ar archive and
+            # silently does the wrong thing given a bare .o, so the shim gets
+            # its own ADDMOD line, same as dispatch.o just above.
+            [[ -n ${nm_vk_shim_obj} ]] && echo "ADDMOD ${nm_vk_shim_obj}"
             for nm_obj in ${nm_objects}; do
                 echo "ADDLIB ${nm_obj}"
             done
@@ -315,7 +375,7 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
         ${RANLIB:-ranlib} ${PREFIX}/lib/libggml-cpu-variants.a \
             || { log "Error: indexing libggml-cpu-variants.a failed"; exit 1; }
     else
-        ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o ${nm_objects} \
+        ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o ${nm_objects} ${nm_vk_shim_obj} \
             || { log "Error: archiving libggml-cpu-variants.a failed"; exit 1; }
     fi
     # `ar -M` reports a failed script on stdout and still exits 0 in some
@@ -374,7 +434,13 @@ rm -rf /build/whisper
 rm -rf ${PREFIX}/lib/pkgconfig/whisper.pc
 nm_cpu_lib="ggml-cpu-variants"
 [[ ${NM_SKIP_VARIANTS} == "1" ]] && nm_cpu_lib="ggml-cpu"
-lib_flags="Libs: -L\${libdir} -lggml -lggml-base -lwhisper -lggml -lggml-base -l${nm_cpu_lib}"
+# ggml-vulkan's three undefined loader symbols (see vk_loader_shim.c) are only
+# resolved by the shim packed into libggml-cpu-variants.a. A static linker
+# resolves left to right, so -lggml-vulkan MUST come before -l${nm_cpu_lib} in
+# this Libs: line, or those symbols are still undefined when ffmpeg links.
+nm_vk_lib=""
+[[ ${NM_VULKAN} == 1 ]] && nm_vk_lib="-lggml-vulkan "
+lib_flags="Libs: -L\${libdir} -lggml -lggml-base -lwhisper -lggml -lggml-base ${nm_vk_lib}-l${nm_cpu_lib}"
 # NM_SKIP_VARIANTS platforms link the stock -lggml-cpu above for the real
 # backend, plus this second, differently-built libggml-cpu-variants.a (see
 # the fixed-mode branch above) purely for its nm_ggml_cpu_variant_name()
