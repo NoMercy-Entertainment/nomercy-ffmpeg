@@ -155,6 +155,24 @@ nm_pack_variant() {
             return 1
         fi
         "${objcopy}" --redefine-syms="${output}.redef" "${archive}" "${output}" || return 1
+        # Assert the rewrite reached EVERY member, not just the one holding
+        # the entry point the shared post-check below looks for. This recipe
+        # rewrites an archive member by member, so a partial rewrite is a real
+        # failure mode, and this is the one path whose output nobody can
+        # execute on its target hardware before release: a member that kept
+        # its original names would fold into another variant at the final
+        # link, or collide with it, a long way from the cause. The rename list
+        # was built from exactly this symbol class over exactly this archive,
+        # so afterwards not one of them may still be unprefixed. (Measured on
+        # the real backend: 597 defined symbols per variant, 0 left over.)
+        "${nm}" --defined-only "${output}" \
+            | awk -v p="${prefix}" '$2 ~ /^[TDBRWV]$/ && index($3, p) != 1 { print $2 " " $3 }' \
+            > "${output}.leftover"
+        if [[ -s ${output}.leftover ]]; then
+            echo "nm_pack_variant: $(wc -l < "${output}.leftover") defined symbols in ${output} were not renamed to ${prefix}*, so the archive is only partly rewritten. First few:" >&2
+            head -5 "${output}.leftover" >&2
+            return 1
+        fi
         ;;
     *)
         echo "nm_pack_variant: unknown object format: ${format}" >&2
@@ -167,5 +185,5 @@ nm_pack_variant() {
         echo "nm_pack_variant: ${prefix}ggml_backend_cpu_reg missing from ${output}" >&2
         return 1
     fi
-    rm -f "${tmp}" "${tmp}".* "${output}.redef"
+    rm -f "${tmp}" "${tmp}".* "${output}.redef" "${output}.leftover"
 }

@@ -43,7 +43,12 @@ check_platform() { # target-os  expected-tags
     local ntags; ntags=$(set -- ${tags}; echo $#)
     echo "=== ${os}-aarch64: building ==="
     mkdir -p "${out}"
-    "${REPO}/tools/ggml-variants/build-common.sh" "${os}" aarch64 "${out}"
+    # The compute probe is only worth building where the binary can actually
+    # be run, which here means linux under qemu; there is no interpreter for a
+    # Windows-on-ARM PE on this host at all.
+    local compute=0
+    [[ ${os} == linux ]] && compute=1
+    NM_COMPUTE_PROBE=${compute} "${REPO}/tools/ggml-variants/build-common.sh" "${os}" aarch64 "${out}"
 
     echo "=== ${os}-aarch64: variants in the build log ==="
     # whisper_build.log, not ffmpeg_build.log: 60-stemsplit.sh truncates the
@@ -130,22 +135,55 @@ open("/o/silence.wav", "wb").write(h + d)
 ' || fail "linux: could not create the smoke-test wav"
     MSYS_NO_PATHCONV=1 docker run --rm --platform linux/arm64 \
         -v "$(cygpath -w "${out}")":/o:ro -v "${SMOKE_MODEL_VOL}":/vol:ro \
-        -e SMOKE_MODEL="${SMOKE_MODEL}" ubuntu:24.04 bash -c '
+        -e SMOKE_MODEL="${SMOKE_MODEL}" -e NM_TAGS="${linux_tags}" ubuntu:24.04 bash -c '
 set -eu
 echo "-- uname: $(uname -m)"
-cp /o/nm-probe /o/ffmpeg /tmp/ && chmod +x /tmp/nm-probe /tmp/ffmpeg
-echo "-- nm-probe (dispatcher only):"
-for v in "" armv8.0 "armv8.2+dotprod+fp16" "armv8.2+dotprod+fp16+i8mm" bogus-value; do
+cp /o/nm-probe /o/nm-compute /o/ffmpeg /tmp/ && chmod +x /tmp/nm-probe /tmp/nm-compute /tmp/ffmpeg
+echo "-- nm-probe: which variant the dispatcher SELECTS (no backend is entered)"
+for v in "" ${NM_TAGS} bogus-value; do
     printf "   NOMERCY_GGML_CPU=%-28s -> " "${v:-<unset>}"
     NOMERCY_GGML_CPU="${v}" /tmp/nm-probe
 done
-echo "-- ffmpeg through the whisper filter:"
-NOMERCY_GGML_CPU= /tmp/ffmpeg -hide_banner -v info -i /o/silence.wav \
-    -af "whisper=model=${SMOKE_MODEL}:queue=1" -f null - >/tmp/ff.log 2>&1 || true
-# The pipeline is deliberately not "| grep"; with a trailing head the grep
-# exit status is thrown away and a missing log line would read as success.
-grep -E "ggml cpu variant" /tmp/ff.log \
-    || { echo "no variant line in ffmpeg output:"; tail -15 /tmp/ff.log; exit 1; }
+
+# The checks that matter: each variant runs its OWN packed code. nm-probe
+# above never enters a backend, and an automatic run only ever exercises
+# whichever variant this machine happens to select -- under qemu that is the
+# i8mm one, because qemu advertises HWCAP2_I8MM. The baseline is the variant
+# the whole Raspberry Pi 4 / Jetson Nano safety story rests on, so it is run
+# first and becomes the reference every other variant is compared against.
+echo "-- nm-compute: real matmul through each variant, checked against the baseline"
+rm -f /tmp/ref.bin
+for v in ${NM_TAGS}; do
+    echo "   --- NOMERCY_GGML_CPU=${v}"
+    NOMERCY_GGML_CPU="${v}" /tmp/nm-compute /tmp/ref.bin 2>&1 | sed "s/^/      /"
+    [ "${PIPESTATUS[0]}" = "0" ] || { echo "compute probe failed for ${v}"; exit 1; }
+done
+
+# And the same through the real filter, forced to each variant in turn, so it
+# is the shipped ffmpeg binary doing it and not just a probe.
+echo "-- ffmpeg through the whisper filter, forced to each variant:"
+first_md5=""
+for v in ${NM_TAGS}; do
+    NOMERCY_GGML_CPU="${v}" /tmp/ffmpeg -hide_banner -y -nostats -v info -i /o/silence.wav \
+        -af "whisper=model=${SMOKE_MODEL}:queue=1" -f wav "/tmp/out-${v}.wav" >"/tmp/ff-${v}.log" 2>&1 \
+        || { echo "ffmpeg failed with NOMERCY_GGML_CPU=${v}:"; tail -15 "/tmp/ff-${v}.log"; exit 1; }
+    # grep, not "| grep | head": a trailing head throws away the grep status
+    # and a missing log line would read as success.
+    line=$(grep -m1 -E "ggml cpu variant" "/tmp/ff-${v}.log") \
+        || { echo "no variant line for ${v}:"; tail -15 "/tmp/ff-${v}.log"; exit 1; }
+    case "${line}" in
+    *"${v}"*) ;;
+    *) echo "   forced ${v} but the filter reported: ${line}"; exit 1 ;;
+    esac
+    md5=$(md5sum < "/tmp/out-${v}.wav" | cut -d" " -f1)
+    echo "   ${v}: ${line##*] } output $(stat -c%s "/tmp/out-${v}.wav") bytes md5 ${md5}"
+    # Every variant must pass the audio through unchanged; a differing stream
+    # would mean one of them corrupted the frames it forwarded.
+    if [ -z "${first_md5}" ]; then first_md5="${md5}"
+    elif [ "${md5}" != "${first_md5}" ]; then echo "   audio output differs between variants"; exit 1
+    fi
+done
+echo "   all variants produced identical audio output"
 ' || fail "linux: qemu smoke run failed"
 }
 

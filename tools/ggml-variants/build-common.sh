@@ -246,12 +246,14 @@ fi
 mkdir -p "${WORK}"
 MSYS_NO_PATHCONV=1 docker run --rm \
     -v "$(cygpath -w "${REPO}/scripts")":/scripts:ro \
+    -v "$(cygpath -w "${REPO}/tools/ggml-variants")":/tools:ro \
     -v "$(cygpath -w "${WORK}")":/out \
     "${seed_mount[@]}" \
     "${env_args[@]}" -e TARGET_OS="${TARGET_OS}" -e ARCH="${ARCH}" \
     -e NM_FFMPEG_TARGET_OS="${ffmpeg_target_os}" -e NM_EXTRA_LIBS="${extra_libs}" \
     -e NM_WINDOWS_SETUP="${windows_setup}" -e NM_FREEBSD_SETUP="${freebsd_setup}" \
     -e NM_DARWIN_SETUP="${darwin_setup}" -e NM_LINUX_SETUP="${linux_setup}" \
+    -e NM_COMPUTE_PROBE="${NM_COMPUTE_PROBE:-0}" \
     "${IMAGE}" bash -c '
 set -eu
 eval "${NM_WINDOWS_SETUP}"
@@ -356,6 +358,18 @@ if [[ -f ${PREFIX}/lib/libggml-cpu-variants.a ]]; then
     ${CC} -O2 -I${PREFIX}/include -static /build/nm_probe.c -o /out/nm-probe \
         -L${PREFIX}/lib -Wl,--start-group -lggml-cpu-variants -lggml-base -lggml -Wl,--end-group \
         ${NM_EXTRA_LIBS}
+fi
+# Verification-only, opt-in with NM_COMPUTE_PROBE=1 (Task 7 uses it for
+# linux-aarch64): nm-probe above only reports which variant WOULD be selected
+# and never enters a backend, so on its own it proves nothing about the packed
+# code. compute-probe runs a real matmul through the selected variant and
+# compares it against a reference run of another variant. Opt-in rather than
+# always-on because it pulls in far more of ggml than the name probe does, and
+# the platforms that cannot run their own binary get nothing from it.
+if [[ ${NM_COMPUTE_PROBE} == 1 && -f ${PREFIX}/lib/libggml-cpu-variants.a ]]; then
+    ${CC} -O2 -I${PREFIX}/include -static /tools/compute-probe.c -o /out/nm-compute \
+        -L${PREFIX}/lib -Wl,--start-group -lggml-cpu-variants -lggml-base -lggml -Wl,--end-group \
+        ${NM_EXTRA_LIBS} -lm
 fi
 cp /ffmpeg_build.log /out/ffmpeg_build.log 2>/dev/null || true
 # Verification-only: expose the generated whisper.pc so a harness can grep
