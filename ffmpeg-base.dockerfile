@@ -127,7 +127,6 @@ RUN echo "------------------------------------------------------" \
     libc6-dev \
     libssl-dev \
     libtool \
-    libvulkan-dev \
     libxext-dev \
     nasm \
     ninja-build \

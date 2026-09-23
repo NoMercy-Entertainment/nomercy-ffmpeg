@@ -140,23 +140,70 @@ export PATH=\"\${LLVM_MINGW_DIR}/bin:\${PATH}\"
 fi
 
 # ggml's Vulkan backend (scripts/48-whisper.sh's NM_VULKAN block) needs glslc
-# (a build-time-only shader compiler) and the Vulkan headers to satisfy
-# find_package(Vulkan). Step 1 of task-2-brief.md found both absent from
-# nomercyentertainment/ffmpeg-base:latest as pulled locally. The permanent fix
-# is in ffmpeg-base.dockerfile (glslc, libvulkan-dev, spirv-headers added to
-# the main apt-get install list) so the real CI image carries them, but that
-# image is not rebuilt for every harness iteration here -- rebuilding it costs
-# far more than 30 minutes given everything else it installs. Mirror
-# linux_setup/windows_setup below: apt-get install the same three packages
-# inside this ephemeral container instead. Gated the same way 48-whisper.sh
-# gates NM_VULKAN (everything but darwin), so this harness and the real
-# pipeline can never disagree about which platforms get Vulkan.
+# (a build-time-only shader compiler) to satisfy find_package(Vulkan), plus
+# the Vulkan headers already installed at ${PREFIX}/include by
+# scripts/45-vulkan.sh in the real pipeline. Step 1 of task-2-brief.md found
+# glslc absent from nomercyentertainment/ffmpeg-base:latest as pulled
+# locally; the permanent fix is in ffmpeg-base.dockerfile (glslc added to the
+# main apt-get install list), but that image is not rebuilt for every harness
+# iteration here -- rebuilding it costs far more than 30 minutes given
+# everything else it installs. Mirror linux_setup/windows_setup below:
+# apt-get install glslc inside this ephemeral container instead.
+#
+# The headers are a separate problem: this harness only ever runs
+# 48-whisper.sh and 60-stemsplit.sh (see this file's own header comment), so
+# ${PREFIX}/include never gets 45-vulkan.sh's Vulkan-Headers install the way
+# a real init.sh run would. An earlier version of this harness worked around
+# that by apt-get installing libvulkan-dev and spirv-headers and pointing
+# 48-whisper.sh at /usr/include instead -- code review caught that this
+# silently built ggml-vulkan against Ubuntu 24.04's older apt headers
+# (Vulkan-Headers 1.3.275) while the rest of the binary (libplacebo, ffmpeg's
+# own --enable-vulkan) uses the project-pinned newer ones from
+# ffmpeg-base.dockerfile's vulkan_headers_version, a version split that
+# 48-whisper.sh no longer allows (it now hardcodes -DVulkan_INCLUDE_DIR to
+# ${PREFIX}/include unconditionally). So this harness now does what
+# 45-vulkan.sh does for real instead: cmake-install the same
+# /build/vulkan-headers checkout the base image already carries (see
+# ffmpeg-base.dockerfile's "Download vulkan-headers" step) into ${PREFIX},
+# using the same CMAKE_COMMON_ARG the ENV-lifting loop above already
+# exported. Only the Vulkan-Headers step of 45-vulkan.sh is reproduced here,
+# not the shaderc/spirv-cross/libplacebo steps that script also runs: nothing
+# downstream of this harness (48-whisper.sh, 60-stemsplit.sh) reads those.
+#
+# Gated the same way 48-whisper.sh gates NM_VULKAN (everything but darwin and
+# freebsd -- FreeBSD's static libc dlopen() always fails, so the shim could
+# never open a real loader there; see 48-whisper.sh's own comment), so this
+# harness and the real pipeline can never disagree about which platforms get
+# Vulkan.
+# FOUND WHILE VERIFYING (code review round 2): dropping libvulkan-dev in
+# favor of ${PREFIX}/include (below) is correct and confirmed working --
+# ggml-vulkan's own configure log reports "Found Vulkan: ...
+# (found version "1.4.353")", the project-pinned version, not apt's 1.3.275.
+# But dropping spirv-headers alongside it was not: ggml-vulkan's CMakeLists
+# also does a plain `find_package(SPIRV-Headers)` as a CMake CONFIG package
+# (ggml/src/ggml-vulkan/CMakeLists.txt), a completely different Khronos
+# project (SPIR-V binary-format enums, not Vulkan API headers) that neither
+# Vulkan-Headers nor 45-vulkan.sh installs anywhere -- nothing else in this
+# repo provides SPIRV-HeadersConfig.cmake. Confirmed by removing it:
+# configure failed immediately with "Could not find a package configuration
+# file provided by SPIRV-Headers". Kept as an apt package (the same one
+# task-2-brief.md's Step 1 specified and Task 1's vulkan-shim-test.sh already
+# verified provides it) -- it is unrelated to the header-version-split
+# problem the rest of this comment is about.
 vulkan_setup=""
-if [[ ${TARGET_OS} != darwin ]]; then
+if [[ ${TARGET_OS} != darwin && ${TARGET_OS} != freebsd ]]; then
     vulkan_setup='
 apt-get update >/tmp/apt.log 2>&1 || { cat /tmp/apt.log; exit 1; }
-apt-get install -y --no-install-recommends glslc libvulkan-dev spirv-headers >>/tmp/apt.log 2>&1 \
+apt-get install -y --no-install-recommends glslc spirv-headers >>/tmp/apt.log 2>&1 \
     || { cat /tmp/apt.log; exit 1; }
+mkdir -p /build/vulkan-headers/vh-build
+cmake -GNinja -S /build/vulkan-headers -B /build/vulkan-headers/vh-build \
+    ${CMAKE_COMMON_ARG} -DBUILD_TESTING=OFF >/tmp/vulkan_headers_cmake.log 2>&1 \
+    || { cat /tmp/vulkan_headers_cmake.log; exit 1; }
+ninja -C /build/vulkan-headers/vh-build install >>/tmp/vulkan_headers_cmake.log 2>&1 \
+    || { cat /tmp/vulkan_headers_cmake.log; exit 1; }
+test -f "${PREFIX}/include/vulkan/vulkan_core.h" \
+    || { echo "vulkan-headers install did not produce ${PREFIX}/include/vulkan/vulkan_core.h"; exit 1; }
 '
 fi
 

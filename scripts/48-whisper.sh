@@ -46,28 +46,49 @@ fi
 # below only ever rebuilds the `ggml-cpu` target at different instruction
 # levels into throwaway prefixes and never touches Vulkan at all, so setting
 # these flags there instead would silently build nothing Vulkan-related.
+#
+# freebsd-x86_64 is excluded too, alongside darwin: FreeBSD's base system
+# libc is static-only and its dlopen() is a stub that always fails there (no
+# dynamic loader exists on a static libc), so vk_loader_shim.c could never
+# actually open a real Vulkan loader on this platform at runtime. Building
+# Vulkan in anyway would just cost ~59 MB of dead weight that can never do
+# anything but return the shim's own stub failures. Task 5 confirms this.
 NM_VULKAN=0
-if [[ ${TARGET_OS} != darwin ]]; then
+if [[ ${TARGET_OS} != darwin && ${TARGET_OS} != freebsd ]]; then
     NM_VULKAN=1
 fi
 
 if [[ ${NM_VULKAN} == 1 ]]; then
+    # Vulkan_INCLUDE_DIR points at this platform's own Vulkan-Headers install
+    # (scripts/45-vulkan.sh, which runs before this script on every platform
+    # that reaches here) rather than copying headers out of /usr/include.
+    # Ubuntu 24.04's apt package (libvulkan-dev, Vulkan-Headers 1.3.275) is
+    # older than the project-pinned checkout 45-vulkan.sh already installed
+    # into ${PREFIX}/include (ffmpeg-base.dockerfile's vulkan_headers_version,
+    # 1.4.x) -- the same headers libplacebo and ffmpeg's own --enable-vulkan
+    # hwaccel already compile against. Building ggml-vulkan against the older
+    # apt headers while everything else in this binary uses the newer ones is
+    # exactly the kind of split that produces a hard-to-diagnose struct-layout
+    # mismatch later, not now. This also removes the glibc-header-ordering
+    # hazard a prior version of this comment warned about: ${PREFIX}/include
+    # is this project's own isolated prefix, never mixed with /usr/include, on
+    # every platform including mingw, so there is no ordering hazard to avoid
+    # by copying anything out of it.
     nm_vk_dir=/build/vulkan-stub
-    mkdir -p ${nm_vk_dir}/include
-    # Copy only the architecture-independent Vulkan headers. Pointing
-    # Vulkan_INCLUDE_DIR at /usr/include drags glibc's stdint.h ahead of the cross
-    # toolchain's own and breaks the mingw build.
-    for d in vulkan vk_video spirv; do
-        [[ -d /usr/include/${d} ]] && cp -r /usr/include/${d} ${nm_vk_dir}/include/
-    done
+    mkdir -p ${nm_vk_dir}
     : > ${nm_vk_dir}/empty.c
-    gcc -c ${nm_vk_dir}/empty.c -o ${nm_vk_dir}/empty.o
-    ar rcs ${nm_vk_dir}/libvulkan-stub.a ${nm_vk_dir}/empty.o
+    gcc -c ${nm_vk_dir}/empty.c -o ${nm_vk_dir}/empty.o \
+        || { log "Error: vulkan stub object build failed"; exit 1; }
+    ar rcs ${nm_vk_dir}/libvulkan-stub.a ${nm_vk_dir}/empty.o \
+        || { log "Error: vulkan stub archive build failed"; exit 1; }
+
+    nm_glslc=$(command -v glslc) \
+        || { log "Error: NM_VULKAN=1 but glslc was not found on PATH"; exit 1; }
 
     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_VULKAN=ON"
-    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_INCLUDE_DIR=${nm_vk_dir}/include"
+    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_INCLUDE_DIR=${PREFIX}/include"
     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_LIBRARY=${nm_vk_dir}/libvulkan-stub.a"
-    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_GLSLC_EXECUTABLE=$(command -v glslc)"
+    WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_GLSLC_EXECUTABLE=${nm_glslc}"
     log "Vulkan backend enabled for ${TARGET_OS}-${ARCH}"
 fi
 
@@ -341,7 +362,7 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
     # something, and this is that something.
     nm_vk_shim_obj=""
     if [[ ${NM_VULKAN} == 1 ]]; then
-        ${CC:-cc} ${CFLAGS} -I${nm_vk_dir}/include -c /scripts/includes/vk_loader_shim.c \
+        ${CC:-cc} ${CFLAGS} -I${PREFIX}/include -c /scripts/includes/vk_loader_shim.c \
             -o ${nm_variant_dir}/vk_loader_shim.o 2>&1 | log -a
         if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: vulkan shim build failed"; exit 1; fi
         nm_vk_archive=$(find ${PREFIX}/lib -name 'libggml-vulkan.a' -o -name 'ggml-vulkan.a' | head -1)
@@ -389,6 +410,20 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
         log "Error: libggml-cpu-variants.a has ${nm_reg_count} prefixed ggml_backend_cpu_reg symbols, expected ${nm_index}"
         exit 1
     fi
+    # Symmetric check for the Vulkan shim: the coff-archive/MRI path above is
+    # exactly the path this task's own verification never exercises
+    # (linux-x86_64 packs via plain `ar rcs`), and the comment right above
+    # this one already warns that `ar -M` can report a failed script on
+    # stdout and still exit 0. Confirm the shim's own loader entry point
+    # actually made it into the archive, not just that packing "succeeded".
+    if [[ ${NM_VULKAN} == 1 ]]; then
+        nm_vk_shim_count=$(${NM_NM} --defined-only ${PREFIX}/lib/libggml-cpu-variants.a 2>/dev/null \
+            | grep -c " T vkGetInstanceProcAddr$")
+        if [[ ${nm_vk_shim_count} -ne 1 ]]; then
+            log "Error: libggml-cpu-variants.a has ${nm_vk_shim_count} defined vkGetInstanceProcAddr symbols (the Vulkan loader shim), expected 1"
+            exit 1
+        fi
+    fi
     rm -f ${PREFIX}/lib/libggml-cpu.a ${PREFIX}/lib/ggml-cpu.a
 else
     # NM_SKIP_VARIANTS platforms (currently only darwin) still get their
@@ -431,6 +466,36 @@ cp /scripts/includes/nm_ggml_cpu.h ${PREFIX}/include/nm_ggml_cpu.h \
 cd /build
 rm -rf /build/whisper
 
+if [[ ${TARGET_OS} == "windows" ]]; then
+    # Every rename here is guarded with -f: the CPU-variant step above already
+    # removes/replaces ggml-cpu.a (or, for NM_SKIP_VARIANTS platforms, never
+    # touches it), so an unguarded mv on a file that step already disposed of
+    # would fail. This whole block has to run before whisper.pc is written
+    # below: that file's Libs: line names these archives by their renamed,
+    # "lib"-prefixed forms (-lggml, -lggml-base, ... -lggml-vulkan), and a
+    # linker resolving -l<name> only ever looks for lib<name>.a.
+    [[ -f ${PREFIX}/lib/ggml.a ]] && mv ${PREFIX}/lib/ggml.a ${PREFIX}/lib/libggml.a
+    [[ -f ${PREFIX}/lib/ggml-base.a ]] && mv ${PREFIX}/lib/ggml-base.a ${PREFIX}/lib/libggml-base.a
+    # ggml-blas.a only exists when BLAS was enabled; windows-aarch64 skips
+    # OpenBLAS, so ggml never builds that backend.
+    if [[ -f ${PREFIX}/lib/ggml-blas.a ]]; then
+        mv ${PREFIX}/lib/ggml-blas.a ${PREFIX}/lib/libggml-blas.a
+    fi
+    [[ -f ${PREFIX}/lib/ggml-cpu.a ]] && mv ${PREFIX}/lib/ggml-cpu.a ${PREFIX}/lib/libggml-cpu.a
+    # ggml's cmake install drops the "lib" prefix on a COFF cross build for
+    # every archive it produces, ggml-vulkan included -- confirmed against
+    # real Task 1 builds, not assumed: tools/ggml-variants/vulkan-shim-test.sh
+    # cross-compiles this same whisper.cpp/ggml checkout for mingw and its
+    # libpath() helper exists specifically because "ggml's CMake install step
+    # names these archives with a lib prefix on the native (elf) build but
+    # without one when cross-compiling for Windows (coff) - verified against
+    # both actual builds, not assumed" (that script's own comment). Neither
+    # GNU ld nor ld.lld will find a bare "ggml-vulkan.a" given a "-lggml-vulkan"
+    # flag, so without this rename both windows targets would fail to link
+    # with an undefined-reference error the moment NM_VULKAN=1 reaches them.
+    [[ -f ${PREFIX}/lib/ggml-vulkan.a ]] && mv ${PREFIX}/lib/ggml-vulkan.a ${PREFIX}/lib/libggml-vulkan.a
+fi
+
 rm -rf ${PREFIX}/lib/pkgconfig/whisper.pc
 nm_cpu_lib="ggml-cpu-variants"
 [[ ${NM_SKIP_VARIANTS} == "1" ]] && nm_cpu_lib="ggml-cpu"
@@ -439,8 +504,17 @@ nm_cpu_lib="ggml-cpu-variants"
 # resolves left to right, so -lggml-vulkan MUST come before -l${nm_cpu_lib} in
 # this Libs: line, or those symbols are still undefined when ffmpeg links.
 nm_vk_lib=""
-[[ ${NM_VULKAN} == 1 ]] && nm_vk_lib="-lggml-vulkan "
-lib_flags="Libs: -L\${libdir} -lggml -lggml-base -lwhisper -lggml -lggml-base ${nm_vk_lib}-l${nm_cpu_lib}"
+nm_vk_trailer=""
+if [[ ${NM_VULKAN} == 1 ]]; then
+    nm_vk_lib="-lggml-vulkan "
+    # Cheap insurance: -lggml-vulkan sits after both -lggml-base occurrences
+    # already on this line, so any ggml-base symbol that only ggml-vulkan (or
+    # the shim riding in ggml-cpu-variants right after it) needs would
+    # otherwise depend on a linker willing to look backwards, which is not
+    # guaranteed across every platform this line is used on. One more pass.
+    nm_vk_trailer=" -lggml-base"
+fi
+lib_flags="Libs: -L\${libdir} -lggml -lggml-base -lwhisper -lggml -lggml-base ${nm_vk_lib}-l${nm_cpu_lib}${nm_vk_trailer}"
 # NM_SKIP_VARIANTS platforms link the stock -lggml-cpu above for the real
 # backend, plus this second, differently-built libggml-cpu-variants.a (see
 # the fixed-mode branch above) purely for its nm_ggml_cpu_variant_name()
@@ -483,21 +557,6 @@ lib_private_flags="Libs.private: -lstdc++"
     echo "Requires: "
     echo "Requires.private: "
 } >${PREFIX}/lib/pkgconfig/whisper.pc
-
-if [[ ${TARGET_OS} == "windows" ]]; then
-    # Every rename here is guarded with -f: the CPU-variant step above already
-    # removes/replaces ggml-cpu.a (or, for NM_SKIP_VARIANTS platforms, never
-    # touches it), so an unguarded mv on a file that step already disposed of
-    # would fail.
-    [[ -f ${PREFIX}/lib/ggml.a ]] && mv ${PREFIX}/lib/ggml.a ${PREFIX}/lib/libggml.a
-    [[ -f ${PREFIX}/lib/ggml-base.a ]] && mv ${PREFIX}/lib/ggml-base.a ${PREFIX}/lib/libggml-base.a
-    # ggml-blas.a only exists when BLAS was enabled; windows-aarch64 skips
-    # OpenBLAS, so ggml never builds that backend.
-    if [[ -f ${PREFIX}/lib/ggml-blas.a ]]; then
-        mv ${PREFIX}/lib/ggml-blas.a ${PREFIX}/lib/libggml-blas.a
-    fi
-    [[ -f ${PREFIX}/lib/ggml-cpu.a ]] && mv ${PREFIX}/lib/ggml-cpu.a ${PREFIX}/lib/libggml-cpu.a
-fi
 
 # Replace the upstream whisper filter with our patched version that exposes
 # the auto-detected language as frame metadata (lavfi.whisper.language +
