@@ -104,9 +104,20 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     CXXFLAGS=${OLD_CXXFLAGS}
 else
     if [[ ${TARGET_OS} == "darwin" ]]; then
+        # Fixed instruction level, not runtime dispatch: Apple controls the
+        # hardware population, so the floor is known exactly. The oldest Mac
+        # that runs our 10.15 deployment target is Ivy Bridge (AVX + F16C, no
+        # AVX2/FMA); every Apple Silicon chip has dotprod and fp16.
+        # NM_GGML_CPU_FIXED_NAME is picked up below to build the
+        # nm_ggml_cpu_variant_name() shim in NM_GGML_CPU_FIXED mode.
         WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_METAL=OFF -DGGML_ACCELERATE=OFF"
         if [[ ${ARCH} == "x86_64" ]]; then
+            WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_F16C=ON -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_BMI2=OFF"
             WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15.0"
+            NM_GGML_CPU_FIXED_NAME="ivybridge"
+        else
+            WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_CPU_ARM_ARCH=armv8.4-a+dotprod+fp16"
+            NM_GGML_CPU_FIXED_NAME="armv8.4+dotprod+fp16"
         fi
     elif [[ ${TARGET_OS} == "freebsd" ]]; then
         # FreeBSD base ships libomp.so but no libomp.a, so clang's -fopenmp
@@ -275,6 +286,32 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
     ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o ${nm_objects} \
         || { log "Error: archiving libggml-cpu-variants.a failed"; exit 1; }
     rm -f ${PREFIX}/lib/libggml-cpu.a ${PREFIX}/lib/ggml-cpu.a
+else
+    # NM_SKIP_VARIANTS platforms (currently only darwin) still get their
+    # filters calling nm_ggml_cpu_variant_name() unconditionally (Task 4),
+    # but there is no dispatcher build here to define it, and the stock
+    # libggml-cpu.a we keep below doesn't either. Compile
+    # ggml_cpu_dispatch.c with -DNM_GGML_CPU_FIXED set: it then defines only
+    # that one symbol (returning NM_GGML_CPU_FIXED_NAME) and none of the
+    # forwarding functions, so the resulting object coexists with the stock
+    # archive instead of colliding with it. Packed into its own
+    # libggml-cpu-variants.a so whisper.pc can name the same archive
+    # filename in both modes -- only its contents differ.
+    : "${NM_GGML_CPU_FIXED_NAME:?NM_SKIP_VARIANTS=1 but NM_GGML_CPU_FIXED_NAME was not set}"
+
+    nm_variant_dir=/build/whisper-variants
+    rm -rf ${nm_variant_dir} && mkdir -p ${nm_variant_dir}
+
+    ${CC:-cc} ${CFLAGS} "-DNM_GGML_CPU_FIXED=\"${NM_GGML_CPU_FIXED_NAME}\"" \
+        -I/scripts/includes -I${PREFIX}/include \
+        -c /scripts/includes/ggml_cpu_dispatch.c -o ${nm_variant_dir}/dispatch.o 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: fixed-mode dispatcher build failed"; exit 1; fi
+
+    rm -f ${PREFIX}/lib/libggml-cpu-variants.a
+    ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o \
+        || { log "Error: archiving fixed-mode libggml-cpu-variants.a failed"; exit 1; }
+
+    log "Built fixed ggml CPU level '${NM_GGML_CPU_FIXED_NAME}' (no dispatch)"
 fi
 
 # Installed unconditionally, not just when the variant loop ran above: Task 4
@@ -294,6 +331,11 @@ rm -rf ${PREFIX}/lib/pkgconfig/whisper.pc
 nm_cpu_lib="ggml-cpu-variants"
 [[ ${NM_SKIP_VARIANTS} == "1" ]] && nm_cpu_lib="ggml-cpu"
 lib_flags="Libs: -L\${libdir} -lggml -lggml-base -lwhisper -lggml -lggml-base -l${nm_cpu_lib}"
+# NM_SKIP_VARIANTS platforms link the stock -lggml-cpu above for the real
+# backend, plus this second, differently-built libggml-cpu-variants.a (see
+# the fixed-mode branch above) purely for its nm_ggml_cpu_variant_name()
+# definition -- the filters call it unconditionally regardless of platform.
+[[ ${NM_SKIP_VARIANTS} == "1" ]] && lib_flags="${lib_flags} -lggml-cpu-variants"
 lib_private_flags="Libs.private: -lstdc++"
 {
     echo "prefix=${PREFIX}"
