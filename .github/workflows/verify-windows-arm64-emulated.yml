@@ -1,0 +1,136 @@
+name: Verify Windows ARM64 (emulated)
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing FFmpeg release or RC tag'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-arm64-tcg-${{ github.event.workflow_run.head_sha || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    # The Mac sets this variable only after registration and an online check.
+    # Fork builds never reach the persistent Windows runner.
+    if: >-
+      vars.FFMPEG_TCG_RUNNER_ENABLED == 'true' &&
+      ((github.event_name == 'workflow_dispatch' &&
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ready: ${{ steps.release.outputs.ready }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - name: Resolve the release produced by this build
+        id: release
+        uses: actions/github-script@v7
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const repo = context.repo;
+            const validTag = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+            let release;
+            if (context.eventName === 'workflow_dispatch') {
+              const tag = process.env.INPUT_TAG;
+              if (!validTag.test(tag)) throw new Error('Invalid release tag');
+              release = (await github.rest.repos.getReleaseByTag({...repo, tag})).data;
+            } else {
+              const run = context.payload.workflow_run;
+              if (run.head_repository.full_name !== `${repo.owner}/${repo.repo}`) {
+                throw new Error('Refusing a fork build');
+              }
+              const releases = (await github.rest.repos.listReleases({...repo, per_page: 30})).data;
+              for (const candidate of releases.filter(r => !r.draft && validTag.test(r.tag_name))) {
+                if (candidate.target_commitish === run.head_sha) {
+                  release = candidate;
+                  break;
+                }
+                // Published releases may record a branch rather than a SHA.
+                const tagged = (await github.rest.repos.getCommit({...repo, ref: candidate.tag_name})).data;
+                if (tagged.sha === run.head_sha) {
+                  release = candidate;
+                  break;
+                }
+              }
+            }
+            if (!release) {
+              core.notice('No release matches this completed build; nothing to test.');
+              core.setOutput('ready', 'false');
+              return;
+            }
+            const manifestAsset = release.assets.find(a => a.name === 'manifest.json');
+            if (!manifestAsset) throw new Error('Release has no manifest');
+            const response = await fetch(manifestAsset.browser_download_url);
+            if (!response.ok) throw new Error(`Manifest download failed: ${response.status}`);
+            const manifest = await response.json();
+            if (manifest.repo !== `${repo.owner}/${repo.repo}` || manifest.tag !== release.tag_name ||
+                !/^[a-fA-F0-9]{40}$/.test(manifest.commit_sha)) {
+              throw new Error('Invalid manifest provenance');
+            }
+            const assets = manifest.assets.filter(a => /^ffmpeg-[A-Za-z0-9._-]+-windows-aarch64-[A-Za-z0-9._-]+\.zip$/.test(a.name));
+            if (assets.length !== 1 || !/^[a-fA-F0-9]{64}$/.test(assets[0].sha256)) {
+              throw new Error('Missing or ambiguous Windows ARM64 archive');
+            }
+            core.setOutput('tag', release.tag_name);
+            core.setOutput('commit', manifest.commit_sha);
+            core.setOutput('ready', 'true');
+
+  verify:
+    needs: resolve
+    if: needs.resolve.outputs.ready == 'true'
+    runs-on: [self-hosted, Windows, ARM64, ffmpeg-emulated, windows-aarch64-tcg]
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: C:\Tools\PowerShell-7.6.6-arm64\pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File {0}
+    steps:
+      - name: Run the existing codec suite in emulated Windows
+        id: test
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          EXPECTED_COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: |
+          $script = 'C:\ffmpeg-runner-tools\Invoke-ReleaseTest.ps1'
+          if (-not (Test-Path -LiteralPath $script)) { throw 'Install/update the Windows ARM64 runner package first.' }
+          & $script -Tag $env:RELEASE_TAG -ExpectedCommit $env:EXPECTED_COMMIT
+          exit $LASTEXITCODE
+
+      - name: Upload emulation reports
+        if: always() && steps.test.outputs.results-root != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulated-windows-aarch64-${{ github.run_id }}
+          path: |
+            ${{ steps.test.outputs.results-root }}/manifest.json
+            ${{ steps.test.outputs.results-root }}/release.json
+            ${{ steps.test.outputs.results-root }}/results/*/suite.log
+            ${{ steps.test.outputs.results-root }}/results/*/suite.json
+            ${{ steps.test.outputs.results-root }}/results/*/summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Explain coverage
+        if: always()
+        run: |
+          @'
+          ## Windows ARM64 under QEMU TCG
+          Functional/codec coverage in an emulated guest. This is not a native-hardware verdict.
+          GPU encoder skips are not passes. Hardware decoding is not tested by this suite.
+          No release hardware-checklist boxes are changed by this workflow.
+          '@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
