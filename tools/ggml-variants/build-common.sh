@@ -115,6 +115,97 @@ apt-get install -y --no-install-recommends mingw-w64 mingw-w64-tools mingw-w64-x
 '
 fi
 
+# freebsd-x86_64: same story as windows above, but the missing piece is a
+# whole cross-toolchain-by-hand -- apt has no cross-gcc for FreeBSD, so
+# ffmpeg-freebsd-x86_64.dockerfile builds ${CROSS_PREFIX}* as clang/lld
+# wrapper scripts against a downloaded FreeBSD base.txz sysroot (its own RUN
+# block, not an ENV line, so the lifting loop above cannot see it either).
+# Mirrors that RUN block exactly, using the SYSROOT/CROSS_PREFIX/
+# FREEBSD_VERSION values the loop already lifted. Static shim libs
+# (libstdc++.a/libdl.a/libgcc_s.a/libatomic.a) are recreated too: FreeBSD has
+# none of these as real archives, and the scripts' generated .pc files
+# reference them unconditionally.
+freebsd_setup=""
+if [[ ${TARGET_OS} == freebsd ]]; then
+    freebsd_setup='
+apt-get update >/tmp/apt.log 2>&1 || { cat /tmp/apt.log; exit 1; }
+apt-get install -y --no-install-recommends clang lld llvm >>/tmp/apt.log 2>&1 \
+    || { cat /tmp/apt.log; exit 1; }
+mkdir -p "${SYSROOT}"
+(wget -O /tmp/base.txz "https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz" >/tmp/wget.log 2>&1 \
+    || wget -O /tmp/base.txz "https://archive.freebsd.org/old-releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz" >>/tmp/wget.log 2>&1) \
+    || { cat /tmp/wget.log; exit 1; }
+tar -xJf /tmp/base.txz -C "${SYSROOT}" ./lib ./usr/lib ./usr/include ./usr/libdata
+rm -f /tmp/base.txz
+printf "#!/bin/sh\nexec clang --target=%s --sysroot=%s -fuse-ld=lld -Qunused-arguments \"\$@\"\n" "${CROSS_PREFIX%-}" "${SYSROOT}" > /usr/local/bin/${CROSS_PREFIX}gcc
+printf "#!/bin/sh\nexec clang++ --target=%s --sysroot=%s -stdlib=libc++ -fuse-ld=lld -Qunused-arguments \"\$@\"\n" "${CROSS_PREFIX%-}" "${SYSROOT}" > /usr/local/bin/${CROSS_PREFIX}g++
+chmod +x /usr/local/bin/${CROSS_PREFIX}gcc /usr/local/bin/${CROSS_PREFIX}g++
+ln -sf /usr/bin/ld.lld /usr/local/bin/${CROSS_PREFIX}ld
+ln -sf /usr/bin/llvm-ar /usr/local/bin/${CROSS_PREFIX}ar
+ln -sf /usr/bin/llvm-ar /usr/local/bin/${CROSS_PREFIX}gcc-ar
+ln -sf /usr/bin/llvm-ranlib /usr/local/bin/${CROSS_PREFIX}ranlib
+ln -sf /usr/bin/llvm-ranlib /usr/local/bin/${CROSS_PREFIX}gcc-ranlib
+ln -sf /usr/bin/llvm-nm /usr/local/bin/${CROSS_PREFIX}nm
+ln -sf /usr/bin/llvm-nm /usr/local/bin/${CROSS_PREFIX}gcc-nm
+ln -sf /usr/bin/llvm-strip /usr/local/bin/${CROSS_PREFIX}strip
+ln -sf /usr/bin/llvm-objdump /usr/local/bin/${CROSS_PREFIX}objdump
+ln -sf /usr/bin/llvm-strings /usr/local/bin/${CROSS_PREFIX}strings
+ln -sf /usr/bin/llvm-size /usr/local/bin/${CROSS_PREFIX}size
+ln -sf /usr/bin/llvm-readelf /usr/local/bin/${CROSS_PREFIX}readelf
+ln -sf /usr/bin/llvm-objcopy /usr/local/bin/${CROSS_PREFIX}objcopy
+printf "INPUT(-lc++ -lcxxrt)\n" > "${SYSROOT}/usr/lib/libstdc++.a"
+llvm-ar rc "${SYSROOT}/usr/lib/libdl.a"
+printf "INPUT(-lgcc -lgcc_eh)\n" > "${SYSROOT}/usr/lib/libgcc_s.a"
+llvm-ar rc "${SYSROOT}/usr/lib/libatomic.a"
+${CROSS_PREFIX}gcc --version >/tmp/cc_version.log 2>&1 || { cat /tmp/cc_version.log; exit 1; }
+'
+fi
+
+# darwin-x86_64/arm64: heaviest of the three, per the task brief -- there is
+# no apt cross-toolchain for Darwin either, and unlike freebsd's clang+lld
+# shim the real dockerfile builds a whole osxcross toolchain (cctools-port,
+# ld64, libtapi) against a downloaded macOS SDK. Mirrors
+# ffmpeg-darwin-*.dockerfile's RUN blocks that produce it, minus the Rust/
+# cargo-c/apple-codesign install (those exist for OTHER dependencies' builds
+# and for ad-hoc signing the final ffmpeg binary; nothing in
+# 48-whisper.sh/60-stemsplit.sh needs Rust or a signed binary). Slow (SDK
+# download + a real cctools-port compile) but this is the same tradeoff the
+# task brief calls out: standing up osxcross is the only way to reach
+# 48-whisper.sh here without going through the full, unrelated
+# multi-dependency init.sh pipeline (see the freebsd note above -- the same
+# pipeline was observed failing on an unrelated libbluray/meson bug before
+# it ever reaches whisper).
+darwin_setup=""
+if [[ ${TARGET_OS} == darwin ]]; then
+    darwin_setup='
+apt-get update >/tmp/apt.log 2>&1 || { cat /tmp/apt.log; exit 1; }
+apt-get install -y --no-install-recommends clang patch liblzma-dev libxml2-dev xz-utils bzip2 cpio zlib1g-dev libgit2-dev >>/tmp/apt.log 2>&1 \
+    || { cat /tmp/apt.log; exit 1; }
+git clone https://github.com/tpoechtrager/osxcross.git /build/osxcross >/tmp/osxcross_clone.log 2>&1 \
+    || { cat /tmp/osxcross_clone.log; exit 1; }
+cd /build/osxcross
+wget -nc "https://github.com/joseluisq/macosx-sdks/releases/download/${SDK_VERSION}/MacOSX${SDK_VERSION}.sdk.tar.xz" >/tmp/sdk_wget.log 2>&1 \
+    || { cat /tmp/sdk_wget.log; exit 1; }
+mv "MacOSX${SDK_VERSION}.sdk.tar.xz" "tarballs/MacOSX${SDK_VERSION}.sdk.tar.xz"
+UNATTENDED=1 SDK_VERSION="${SDK_VERSION}" OSX_VERSION_MIN="${MACOSX_DEPLOYMENT_TARGET%.0}" MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}" TARGET_DIR="${PREFIX}/osxcross" ./build.sh >/tmp/osxcross_build.log 2>&1 \
+    || { tail -c 20000 /tmp/osxcross_build.log; exit 1; }
+echo "MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}" > "${PREFIX}/osxcross/bin/cc_target"
+cp "${PREFIX}/osxcross/bin/cc_target" "${SDK_PATH}/usr/bin/cc_target"
+cd /build
+ln -sf "${PREFIX}/osxcross/bin/${CROSS_PREFIX}install_name_tool" "${SDK_PATH}/usr/bin/${CROSS_PREFIX}install_name_tool"
+chmod +x "${SDK_PATH}/usr/bin/${CROSS_PREFIX}install_name_tool"
+ln -sf "${PREFIX}/osxcross/bin/${CROSS_PREFIX}otool" "${SDK_PATH}/usr/bin/${CROSS_PREFIX}otool"
+chmod +x "${SDK_PATH}/usr/bin/${CROSS_PREFIX}otool"
+ln -sf /build/osxcross/build/apple-libtapi/build/tools/llvm-objdump "${SDK_PATH}/usr/bin/${CROSS_PREFIX}objdump"
+chmod +x "${SDK_PATH}/usr/bin/${CROSS_PREFIX}objdump"
+ln -sf /build/osxcross/build/apple-libtapi/build/tools/llvm-objcopy "${SDK_PATH}/usr/bin/${CROSS_PREFIX}objcopy"
+chmod +x "${SDK_PATH}/usr/bin/${CROSS_PREFIX}objcopy"
+mkdir -p /System/Library/Frameworks
+ln -sf "${OSX_FRAMEWORKS}/System/Library/Frameworks" /System/Library/Frameworks
+${CROSS_PREFIX}clang --version >/tmp/cc_version.log 2>&1 || { cat /tmp/cc_version.log; exit 1; }
+'
+fi
+
 mkdir -p "${WORK}"
 MSYS_NO_PATHCONV=1 docker run --rm \
     -v "$(cygpath -w "${REPO}/scripts")":/scripts:ro \
@@ -122,11 +213,18 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     "${seed_mount[@]}" \
     "${env_args[@]}" -e TARGET_OS="${TARGET_OS}" -e ARCH="${ARCH}" \
     -e NM_FFMPEG_TARGET_OS="${ffmpeg_target_os}" -e NM_EXTRA_LIBS="${extra_libs}" \
-    -e NM_WINDOWS_SETUP="${windows_setup}" \
+    -e NM_WINDOWS_SETUP="${windows_setup}" -e NM_FREEBSD_SETUP="${freebsd_setup}" \
+    -e NM_DARWIN_SETUP="${darwin_setup}" \
     "${IMAGE}" bash -c '
 set -eu
 eval "${NM_WINDOWS_SETUP}"
-export PATH="${PREFIX}/bin:${PATH}"
+eval "${NM_FREEBSD_SETUP}"
+eval "${NM_DARWIN_SETUP}"
+if [[ ${TARGET_OS} == darwin ]]; then
+    export PATH="${PREFIX}/bin:${SDK_PATH}/usr/bin:${PREFIX}/osxcross/bin:${PATH}"
+else
+    export PATH="${PREFIX}/bin:${PATH}"
+fi
 mkdir -p /build "${PREFIX}/lib/pkgconfig" "${PREFIX}/include" "${PREFIX}/bin"
 if [[ -d /seed ]]; then
     cp -a /seed/. "${PREFIX}/"
@@ -152,12 +250,44 @@ cd /build/ffmpeg
 # ("stay fully static") while still reporting PASS on every other check,
 # since nothing else in the plan verifies static linking. Mirrored here from
 # the production dockerfiles.
+#
+# DEVIATION found while verifying Task 6 (freebsd/darwin): every real
+# ffmpeg-*.dockerfile passes --pkg-config=pkg-config explicitly; this
+# harness invocation did not. Without it, ffmpeg configure defaults
+# pkg_config to "${cross_prefix}pkg-config" (configure:5033) -- on
+# linux-x86_64/windows that name happens to already exist as a real
+# apt-installed wrapper (x86_64-linux-gnu-pkg-config,
+# x86_64-w64-mingw32-pkg-config), so Task 3/5 never noticed the gap, but
+# "x86_64-unknown-freebsd14-pkg-config" and the darwin CROSS_PREFIX are
+# invented by this projects own toolchain setup and never going to
+# exist. configure then silently sets pkg_config=false
+# (configure:5075-5077) and every subsequent check_pkg_config call fails
+# with "not found using pkg-config", including require_pkg_config whisper
+# -- which is exactly the failure this surfaced. Matches production now.
+#
+# PITFALL hit while verifying Task 6, recorded so it does not recur: a
+# stray apostrophe in a comment ANYWHERE inside this single-quoted
+# bash -c argument (the big docker command above) silently closes the
+# quoted string early. Everything from that apostrophe to the
+# next literal single-quote character in the file then stops being the
+# container script and instead gets parsed as code belonging to this
+# HOST script -- so a dollar-brace variable reference further down that
+# was meant to expand inside the container instead expands against the
+# HOST shell environment, where it is usually unset. That surfaced here
+# as a baffling
+# "NM_FFMPEG_TARGET_OS: unbound variable" error attributed to this
+# configure line, even though the variable was correctly set inside the
+# container the whole time -- the expansion was simply happening in the
+# wrong shell. `bash -n` on this file does not catch it by itself unless
+# the quote count is actually unbalanced (it is not always). If this
+# script ever misbehaves in a way that does not make sense given what is
+# printed right before the failure, check for a new apostrophe first.
 PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig ./configure --disable-everything --disable-autodetect \
     --disable-doc --disable-ffplay --disable-ffprobe --enable-whisper --enable-swresample \
     --enable-filter=stemsplit,whisper,aresample,aformat,anull,ametadata \
     --enable-demuxer=mp3,wav --enable-parser=mpegaudio --enable-decoder=mp3,mp3float,pcm_s16le \
     --enable-encoder=pcm_s16le --enable-muxer=wav,null --enable-protocol=file,pipe \
-    --enable-runtime-cpudetect --pkg-config-flags=--static --enable-cross-compile \
+    --enable-runtime-cpudetect --pkg-config=pkg-config --pkg-config-flags=--static --enable-cross-compile \
     --cross-prefix=${CROSS_PREFIX:-} --arch=${ARCH} --target-os=${NM_FFMPEG_TARGET_OS} \
     --extra-cflags="-static -static-libgcc -static-libstdc++" \
     --extra-ldflags="-static -static-libgcc -static-libstdc++" \
