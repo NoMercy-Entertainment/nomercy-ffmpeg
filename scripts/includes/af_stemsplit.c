@@ -190,6 +190,7 @@ typedef struct StemSplitContext {
     int      nb_threads;
     int      ggml_threads;   /* resolved once, on the first inference */
     int      use_gpu;        /* option: allow a GPU backend at all */
+    int      gpu_device;     /* option: which GPU, counted as whisper counts */
     /* Whether a GPU is what actually ended up running this filter. Separate
      * from use_gpu because the answer can be "no" for three different reasons
      * -- no device, a software device, or a graph this device cannot run --
@@ -928,7 +929,11 @@ static int ss_model_load(AVFilterContext *ctx)
      * instruction-set variant ggml_cpu_dispatch.c selected for this machine.
      * The choice can still be revoked later, in ss_graph_build(), if the
      * device turns out not to support every op this network needs. */
-    s->backend = nm_ggml_backend_init(s->use_gpu);
+    if (s->use_gpu && s->gpu_device >= nm_ggml_gpu_count())
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: gpu_device=%d but this machine has %d GPU device(s); "
+               "running on the CPU.\n", s->gpu_device, nm_ggml_gpu_count());
+    s->backend = nm_ggml_backend_init(s->use_gpu, s->gpu_device);
     if (!s->backend) {
         av_log(ctx, AV_LOG_ERROR,
                "Could not initialize a ggml backend.\n");
@@ -946,8 +951,9 @@ static int ss_model_load(AVFilterContext *ctx)
     av_log(ctx, AV_LOG_INFO, "stemsplit: ggml cpu variant '%s'.\n",
            nm_ggml_cpu_variant_name());
     av_log(ctx, AV_LOG_INFO, "stemsplit: ggml backend '%s' (%s).\n",
-           s->gpu_active ? nm_ggml_backend_name() : "cpu",
-           s->gpu_active ? nm_ggml_backend_device() : nm_ggml_cpu_variant_name());
+           s->gpu_active ? nm_ggml_backend_name(s->gpu_device) : "cpu",
+           s->gpu_active ? nm_ggml_backend_device(s->gpu_device)
+                         : nm_ggml_cpu_variant_name());
 
     ss_join_instruments(s, avail, sizeof(avail));
     av_log(ctx, AV_LOG_INFO,
@@ -1487,7 +1493,7 @@ static int ss_weights_to_backend(AVFilterContext *ctx)
     if (!s->weights_buf) {
         av_log(ctx, AV_LOG_WARNING,
                "stemsplit: could not allocate model weights on '%s'.\n",
-               nm_ggml_backend_device());
+               nm_ggml_backend_device(s->gpu_device));
         ggml_free(s->weights_ctx);
         s->weights_ctx = NULL;
         return AVERROR(ENOMEM);
@@ -1508,7 +1514,7 @@ static int ss_weights_to_backend(AVFilterContext *ctx)
 
     av_log(ctx, AV_LOG_VERBOSE,
            "stemsplit: %d model tensors uploaded to '%s'.\n",
-           n, nm_ggml_backend_device());
+           n, nm_ggml_backend_device(s->gpu_device));
 
     return 0;
 }
@@ -1626,7 +1632,7 @@ static int ss_graph_build(AVFilterContext *ctx)
         if (bad) {
             av_log(ctx, AV_LOG_WARNING,
                    "stemsplit: '%s' cannot run '%s' (%s); using the CPU "
-                   "backend instead.\n", nm_ggml_backend_device(),
+                   "backend instead.\n", nm_ggml_backend_device(s->gpu_device),
                    ggml_op_name(bad->op), ggml_get_name(bad));
             ss_graph_free(s);
             ss_weights_release(s);
@@ -2610,7 +2616,7 @@ static int ss_push_outputs(AVFilterContext *ctx, AVFrame **out)
         av_dict_set(&frame->metadata, "lavfi.stemsplit.cpu_variant",
                     nm_ggml_cpu_variant_name(), 0);
         av_dict_set(&frame->metadata, "lavfi.stemsplit.backend",
-                    s->gpu_active ? nm_ggml_backend_name() : "cpu", 0);
+                    s->gpu_active ? nm_ggml_backend_name(s->gpu_device) : "cpu", 0);
         ret = ff_filter_frame(ctx->outputs[j], frame);
         if (ret < 0)
             return ret;
@@ -3336,6 +3342,7 @@ static const AVOption stemsplit_options[] = {
      * turn both filters back to the CPU the same way. use_gpu=0 is the hard
      * override; everything else about the choice is automatic. */
     { "use_gpu", "use a GPU backend when one is available", OFFSET(use_gpu), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, FLAGS },
+    { "gpu_device", "which GPU to use, counted over the GPU devices this machine reports", OFFSET(gpu_device), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "dump", "Internal: directory to dump intermediate tensors to for parity testing; empty disables", OFFSET(dump_dir), AV_OPT_TYPE_STRING, { .str = "" }, .flags = FLAGS },
     { "debug_input", "Internal: raw [C][T][F] float32 spectrogram to inject as the "
                      "network input, bypassing the STFT",

@@ -4,7 +4,7 @@
  *
  * Three modes:
  *   (no argument)      the registry/matmul probe this file started as.
- *   select [use_gpu]   exercise the PRODUCTION selector, nm_ggml_backend_init(),
+ *   select [ug] [dev]  exercise the PRODUCTION selector, nm_ggml_backend_init(),
  *                      so the filters and this probe share one code path and a
  *                      machine that crashes here would have crashed FFmpeg.
  *   whisper-init [ug]  reproduce af_whisper.c's init() ORDERING, which is a
@@ -58,7 +58,7 @@ static float *run_on(ggml_backend_t be, const char *label, float *a_src, float *
  * call, so this is the thing that has to be right. Reporting is deliberately
  * done the same way the filters do it - the request AND'ed with what is
  * available - so a "cpu" here means a "cpu" there. */
-static int mode_select(int use_gpu)
+static int mode_select(int use_gpu, int gpu_device)
 {
     ggml_backend_t be;
     int usable;
@@ -83,15 +83,20 @@ static int mode_select(int use_gpu)
         printf("vk_driver_files=%s\n", drv && *drv ? drv : "(unset)");
     }
 
-    be = nm_ggml_backend_init(use_gpu);
+    be = nm_ggml_backend_init(use_gpu, gpu_device);
     if (!be) {
         printf("FAIL: no backend at all\n");
         return 1;
     }
 
     printf("requested_gpu=%d\n", use_gpu);
-    printf("selected_backend=%s\n", (use_gpu && usable) ? nm_ggml_backend_name() : "cpu");
-    printf("selected_device=%s\n", (use_gpu && usable) ? nm_ggml_backend_device()
+    printf("gpu_count=%d\n", nm_ggml_gpu_count());
+    printf("gpu_device=%d\n", gpu_device);
+    /* Indexed, so that asking for a device this machine does not have reports
+     * the CPU rather than naming device 0 - which is what it used to do, and
+     * would have been believed. */
+    printf("selected_backend=%s\n", (use_gpu && usable) ? nm_ggml_backend_name(gpu_device) : "cpu");
+    printf("selected_device=%s\n", (use_gpu && usable) ? nm_ggml_backend_device(gpu_device)
                                                        : nm_ggml_cpu_variant_name());
     printf("is_cpu=%d\n", ggml_backend_is_cpu(be) ? 1 : 0);
 
@@ -197,7 +202,7 @@ static int mode_whisper_init(int use_gpu)
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "select"))
-        return mode_select(argc > 2 ? atoi(argv[2]) : 1);
+        return mode_select(argc > 2 ? atoi(argv[2]) : 1, argc > 3 ? atoi(argv[3]) : 0);
     if (argc > 1 && !strcmp(argv[1], "whisper-init"))
         return mode_whisper_init(argc > 2 ? atoi(argv[2]) : 1);
     return mode_registry();

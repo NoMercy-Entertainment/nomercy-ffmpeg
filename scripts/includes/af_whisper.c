@@ -129,6 +129,17 @@ static int init(AVFilterContext *ctx)
 
     wctx->gpu_active = wctx->use_gpu && gpu_usable;
 
+    // An index past the last GPU is not an error: whisper.cpp counts GPU/IGPU
+    // devices the same way and simply falls back to the CPU. Catching it here
+    // means the log and the metadata say "cpu" instead of naming a device that
+    // is not the one anything ran on.
+    if (wctx->gpu_active && wctx->gpu_device >= nm_ggml_gpu_count()) {
+        av_log(ctx, AV_LOG_WARNING,
+               "whisper: gpu_device=%d but this machine has %d GPU device(s); "
+               "running on the CPU.\n", wctx->gpu_device, nm_ggml_gpu_count());
+        wctx->gpu_active = 0;
+    }
+
     ff_thread_once(&init_static_once, ggml_backend_load_all);
 
     // Only ever non-NULL when the guard had to do something a user would want
@@ -186,8 +197,9 @@ static int init(AVFilterContext *ctx)
     av_log(ctx, AV_LOG_INFO, "whisper: ggml cpu variant '%s'.\n",
            nm_ggml_cpu_variant_name());
     av_log(ctx, AV_LOG_INFO, "whisper: ggml backend '%s' (%s).\n",
-           wctx->gpu_active ? nm_ggml_backend_name() : "cpu",
-           wctx->gpu_active ? nm_ggml_backend_device() : nm_ggml_cpu_variant_name());
+           wctx->gpu_active ? nm_ggml_backend_name(wctx->gpu_device) : "cpu",
+           wctx->gpu_active ? nm_ggml_backend_device(wctx->gpu_device)
+                            : nm_ggml_cpu_variant_name());
 
     // Init buffer
     wctx->audio_buffer_queue_size = av_rescale(wctx->queue, WHISPER_SAMPLE_RATE, AV_TIME_BASE);
@@ -438,7 +450,7 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
         // gpu_active rather than use_gpu: this reports what ran, not what was
         // asked for.
         av_dict_set(metadata, "lavfi.whisper.backend",
-                    wctx->gpu_active ? nm_ggml_backend_name() : "cpu", 0);
+                    wctx->gpu_active ? nm_ggml_backend_name(wctx->gpu_device) : "cpu", 0);
         if (wctx->detected_language) {
             av_dict_set(metadata, "lavfi.whisper.language", wctx->detected_language, 0);
             char *confidence_text = av_asprintf("%f", wctx->language_confidence);

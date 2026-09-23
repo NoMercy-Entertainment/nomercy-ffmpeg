@@ -395,23 +395,34 @@ static int nm_device_is_software(ggml_backend_dev_t dev)
 #define NM_VK_CRASHED   3   /* died or hung inside Vulkan: dangerous   */
 #define NM_VK_UNKNOWN   4   /* could not be tested: change nothing     */
 
+/* At most this many GPU/IGPU devices are tracked by index. Machines with more
+ * than sixteen are not a case this project has; the seventeenth simply reports
+ * as "no GPU at that index", which is the same honest answer an out-of-range
+ * gpu_device already gets. */
+#define NM_MAX_GPUS 16
+
 /* Enumerate, and (when `verify` is set) open the first usable device. This is
  * the work that can crash, which is exactly why it is also what the child
  * process runs: the check and the thing being checked are the same code.
- * `out` receives the chosen device; the child passes NULL.
+ * `out`/`out_n` receive the GPU/IGPU devices IN ENUMERATION ORDER, which is
+ * whisper.cpp's own gpu_device ordering; the child passes NULL for both.
  *
  * `verify` exists because opening a Vulkan device is the expensive part of all
  * this (ggml_vk_init builds pipelines). The child always verifies - that is
  * its whole job. The parent skips it when a child already proved this exact
- * configuration opens, which removes one of the three device opens a GPU run
- * used to pay for. */
-static int nm_vk_scan(ggml_backend_dev_t *out, int verify)
+ * configuration opens. Only the first device is opened: the safety property
+ * this whole guard is about (no software rasteriser anywhere in the list) is
+ * index-independent, and opening every device on a multi-GPU box to prove a
+ * point would cost half a second each. An index whose device turns out not to
+ * open still falls back to the CPU, in nm_ggml_backend_init(). */
+static int nm_vk_scan(ggml_backend_dev_t *out, int *out_n, int verify)
 {
     ggml_backend_dev_t first = NULL;
+    int found = 0;
     size_t i, n;
 
-    if (out)
-        *out = NULL;
+    if (out_n)
+        *out_n = 0;
 
     n = ggml_backend_dev_count();
     for (i = 0; i < n; i++) {
@@ -454,13 +465,23 @@ static int nm_vk_scan(ggml_backend_dev_t *out, int verify)
                 if (probe) {
                     ggml_backend_free(probe);
                     first = dev;
+                } else {
+                    /* Device 0 does not open. Nothing here is usable, because
+                     * a caller asking for index 1 would be counting from a
+                     * list whose index 0 we just rejected. */
+                    return NM_VK_NO_GPU;
                 }
             }
         }
+
+        if (out && found < NM_MAX_GPUS)
+            out[found] = dev;
+        if (found < NM_MAX_GPUS)
+            found++;
     }
 
-    if (out)
-        *out = first;
+    if (out_n)
+        *out_n = found;
     return first ? NM_VK_OK_GPU : NM_VK_NO_GPU;
 }
 
@@ -616,7 +637,7 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
             setenv("VK_DRIVER_FILES", icd, 1);
         }
 
-        verdict = (unsigned char) nm_vk_scan(NULL, 1);
+        verdict = (unsigned char) nm_vk_scan(NULL, NULL, 1);
         /* The byte is the whole result. Write it before _exit so that no
          * atexit handler of the parent's, and no exit-status policy of the
          * host's, can come between the answer and the reader. */
@@ -1004,9 +1025,13 @@ static void nm_vk_make_safe(void) { }
 
 #endif /* NM_VK_ICD_GUARD */
 
-static ggml_backend_dev_t nm_gpu_dev;
+/* The GPU/IGPU devices, in ggml enumeration order, which is the order
+ * whisper.cpp's gpu_device counts in. nm_gpu_n is 0 whenever the GPU path is
+ * unusable for any reason, so every accessor below can key off it alone. */
+static ggml_backend_dev_t nm_gpu_devs[NM_MAX_GPUS];
+static const char *nm_gpu_descs[NM_MAX_GPUS];
+static int nm_gpu_n;
 static char nm_gpu_backend_name[32];
-static const char *nm_gpu_device_desc;
 
 /* Runs exactly once, before anything else in this process touches ggml's
  * backend registry.
@@ -1025,10 +1050,11 @@ static const char *nm_gpu_device_desc;
  */
 static void nm_backend_discover(void)
 {
-    ggml_backend_dev_t dev = NULL;
+    ggml_backend_dev_t devs[NM_MAX_GPUS];
     ggml_backend_reg_t reg;
     const char *reg_name;
     int verified = 0;
+    int n = 0, i;
 
     nm_vk_make_safe();
 
@@ -1059,10 +1085,10 @@ static void nm_backend_discover(void)
     if (getenv("NOMERCY_VK_ICD_GUARD") && !strcmp(getenv("NOMERCY_VK_ICD_GUARD"), "0"))
         verified = 0;
 
-    if (nm_vk_scan(&dev, !verified) != NM_VK_OK_GPU || !dev)
+    if (nm_vk_scan(devs, &n, !verified) != NM_VK_OK_GPU || n <= 0)
         return;
 
-    reg = ggml_backend_dev_backend_reg(dev);
+    reg = ggml_backend_dev_backend_reg(devs[0]);
     reg_name = reg ? ggml_backend_reg_name(reg) : NULL;
     /* ggml spells it "Vulkan" (GGML_VK_NAME in ggml-vulkan.h); this project's
      * metadata contract is lower case, so fold it rather than pass the
@@ -1078,9 +1104,22 @@ static void nm_backend_discover(void)
     }
 
     /* Stable for the process: ggml-vulkan's device contexts are heap allocated
-     * once by ggml_backend_vk_reg_get_device() and never freed. */
-    nm_gpu_device_desc = ggml_backend_dev_description(dev);
-    nm_gpu_dev = dev;
+     * once by ggml_backend_vk_reg_get_device() and never freed, so caching the
+     * description pointers is sound. */
+    for (i = 0; i < n; i++) {
+        nm_gpu_devs[i] = devs[i];
+        nm_gpu_descs[i] = ggml_backend_dev_description(devs[i]);
+    }
+    nm_gpu_n = n;
+}
+
+/* One device by index, or NULL when that index has nothing usable behind it -
+ * which includes "the GPU path is off entirely", since nm_gpu_n stays 0 then. */
+static ggml_backend_dev_t nm_gpu_at(int gpu_device)
+{
+    if (gpu_device < 0 || gpu_device >= nm_gpu_n)
+        return NULL;
+    return nm_gpu_devs[gpu_device];
 }
 
 #if defined(_WIN32)
@@ -1106,19 +1145,26 @@ static void nm_backend_once(void)
 int nm_ggml_gpu_usable(void)
 {
     nm_backend_once();
-    return nm_gpu_dev != NULL;
+    return nm_gpu_n > 0;
 }
 
-const char *nm_ggml_backend_name(void)
+int nm_ggml_gpu_count(void)
 {
     nm_backend_once();
-    return nm_gpu_dev ? nm_gpu_backend_name : "cpu";
+    return nm_gpu_n;
 }
 
-const char *nm_ggml_backend_device(void)
+const char *nm_ggml_backend_name(int gpu_device)
 {
     nm_backend_once();
-    return nm_gpu_dev ? nm_gpu_device_desc : nm_ggml_cpu_variant_name();
+    return nm_gpu_at(gpu_device) ? nm_gpu_backend_name : "cpu";
+}
+
+const char *nm_ggml_backend_device(int gpu_device)
+{
+    nm_backend_once();
+    return nm_gpu_at(gpu_device) ? nm_gpu_descs[gpu_device]
+                                 : nm_ggml_cpu_variant_name();
 }
 
 const char *nm_ggml_backend_notice(void)
@@ -1127,12 +1173,15 @@ const char *nm_ggml_backend_notice(void)
     return nm_vk_notice[0] ? nm_vk_notice : NULL;
 }
 
-ggml_backend_t nm_ggml_backend_init(int use_gpu)
+ggml_backend_t nm_ggml_backend_init(int use_gpu, int gpu_device)
 {
+    ggml_backend_dev_t dev;
+
     nm_backend_once();
 
-    if (use_gpu && nm_gpu_dev) {
-        ggml_backend_t be = ggml_backend_dev_init(nm_gpu_dev, NULL);
+    dev = nm_gpu_at(gpu_device);
+    if (use_gpu && dev) {
+        ggml_backend_t be = ggml_backend_dev_init(dev, NULL);
 
         if (be)
             return be;

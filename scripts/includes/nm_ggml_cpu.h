@@ -45,35 +45,56 @@ const char *nm_ggml_cpu_variant_name(void);
  */
 
 /*
- * A ready backend: the GPU when `use_gpu` is non-zero and a usable one exists,
- * otherwise the best CPU instruction-set variant. Returns NULL only if even the
- * CPU backend could not be created. The caller owns the result and releases it
- * with ggml_backend_free().
+ * ABOUT `gpu_device`, which every function below that takes one means the same
+ * way: the index of a GPU among the GPU and IGPU devices ggml enumerates, in
+ * enumeration order. That is whisper.cpp's own counting
+ * (whisper_backend_init_gpu walks ggml_backend_dev_get(i) and takes the
+ * gpu_device'th device whose type is GPU or IGPU), and matching it is the whole
+ * point: these functions exist to report what ran, and on a two-GPU machine
+ * with gpu_device=1 an index-less answer named device 0 while the work happened
+ * on device 1. An index past the end is not an error - whisper falls back to
+ * the CPU there, and so do these.
  */
-ggml_backend_t nm_ggml_backend_init(int use_gpu);
 
 /*
- * 1 when a usable, non-software GPU device exists. This is for callers that do
- * not create their own backend and instead hand a yes/no to a library that
- * picks one itself - af_whisper.c, whose whisper.cpp selects internally from
- * whisper_context_params::use_gpu.
+ * A ready backend: the `gpu_device`'th GPU when `use_gpu` is non-zero and that
+ * one is usable, otherwise the best CPU instruction-set variant. Returns NULL
+ * only if even the CPU backend could not be created. The caller owns the result
+ * and releases it with ggml_backend_free().
+ */
+ggml_backend_t nm_ggml_backend_init(int use_gpu, int gpu_device);
+
+/*
+ * 1 when the GPU path is usable at all: at least one GPU/IGPU device exists and
+ * NONE of them is a software rasteriser. Deliberately index-independent,
+ * because the property it guarantees has to hold for whatever index a caller
+ * (or whisper.cpp, which we cannot steer) ends up selecting. Pair it with
+ * nm_ggml_gpu_count() when you need to know whether a specific index exists.
  */
 int nm_ggml_gpu_usable(void);
 
 /*
- * "vulkan" - or whatever ggml calls the registry owning the device, folded to
- * lower case - when a usable GPU exists, otherwise "cpu". This says what is
- * AVAILABLE, not what a given filter chose: a filter started with use_gpu=0
- * reports "cpu" from its own flag rather than asking here.
+ * How many GPU/IGPU devices there are, in the order above. 0 when the GPU path
+ * is unusable for any reason. A caller whose gpu_device is >= this will get the
+ * CPU, and should say so rather than name a device.
  */
-const char *nm_ggml_backend_name(void);
+int nm_ggml_gpu_count(void);
 
 /*
- * The GPU's description, e.g. "NVIDIA GeForce RTX 3070", or the selected CPU
- * variant name when no usable GPU exists. Same caveat as above: it answers
- * "what is available", not "what did this filter use".
+ * "vulkan" - or whatever ggml calls the registry owning that device, folded to
+ * lower case - when the `gpu_device`'th GPU is usable, otherwise "cpu". This
+ * says what is AVAILABLE at that index, not what a given filter chose: a filter
+ * started with use_gpu=0 reports "cpu" from its own flag rather than asking
+ * here.
  */
-const char *nm_ggml_backend_device(void);
+const char *nm_ggml_backend_name(int gpu_device);
+
+/*
+ * That device's description, e.g. "NVIDIA GeForce RTX 3070", or the selected
+ * CPU variant name when the index has no usable GPU behind it. Same caveat as
+ * above: it answers "what is available", not "what did this filter use".
+ */
+const char *nm_ggml_backend_device(int gpu_device);
 
 /*
  * One sentence about anything surprising the guard did to this process -
