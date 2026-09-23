@@ -291,11 +291,11 @@ upstream advisory.
 
 Both filters run on **ggml**, and ggml is compiled once per instruction-set
 level. Cross-compiling a single build for the oldest supported CPU would cost
-everyone with a newer one 8-9x of speed for nothing, so most platform
-binaries carry several instruction-set levels of the ggml CPU backend and
-pick one automatically the first time either filter runs — an old machine
-keeps working, a modern one runs several times faster, and nobody has to
-choose a build.
+everyone with a newer one 8-14x of speed on `whisper` and 2.4x on `stemsplit`
+for nothing, so most platform binaries carry several instruction-set levels
+of the ggml CPU backend and pick one automatically the first time either
+filter runs — an old machine keeps working, a modern one runs several times
+faster, and nobody has to choose a build.
 
 The choice is logged once at `-v info`:
 
@@ -310,7 +310,7 @@ ran without scraping logs: `lavfi.stemsplit.cpu_variant`,
 `NOMERCY_GGML_CPU=<name>` forces a specific level — useful for support cases
 and for A/B timing on one machine. A name that's unknown, or one the CPU
 doesn't actually support, is silently ignored and the automatic choice is
-kept; it can never stop a build from starting.
+kept; it can never stop ffmpeg from starting.
 
 | platform | levels carried | selection |
 |---|---|---|
@@ -342,8 +342,8 @@ against the same binary forced back to its baseline level:
 
 No ARM hardware has been measured yet.
 
-**Measured — `whisper`.** Same model, same audio, 8 threads, encode time per
-instruction level:
+**Measured — `whisper`.** Same model, same audio, 8 threads, total run time
+per instruction level:
 
 | variant | vs `x64` baseline |
 |---|---|
