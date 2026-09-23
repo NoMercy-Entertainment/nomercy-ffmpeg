@@ -59,6 +59,16 @@ int main(void)
     printf("gpu_device=%s\n", gpu ? ggml_backend_dev_name(gpu) : "(none)");
     printf("gpu_description=%s\n", gpu ? ggml_backend_dev_description(gpu) : "(none)");
 
+    /* "No GPU" is a valid answer on most machines, so it's not a FAIL by
+     * default - but on a machine known to have one, silence here would mean
+     * the shim quietly lost it. NM_VK_EXPECT_GPU=1 turns that into an
+     * assertion for exactly those runs (this host's RTX 3070, and later the
+     * fleet's GPU hardware) without changing behaviour anywhere else. */
+    if (!gpu && getenv("NM_VK_EXPECT_GPU") && !strcmp(getenv("NM_VK_EXPECT_GPU"), "1")) {
+        printf("FAIL: NM_VK_EXPECT_GPU=1 but no GPU device was found\n");
+        return 1;
+    }
+
     ggml_backend_t cpu_be = ggml_backend_dev_init(cpu, NULL);
     float *cpu_out = run_on(cpu_be, "cpu", a, b);
     if (!cpu_out) return 1;
