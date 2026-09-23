@@ -3338,10 +3338,32 @@ static const AVOption stemsplit_options[] = {
     { "smooth", "smooth the masks over this many frequency bins either side (0 disables)", OFFSET(smooth), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 32, FLAGS },
     { "overlap", "segment overlap as a duration, crossfaded on output", OFFSET(overlap), AV_OPT_TYPE_DURATION, { .i64 = 0 }, 0, 60000000, FLAGS },
     { "threads", "number of ggml threads", OFFSET(nb_threads), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
-    /* Spelled and defaulted exactly like whisper's, so one filtergraph can
-     * turn both filters back to the CPU the same way. use_gpu=0 is the hard
-     * override; everything else about the choice is automatic. */
-    { "use_gpu", "use a GPU backend when one is available", OFFSET(use_gpu), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, FLAGS },
+    /* OFF by default, and that is a considered decision rather than caution.
+     *
+     * stemsplit has never had a GPU path, so every existing command line on a
+     * machine with a Vulkan GPU would start producing different audio the day
+     * this shipped defaulted on. The difference is small - measured at -58.8 dB
+     * relative to the CPU run, inaudible - but it is a bit-level change to
+     * output nobody asked to change, and this repository's rule is that a
+     * release never silently alters what existing users get. Opting in is one
+     * option; being surprised by it is not something a user can undo after the
+     * fact.
+     *
+     * It buys about 2.3x on an RTX 3070 (30 s of audio: 1023 ms against
+     * 2352 ms on the CPU). The -58.8 dB comes entirely from ggml-vulkan
+     * accumulating its conv2d in FP16 on any GPU with cooperative-matrix
+     * support; with that path disabled the same run agrees with the CPU to
+     * -98.7 dB at identical speed.
+     *
+     * WHAT WOULD CHANGE THIS DEFAULT: settling that accumulator question. Once
+     * the two paths agree closely enough, turning this on stops being a change
+     * to anyone's output and the default is expected to flip. It is off for
+     * this release, not forever.
+     *
+     * whisper's use_gpu stays at 1 because upstream already ships it that way
+     * and its output is text, which was verified identical on both backends.
+     * The spelling here is identical so one filtergraph can steer both. */
+    { "use_gpu", "opt in to GPU acceleration when a usable GPU is present (about 2.3x faster, with a small change to the output)", OFFSET(use_gpu), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
     { "gpu_device", "which GPU to use, counted over the GPU devices this machine reports", OFFSET(gpu_device), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "dump", "Internal: directory to dump intermediate tensors to for parity testing; empty disables", OFFSET(dump_dir), AV_OPT_TYPE_STRING, { .str = "" }, .flags = FLAGS },
     { "debug_input", "Internal: raw [C][T][F] float32 spectrogram to inject as the "

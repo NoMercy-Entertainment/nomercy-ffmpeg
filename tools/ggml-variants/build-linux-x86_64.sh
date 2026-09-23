@@ -213,9 +213,12 @@ else
 fi
 [[ -n ${wh_log} ]] || { echo "  FAIL: whisper did not log a backend"; fail=1; }
 
-echo "== use_gpu=0 is accepted by both filters =="
-# The hard override has to exist and parse even where there is no GPU to
-# override; a typo in either AVOption would only ever show up here.
+echo "== the gpu options parse on both filters =="
+# These have to exist and parse even where there is no GPU to select; a typo in
+# an AVOption would only ever show up here. Both directions, because since the
+# owner ruling stemsplit defaults to use_gpu=0 and whisper to 1, so each filter
+# has one value that is its default and one that is not, and neither should be
+# the only one exercised.
 if ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn \
     -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment:use_gpu=0" -f null - >/dev/null 2>&1; then
     echo "  ok: stemsplit use_gpu=0"
@@ -227,6 +230,11 @@ if ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn \
     echo "  ok: whisper use_gpu=0"
 else
     echo "  FAIL: whisper rejected use_gpu=0"; fail=1
+fi
+if ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn     -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment:use_gpu=1:gpu_device=0" -f null - >/dev/null 2>&1; then
+    echo "  ok: stemsplit use_gpu=1 gpu_device=0"
+else
+    echo "  FAIL: stemsplit rejected use_gpu=1/gpu_device"; fail=1
 fi
 
 

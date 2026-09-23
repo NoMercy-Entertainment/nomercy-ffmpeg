@@ -40,6 +40,17 @@ The work is phased:
 ## 2. Goals
 
 - `whisper` and `stemsplit` use a GPU when one is usable, automatically.
+
+  **AMENDED 2026-09-24, owner ruling.** `stemsplit` is opt-in for this release:
+  its `use_gpu` defaults to `0`. It has never had a GPU path, so defaulting it
+  on would change the audio of every existing command line on a GPU host -
+  measured at -58.8 dB relative to the CPU run, inaudible but real, and caused
+  by ggml-vulkan accumulating its conv2d in FP16 on any cooperative-matrix GPU.
+  Not changing what existing users get outranks the 2.3x speed-up. `whisper`
+  keeps `use_gpu=1`, which is upstream's own default, and its GPU and CPU
+  transcripts were verified identical on three inputs before that was accepted.
+  The stemsplit default is expected to flip once the accumulator question is
+  settled; see `.superpowers/sdd/2026-09-23-ggml-vulkan-backend/task-3-report.md`.
 - **A machine without a GPU, without a driver, or with a broken driver must be
   completely unaffected** — same behaviour as today, no crash, no slowdown, no
   failure to start.
