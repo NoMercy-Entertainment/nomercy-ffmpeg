@@ -162,16 +162,38 @@ echo "Whisper installed successfully" > /ffmpeg_build.log
 # fixed level (see includes/ggml_cpu_dispatch.c's NM_GGML_CPU_FIXED mode).
 NM_SKIP_VARIANTS="${NM_SKIP_VARIANTS:-0}"
 
+# darwin must opt out NOW, not in a later task: nm_pack_variant's ELF/COFF
+# recipes both do `${NM_LD} -r --whole-archive`, and Apple's ld64 has no
+# such flag, so the variant loop below would die immediately on either
+# darwin target. Task 6 gives darwin its own fixed instruction level (one
+# ggml build per platform, no dispatch) and switches
+# ggml_cpu_dispatch.c to NM_GGML_CPU_FIXED mode; until that lands, darwin
+# keeps today's single-level libggml-cpu.a. Do not add darwin instruction
+# flags to the matrix below -- that is Task 6's work, not this one's.
+if [[ ${TARGET_OS} == darwin ]]; then
+    NM_SKIP_VARIANTS=1
+fi
+
 # Format: <tag>|<dispatcher feature>|<cmake flags>
 nm_variant_matrix() {
-    if [[ ${ARCH} == x86_64 ]]; then
+    # Explicit about which ARCH values map to which matrix, rather than
+    # "x86_64 vs. everything else": darwin-arm64 reports ARCH=arm64 (not
+    # aarch64, unlike linux-aarch64/windows-aarch64), and it used to land in
+    # the ARM branch by that accident rather than by a real test for it. A
+    # platform with a value this function does not recognise gets zero rows
+    # instead of silently borrowing whichever branch happens to be `else`;
+    # the caller (48-whisper.sh, after the build loop) aborts if that leaves
+    # nm_index at zero.
+    case ${ARCH} in
+    x86_64)
         cat <<'MATRIX'
 x64|NM_CPU_FEAT_BASELINE|-DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF
 sse42|NM_CPU_FEAT_SSE42|-DGGML_SSE42=ON -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF
 ivybridge|NM_CPU_FEAT_AVX_F16C|-DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=ON -DGGML_BMI2=OFF
 haswell|NM_CPU_FEAT_AVX2_FMA|-DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON
 MATRIX
-    else
+        ;;
+    aarch64|arm64)
         cat <<'MATRIX'
 armv8.0|NM_CPU_FEAT_ARM_BASE|-DGGML_CPU_ARM_ARCH=armv8-a
 armv8.2+dotprod+fp16|NM_CPU_FEAT_ARM_DOTPROD_FP16|-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16
@@ -181,7 +203,11 @@ MATRIX
         if [[ ${TARGET_OS} == linux ]]; then
             echo 'armv8.2+dotprod+fp16+i8mm|NM_CPU_FEAT_ARM_I8MM|-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16+i8mm'
         fi
-    fi
+        ;;
+    *)
+        log "Error: nm_variant_matrix: unrecognised ARCH '${ARCH}'"
+        ;;
+    esac
 }
 
 if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
@@ -227,17 +253,39 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
     done < <(nm_variant_matrix)
     echo "" >> ${nm_header}
 
+    # The dispatcher's guaranteed-baseline fallback (nm_variants[0] in
+    # ggml_cpu_dispatch.c) is only a real guarantee if at least one variant
+    # actually got built -- an empty matrix (unrecognised ARCH above, or
+    # every row failing in a way that did not already exit) would otherwise
+    # generate an empty NM_GGML_CPU_VARIANTS macro, giving the dispatcher a
+    # zero-length array and an out-of-bounds read the first time it falls
+    # back. Fail loudly here instead.
+    if [ ${nm_index} -eq 0 ]; then
+        log "Error: no ggml CPU variants were built for ARCH=${ARCH} TARGET_OS=${TARGET_OS}"
+        exit 1
+    fi
+
     log "Built ${nm_index} ggml CPU variants"
 
-    ${CC} ${CFLAGS} -I${nm_variant_dir} -I/scripts/includes -I${PREFIX}/include \
+    ${CC:-cc} ${CFLAGS} -I${nm_variant_dir} -I/scripts/includes -I${PREFIX}/include \
         -c /scripts/includes/ggml_cpu_dispatch.c -o ${nm_variant_dir}/dispatch.o 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: dispatcher build failed"; exit 1; fi
 
     rm -f ${PREFIX}/lib/libggml-cpu-variants.a
-    ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o ${nm_objects}
-    cp /scripts/includes/nm_ggml_cpu.h ${PREFIX}/include/nm_ggml_cpu.h
+    ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o ${nm_objects} \
+        || { log "Error: archiving libggml-cpu-variants.a failed"; exit 1; }
     rm -f ${PREFIX}/lib/libggml-cpu.a ${PREFIX}/lib/ggml-cpu.a
 fi
+
+# Installed unconditionally, not just when the variant loop ran above: Task 4
+# makes both the whisper and stemsplit filters include this header on every
+# platform (including darwin, which skips the variant loop via
+# NM_SKIP_VARIANTS but still links a build of ggml_cpu_dispatch.c in
+# NM_GGML_CPU_FIXED mode and needs the same public declaration). Missing it
+# would fail the filters' compile on whichever platform this cp was gated
+# out for.
+cp /scripts/includes/nm_ggml_cpu.h ${PREFIX}/include/nm_ggml_cpu.h \
+    || { log "Error: installing nm_ggml_cpu.h failed"; exit 1; }
 
 cd /build
 rm -rf /build/whisper
