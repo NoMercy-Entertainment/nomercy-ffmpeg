@@ -613,6 +613,39 @@ Expected: compile error — `nm_ggml_backend_init` is not declared.
 static const char *nm_backend_name   = "cpu";
 static const char *nm_backend_device = NULL;
 
+**AMENDED AFTER TASK 1 — read this before writing the selector.** Task 1 measured that a
+machine with Mesa's software Vulkan does not merely offer a bad device: the process dies at
+exit 139 *inside the Vulkan loader's own ICD probing*, before any of our code runs. Filtering
+devices after enumeration therefore cannot work, because the enumerating call is the one that
+crashes. So the selector must FIRST neutralise software ICDs, and only then touch ggml's
+registry:
+
+```c
+/* Keep the Vulkan loader away from software ICDs before it ever probes them.
+ *
+ * Mesa's llvmpipe nested-dlopens LLVM, which a static binary cannot survive - and the
+ * crash happens inside the loader's ICD probe, i.e. inside the very call that would
+ * otherwise hand us a device list to filter. So the guard has to come first: read the
+ * manifests ourselves, keep the hardware ones, and point the loader at those. When none
+ * are hardware we point it at a path that does not exist, which Task 1 proved the loader
+ * reports cleanly as "no device".
+ *
+ * Linux and FreeBSD only: Windows did not reproduce the crash, and its loader has no
+ * manifest directory of this shape.
+ */
+static void nm_vk_restrict_to_hardware_icds(void);
+```
+
+Implement it by scanning `/usr/share/vulkan/icd.d/*.json` plus anything already named by
+`VK_ICD_FILENAMES` or `VK_DRIVER_FILES`, reading each manifest's `library_path`, and treating
+a path containing `lvp`, `llvmpipe`, `swiftshader` or `lavapipe` as software. Set
+`VK_ICD_FILENAMES` to the surviving manifests joined by the platform separator, or to
+`/nonexistent.json` when the survivor list is empty. Call it once, before the first registry
+access, guarded so it never runs on Windows.
+
+The device-level check below stays as a second line of defence — it costs nothing and catches
+a software device that reaches us through a manifest we did not classify.
+
 static int nm_device_is_software(ggml_backend_dev_t dev)
 {
     const char *name = ggml_backend_dev_name(dev);

@@ -113,8 +113,17 @@ with heavy thread-local storage. It did not reproduce on Windows and does not af
 real GPU drivers.
 
 This matters because a headless Linux server with Mesa installed advertises exactly
-such a device. **The design must skip software devices rather than discover this at a
-user's site.**
+such a device. **The design must keep the loader away from software ICDs rather than
+discover this at a user's site.**
+
+**Amended 2026-09-23, during implementation Task 1.** The crash is worse than first
+measured: it is not that ggml picks a bad device, it is that the process dies at exit
+139 *inside the Vulkan loader's own ICD probing*, before any of our code runs. So
+filtering devices after enumeration — what §6.3 originally said — is too late, because
+the enumerating call is the one that crashes. The guard has to run before Vulkan is
+touched at all: read the ICD manifests ourselves, keep only hardware ones, and point
+the loader at those (or at a nonexistent path when there are none, which Task 1 proved
+is handled gracefully). Only then may ggml's registry be reached.
 
 ### 4.6 Cost
 
@@ -174,8 +183,14 @@ single place that answers "what should this filter run on"):
 1. If the filter's `use_gpu` option is 0 → CPU.
 2. Otherwise call `ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU)`.
    **Only the registry path** (§4.4).
-3. Skip any device whose reported type or name identifies a software rasteriser
-   (§4.5). The implementation must enumerate devices and filter, not take the first.
+3. **Before any of the above touches Vulkan**, neutralise software ICDs (§4.5): read
+   the Vulkan ICD manifests (`/usr/share/vulkan/icd.d/*.json` and whatever
+   `VK_ICD_FILENAMES` / `VK_DRIVER_FILES` name), classify each by its `library_path`,
+   and set `VK_ICD_FILENAMES` to the hardware ones only — or to a nonexistent path
+   when none are hardware. Filtering after enumeration is too late: the enumerating
+   call is the one that crashes.
+   Then, among the devices that remain, still skip anything reporting itself as a
+   software rasteriser — belt and braces, and it costs nothing.
 4. If a usable GPU device remains → use it. Otherwise → the best CPU variant, exactly
    as today.
 5. Any failure at any step → CPU. Never an error, never a refusal to start.
