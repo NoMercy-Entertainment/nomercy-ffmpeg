@@ -45,6 +45,16 @@ const char *nm_ggml_cpu_variant_name(void)
 
 #if defined(_WIN32)
 #include <windows.h>
+/* PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE was only added to mingw-w64's
+ * winnt.h relatively recently; llvm-mingw builds older than that omit it,
+ * which would otherwise fail this whole file to compile on windows-aarch64.
+ * The value (43) is Microsoft's own documented, stable PROCESSOR_FEATURE_ID
+ * for this feature (see winnt.h upstream / learn.microsoft.com
+ * IsProcessorFeaturePresent), not something this project invented, so
+ * defining it ourselves when the header lacks it is safe on any toolchain. */
+#ifndef PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE
+#define PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE 43
+#endif
 #elif defined(__linux__) && defined(__aarch64__)
 #include <sys/auxv.h>
 #include <asm/hwcap.h>
