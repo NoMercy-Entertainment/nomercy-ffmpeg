@@ -81,8 +81,20 @@ int main(void)
     double rel = maxdiff / (sum / n);
     printf("  relative difference %.2g, speedup %.2fx\n", rel, lo_ms / hi_ms);
 
+    /* sum == 0 (or a NaN/Inf slipping in some other way) makes rel non-finite;
+     * rel > 1e-2 is FALSE for NaN, so without this check a non-finite result
+     * would silently skip the numeric-agreement guard instead of failing it. */
+    if (!isfinite(rel)) { printf("FAIL: relative difference is not finite (%.2g) - numeric check inconclusive\n", rel); return 1; }
     if (rel > 1e-2)   { printf("FAIL: variants disagree numerically\n"); return 1; }
-    if (hi_ms >= lo_ms) { printf("FAIL: high variant is not faster - variants were merged\n"); return 1; }
+    /* A strict hi_ms < lo_ms only catches merging into the SLOW generic
+     * backend (what actually happened during development). If both variants
+     * were merged into the FAST one instead, rel would still be ~0 and
+     * hi_ms >= lo_ms becomes a coin flip on timing noise - a merged binary
+     * could report PASS. The real hi/lo effect on this workload is 8-14x;
+     * requiring hi to beat lo by 30%+ is far above run-to-run noise and far
+     * below the real effect, so it can't be satisfied by two copies of the
+     * same code. */
+    if (hi_ms >= lo_ms * 0.7) { printf("FAIL: high variant is not enough faster - variants were merged\n"); return 1; }
     printf("PASS\n");
     return 0;
 }

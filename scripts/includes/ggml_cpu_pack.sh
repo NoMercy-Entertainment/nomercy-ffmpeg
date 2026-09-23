@@ -43,6 +43,19 @@ nm_pack_variant() {
     case "${format}" in
     elf)
         "${nm}" -u "${tmp}" | awk '{ print $NF }' | sort -u > "${tmp}.undef"
+        if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo "nm_pack_variant: ${nm} -u failed on ${tmp}" >&2
+            return 1
+        fi
+        # ggml-cpu always calls out to libc/pthread/ggml-base, so an empty
+        # undefined-symbol list means nm silently failed (or something about
+        # the toolchain/archive is wrong), not that there is nothing to
+        # restore. Failing here beats letting a fully-prefixed, libc-less
+        # object through and surfacing it as a baffling link error later.
+        if [[ ! -s ${tmp}.undef ]]; then
+            echo "nm_pack_variant: no undefined symbols found in ${tmp}; ${nm} may have failed silently" >&2
+            return 1
+        fi
         "${objcopy}" --prefix-symbols="${prefix}" "${tmp}" "${tmp}.pre" || return 1
         awk -v p="${prefix}" '{ print p $1 " " $1 }' "${tmp}.undef" > "${tmp}.restore"
         "${objcopy}" --redefine-syms="${tmp}.restore" "${tmp}.pre" "${output}" || return 1
@@ -50,6 +63,14 @@ nm_pack_variant() {
     coff)
         "${nm}" --defined-only "${tmp}" \
             | awk -v p="${prefix}" '$2 ~ /^[TDBRWV]$/ { print $3 " " p $3 }' > "${tmp}.redef"
+        if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo "nm_pack_variant: ${nm} --defined-only failed on ${tmp}" >&2
+            return 1
+        fi
+        if [[ ! -s ${tmp}.redef ]]; then
+            echo "nm_pack_variant: no defined symbols found in ${tmp}; ${nm} may have failed silently" >&2
+            return 1
+        fi
         : > "${tmp}.secargs"
         while read -r old new; do
             for kind in text data rdata bss pdata xdata; do
@@ -59,7 +80,12 @@ nm_pack_variant() {
         # objcopy silently skips --rename-section entries whose old name does
         # not exist in this object, so it is safe to try every section kind
         # for every renamed symbol rather than knowing which kind applies.
-        "${objcopy}" --redefine-syms="${tmp}.redef" $(cat "${tmp}.secargs") "${tmp}" "${output}" || return 1
+        # secargs is passed as an objcopy response file (@file): with 6
+        # section kinds tried per renamed symbol a template-heavy archive can
+        # produce thousands of flags, well past the argument-list limits some
+        # Windows toolchains impose, and it avoids word-splitting/globbing an
+        # unquoted command substitution full of mangled C++ names.
+        "${objcopy}" --redefine-syms="${tmp}.redef" "@${tmp}.secargs" "${tmp}" "${output}" || return 1
         ;;
     *)
         echo "nm_pack_variant: unknown object format: ${format}" >&2
