@@ -287,6 +287,87 @@ As with any source-separation tool, **you must hold the rights to any
 copyrighted material you process** — this carries forward Spleeter's own
 upstream advisory.
 
+#### ⚙️ **CPU instruction sets — `whisper` and `stemsplit`**
+
+Both filters run on **ggml**, and ggml is compiled once per instruction-set
+level. Cross-compiling a single build for the oldest supported CPU would cost
+everyone with a newer one 8-9x of speed for nothing, so most platform
+binaries carry several instruction-set levels of the ggml CPU backend and
+pick one automatically the first time either filter runs — an old machine
+keeps working, a modern one runs several times faster, and nobody has to
+choose a build.
+
+The choice is logged once at `-v info`:
+
+```
+stemsplit: ggml cpu variant 'haswell'.
+```
+
+and published as frame metadata, so a media server can record what actually
+ran without scraping logs: `lavfi.stemsplit.cpu_variant`,
+`lavfi.whisper.cpu_variant`.
+
+`NOMERCY_GGML_CPU=<name>` forces a specific level — useful for support cases
+and for A/B timing on one machine. A name that's unknown, or one the CPU
+doesn't actually support, is silently ignored and the automatic choice is
+kept; it can never stop a build from starting.
+
+| platform | levels carried | selection |
+|---|---|---|
+| linux / windows / freebsd, x86_64 | `x64`, `sse42`, `ivybridge` (AVX+F16C), `haswell` (AVX2+FMA) | automatic |
+| linux-aarch64 | `armv8.0`, `armv8.2+dotprod+fp16`, `armv8.2+dotprod+fp16+i8mm` | automatic |
+| windows-aarch64 | `armv8.0`, `armv8.2+dotprod+fp16` | automatic |
+| darwin-x86_64 | `ivybridge` (AVX+F16C) only | fixed at build time |
+| darwin-arm64 | `armv8.4+dotprod+fp16` only | fixed at build time |
+
+windows-aarch64 never carries the `i8mm` level: Windows has no feature flag
+for it, and the only fallback — inferring it from the SVE flag — is wrong on
+Qualcomm's Oryon cores. Rather than guess and risk crashing on an
+unsupported instruction, that platform stops one level short.
+
+The two darwin builds don't dispatch at all — `NOMERCY_GGML_CPU` has nothing
+to switch on either of them. Apple controls exactly which machines run
+macOS 10.15+, so the hardware floor is known precisely instead of guessed:
+darwin-x86_64 is compiled once for Ivy Bridge (the oldest Mac still able to
+run Catalina), darwin-arm64 once for the instructions every Apple Silicon
+chip has.
+
+**Measured — `stemsplit`.** 30 s of the same audio, automatic selection
+against the same binary forced back to its baseline level:
+
+| platform | automatic | forced baseline | speedup |
+|---|---|---|---|
+| linux-x86_64 | 1927 ms | 5723 ms | 2.97x |
+| windows-x86_64 | 2.047 s | 5.877 s | 2.87x |
+
+No ARM hardware has been measured yet.
+
+**Measured — `whisper`.** Same model, same audio, 8 threads, encode time per
+instruction level:
+
+| variant | vs `x64` baseline |
+|---|---|
+| `x64` | — |
+| `sse42` | 1.3x |
+| `ivybridge` (AVX + F16C) | 8x |
+| `haswell` (AVX2 + FMA) | 9x |
+
+The big jump is at F16C, not AVX2: whisper's models are stored as 16-bit
+floats, and without F16C every weight has to be converted to 32-bit in
+scalar code before it can be used at all. `sse42` alone buys almost nothing
+— which is why a "safe", conservative fixed instruction level would not have
+been a good answer for whisper either.
+
+**Output is no longer bit-identical across machines.** Enabling FMA changes
+how additions round. On a 30 s `stemsplit` run, 123 of 2,646,000 output
+samples differ between instruction levels — at most 1 LSB at 16-bit, about
+103 dB below the signal, inaudible. But it means two machines with different
+CPUs no longer produce byte-for-byte identical output for the same input.
+If you hash `stemsplit` or `whisper` output for caching or deduplication,
+hash with a tolerance, or don't rely on the hash matching across machines —
+a plain `md5` comparison across CPUs can fail even though the audio itself
+is the same.
+
 #### 🤖 **AI & Analysis**
 - **OpenAI Whisper Integration**: Built-in speech-to-text via whisper.cpp (`--enable-whisper`)
 - **Tesseract OCR**: Text recognition for subtitle extraction (`--enable-libtesseract`)
