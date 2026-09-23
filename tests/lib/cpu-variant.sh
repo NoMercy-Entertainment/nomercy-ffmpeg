@@ -100,7 +100,12 @@ cpu_variant_startup_ok() {
 		if [[ -n "${value}" ]]; then
 			out=$(NOMERCY_GGML_CPU="${value}" "${ffmpeg}" -hide_banner -version 2>&1)
 		else
-			out=$("${ffmpeg}" -hide_banner -version 2>&1)
+			# The "unset" case must actually be unset, not just
+			# unassigned in this subshell -- a plain call here would
+			# still inherit whatever NOMERCY_GGML_CPU the caller's own
+			# environment holds, silently skipping the one case this
+			# loop exists to cover.
+			out=$(env -u NOMERCY_GGML_CPU "${ffmpeg}" -hide_banner -version 2>&1)
 		fi
 		code=$?
 		if [[ ${code} -ne 0 ]]; then

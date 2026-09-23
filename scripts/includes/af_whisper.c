@@ -367,12 +367,12 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
         av_dict_set(metadata, "lavfi.whisper.text", segments_text, 0);
         char *duration_text = av_asprintf("%f", duration);
         av_dict_set(metadata, "lavfi.whisper.duration", duration_text, AV_DICT_DONT_STRDUP_VAL);
+        av_dict_set(metadata, "lavfi.whisper.cpu_variant",
+                    nm_ggml_cpu_variant_name(), 0);
         if (wctx->detected_language) {
             av_dict_set(metadata, "lavfi.whisper.language", wctx->detected_language, 0);
             char *confidence_text = av_asprintf("%f", wctx->language_confidence);
             av_dict_set(metadata, "lavfi.whisper.language_confidence", confidence_text, AV_DICT_DONT_STRDUP_VAL);
-            av_dict_set(metadata, "lavfi.whisper.cpu_variant",
-                        nm_ggml_cpu_variant_name(), 0);
         }
     }
     av_freep(&segments_text);

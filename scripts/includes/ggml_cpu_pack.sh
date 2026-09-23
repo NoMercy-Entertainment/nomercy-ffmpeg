@@ -106,6 +106,16 @@ nm_pack_variant() {
         "${objcopy}" --prefix-symbols="${prefix}" "${tmp}" "${tmp}.pre" || return 1
         awk -v p="${prefix}" '{ print p $1 " " $1 }' "${tmp}.undef" > "${tmp}.restore"
         "${objcopy}" --redefine-syms="${tmp}.restore" "${tmp}.pre" "${output}" || return 1
+        # No leftover-symbol assertion here, unlike coff and coff-archive
+        # below: --prefix-symbols renames EVERY symbol in the object, defined
+        # or not, and the restore step above only reverts entries drawn from
+        # ${tmp}.undef -- undefined symbols, gathered before the prefix pass.
+        # A symbol cannot be both defined and undefined in the same object,
+        # so the restore step can never touch a defined symbol, which makes
+        # "every defined symbol still carries the prefix" true by
+        # construction here. A check for it would be unable to fail and
+        # would only test that objcopy's --prefix-symbols still does what its
+        # name says.
         ;;
     coff)
         "${nm}" --defined-only "${tmp}" \
@@ -133,6 +143,28 @@ nm_pack_variant() {
         # Windows toolchains impose, and it avoids word-splitting/globbing an
         # unquoted command substitution full of mangled C++ names.
         "${objcopy}" --redefine-syms="${tmp}.redef" "@${tmp}.secargs" "${tmp}" "${output}" || return 1
+        # Assert no defined symbol was left unprefixed, the same invariant
+        # the coff-archive path already checks below. This path's second
+        # mechanism -- renaming "<kind>$<symbol>" COMDAT sections alongside
+        # the symbol, so GNU ld's by-section-name folding does not merge two
+        # variants together -- is the one asymmetry that made this path's
+        # correctness depend on more than --redefine-syms: objcopy silently
+        # no-ops a --rename-section whose old section name does not exist in
+        # this object, so a mismatched kind list here would not fail the
+        # objcopy call above, only surface later as a folded/missing symbol
+        # at the real ffmpeg link. Checking the renamed OBJECT's own symbol
+        # table catches the --redefine-syms half directly; it cannot detect a
+        # COMDAT-folding failure by itself (that only shows up once another
+        # variant's object is linked alongside this one), but a leftover
+        # unprefixed symbol here is unambiguously wrong on its own.
+        "${nm}" --defined-only "${output}" \
+            | awk -v p="${prefix}" '$2 ~ /^[TDBRWV]$/ && index($3, p) != 1 { print $2 " " $3 }' \
+            > "${tmp}.leftover"
+        if [[ -s ${tmp}.leftover ]]; then
+            echo "nm_pack_variant: $(wc -l < "${tmp}.leftover") defined symbols in ${output} were not renamed to ${prefix}*. First few:" >&2
+            head -5 "${tmp}.leftover" >&2
+            return 1
+        fi
         ;;
     coff-archive)
         # sort -u, unlike the merged-object recipes: nm runs over a whole

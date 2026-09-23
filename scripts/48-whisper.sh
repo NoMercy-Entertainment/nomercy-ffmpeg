@@ -314,18 +314,20 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
         } | ${AR:-ar} -M || { log "Error: MRI merge of libggml-cpu-variants.a failed"; exit 1; }
         ${RANLIB:-ranlib} ${PREFIX}/lib/libggml-cpu-variants.a \
             || { log "Error: indexing libggml-cpu-variants.a failed"; exit 1; }
-        # `ar -M` reports a failed script on stdout and still exits 0 in some
-        # binutils versions, so confirm the result really exists and really
-        # carries every variant's entry point.
-        nm_reg_count=$(${NM_NM} --defined-only ${PREFIX}/lib/libggml-cpu-variants.a 2>/dev/null \
-            | grep -c "nm_v[0-9]*_ggml_backend_cpu_reg$")
-        if [[ ${nm_reg_count} -ne ${nm_index} ]]; then
-            log "Error: libggml-cpu-variants.a has ${nm_reg_count} prefixed ggml_backend_cpu_reg symbols, expected ${nm_index}"
-            exit 1
-        fi
     else
         ${AR:-ar} rcs ${PREFIX}/lib/libggml-cpu-variants.a ${nm_variant_dir}/dispatch.o ${nm_objects} \
             || { log "Error: archiving libggml-cpu-variants.a failed"; exit 1; }
+    fi
+    # `ar -M` reports a failed script on stdout and still exits 0 in some
+    # binutils versions, and COMDAT folding at a later link is this design's
+    # named silent-failure mode, so both archiving paths -- not just
+    # coff-archive -- get the same check: confirm the archive really exists
+    # and really carries every variant's entry point, not just windows-aarch64.
+    nm_reg_count=$(${NM_NM} --defined-only ${PREFIX}/lib/libggml-cpu-variants.a 2>/dev/null \
+        | grep -c "nm_v[0-9]*_ggml_backend_cpu_reg$")
+    if [[ ${nm_reg_count} -ne ${nm_index} ]]; then
+        log "Error: libggml-cpu-variants.a has ${nm_reg_count} prefixed ggml_backend_cpu_reg symbols, expected ${nm_index}"
+        exit 1
     fi
     rm -f ${PREFIX}/lib/libggml-cpu.a ${PREFIX}/lib/ggml-cpu.a
 else
@@ -409,13 +411,9 @@ lib_private_flags="Libs.private: -lstdc++"
     fi
     echo "${lib_flags}"
     echo "${lib_private_flags}"
-    if [[ ${TARGET_OS} == "windows" ]]; then
-        # OpenMP is off on both windows targets, so consumers must not be
-        # told to compile with -fopenmp either.
-        echo "Cflags: -I\${includedir}"
-    else
-        echo "Cflags: -I\${includedir}"
-    fi
+    # OpenMP is off on both windows targets, so consumers must not be told to
+    # compile with -fopenmp either -- same Cflags line on every platform.
+    echo "Cflags: -I\${includedir}"
     echo "Requires: "
     echo "Requires.private: "
 } >${PREFIX}/lib/pkgconfig/whisper.pc

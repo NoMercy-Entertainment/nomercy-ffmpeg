@@ -109,6 +109,43 @@ static const struct nm_variant nm_variants[] = {
 
 #define NM_NB_VARIANTS ((int) (sizeof(nm_variants) / sizeof(nm_variants[0])))
 
+/* nm_select()'s last-resort fallback below is `nm_variants[0]`, which is
+ * safe only because the build script (48-whisper.sh's nm_variant_matrix)
+ * happens to emit the baseline row first and nm_cpu_supports() returns 1
+ * for its feature unconditionally. Nothing else ties those two facts
+ * together, so a future edit to the matrix -- reordering it, or dropping
+ * the plain x64/armv8.0 row in favour of a higher floor -- would silently
+ * turn "the binary always starts" into a SIGILL on exactly the old
+ * hardware this design exists to protect. Pull the first row's feature out
+ * of NM_GGML_CPU_VARIANTS at compile time and assert it against the one
+ * feature test that always returns true for this architecture.
+ *
+ * The X-macro list is not comma separated at the top level (it is a run of
+ * "X(...) X(...) ..." calls), so a plain head-macro can't split it -- its
+ * own argument scan happens on the unexpanded "NM_GGML_CPU_VARIANTS" token,
+ * before that name is expanded into anything with commas in it. Routing
+ * through a variadic NM_HEAD_FEAT(...) first forces NM_GGML_CPU_VARIANTS
+ * (with X redefined here to emit real commas) to expand while it is still
+ * just __VA_ARGS__ being substituted into NM_HEAD_FEAT_'s call -- only then
+ * does the preprocessor rescan and see actual top-level commas to split on. */
+#define X(prefix, name, feat) prefix, name, feat,
+#define NM_HEAD_FEAT_(p0, n0, f0, ...) f0
+#define NM_HEAD_FEAT(...) NM_HEAD_FEAT_(__VA_ARGS__)
+#if defined(__x86_64__) || defined(_M_X64)
+_Static_assert(NM_HEAD_FEAT(NM_GGML_CPU_VARIANTS) == NM_CPU_FEAT_BASELINE,
+    "nm_variants[0] must be the unconditional x86-64 baseline: nm_select() "
+    "falls back to it when nothing else matches, and NM_CPU_FEAT_BASELINE "
+    "is the only feature test that always returns true");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+_Static_assert(NM_HEAD_FEAT(NM_GGML_CPU_VARIANTS) == NM_CPU_FEAT_ARM_BASE,
+    "nm_variants[0] must be the unconditional ARMv8.0 baseline: nm_select() "
+    "falls back to it when nothing else matches, and NM_CPU_FEAT_ARM_BASE "
+    "is the only feature test that always returns true");
+#endif
+#undef NM_HEAD_FEAT
+#undef NM_HEAD_FEAT_
+#undef X
+
 static int nm_cpu_supports(enum nm_cpu_feat feat)
 {
     switch (feat) {
@@ -139,9 +176,13 @@ static int nm_cpu_supports(enum nm_cpu_feat feat)
 #endif
     case NM_CPU_FEAT_ARM_I8MM:
         /* Deliberately never selected on Windows: there is no feature flag for
-         * i8mm there, and inferring it from the SVE flag is wrong on Oryon. */
+         * i8mm there, and inferring it from the SVE flag is wrong on Oryon.
+         * This variant is built armv8.2-a+dotprod+fp16+i8mm, so, like every
+         * other row, the test checks every feature it was compiled for, not
+         * just the newest one. */
 #if defined(__linux__)
-        return getauxval(AT_HWCAP2) & HWCAP2_I8MM;
+        return (getauxval(AT_HWCAP) & HWCAP_ASIMDDP) && (getauxval(AT_HWCAP) & HWCAP_ASIMDHP)
+            && (getauxval(AT_HWCAP2) & HWCAP2_I8MM);
 #else
         return 0;
 #endif
