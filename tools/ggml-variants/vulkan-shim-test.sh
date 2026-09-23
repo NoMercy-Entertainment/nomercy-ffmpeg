@@ -49,20 +49,48 @@ else
     BIN="${WORK}/vulkan-probe"
 fi
 
-cmake -S "${WORK}/whisper.cpp" -B "${WORK}/build" -G Ninja ${CROSS} \
-    -DCMAKE_INSTALL_PREFIX="${WORK}/inst" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_LIBDIR=lib \
+# Build and install trees are keyed by FORMAT. They used to be shared, so a
+# `coff` run left a CMakeCache.txt that made the next `elf` run die at configure
+# with "CMAKE_ASM_COMPILER: /usr/bin/x86_64-w64-mingw32-gcc is not a full path
+# to an existing compiler tool" -- a booby trap for anyone re-verifying this
+# script against an existing vkshim-vol. The elf paths keep their original
+# names, so existing volumes and every reference to /vol/vulkan-probe still
+# work.
+BUILD_DIR="${WORK}/build"
+INST_DIR="${WORK}/inst"
+if [[ ${FORMAT} == coff ]]; then
+    BUILD_DIR="${WORK}/build-coff"
+    INST_DIR="${WORK}/inst-coff"
+fi
+
+# ...and a volume already poisoned by the older, shared-directory version of
+# this script is repaired rather than inherited. A stamp file, not a grep of
+# CMakeCache.txt: re-running cmake over a cross-compiled cache REWRITES
+# CMAKE_C_COMPILER to the new value while leaving the derived tools
+# (CMAKE_C_COMPILER_AR, the ASM compiler) pointing at the old toolchain, so the
+# cache still fails and it no longer looks wrong. Observed exactly that. An
+# unstamped directory is from before this existed, so it is discarded once.
+if [[ -d "${BUILD_DIR}" && "$(cat "${BUILD_DIR}/.nm-format" 2>/dev/null)" != "${FORMAT}" ]]; then
+    echo "== discarding a build directory left by a different target: ${BUILD_DIR}"
+    rm -rf "${BUILD_DIR}"
+fi
+mkdir -p "${BUILD_DIR}"
+echo "${FORMAT}" > "${BUILD_DIR}/.nm-format"
+
+cmake -S "${WORK}/whisper.cpp" -B "${BUILD_DIR}" -G Ninja ${CROSS} \
+    -DCMAKE_INSTALL_PREFIX="${INST_DIR}" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_LIBDIR=lib \
     -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_VULKAN=ON \
     -DVulkan_INCLUDE_DIR="${WORK}/vkinc" -DVulkan_LIBRARY="${WORK}/libvulkan-stub.a" \
     -DVulkan_GLSLC_EXECUTABLE="$(command -v glslc)" \
     -DWHISPER_BUILD_TOOLS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_BUILD_TESTS=OFF \
     -DWHISPER_BUILD_EXAMPLES=OFF > "${WORK}/configure.log" 2>&1
-ninja -j"$(nproc)" -C "${WORK}/build" > "${WORK}/build.log" 2>&1
-ninja -C "${WORK}/build" install >> "${WORK}/build.log" 2>&1
+ninja -j"$(nproc)" -C "${BUILD_DIR}" > "${WORK}/build.log" 2>&1
+ninja -C "${BUILD_DIR}" install >> "${WORK}/build.log" 2>&1
 
 # ggml's CMake install step names these archives with a "lib" prefix on the
 # native (elf) build but without one when cross-compiling for Windows (coff) -
 # verified against both actual builds, not assumed. Resolve whichever exists.
-L="${WORK}/inst/lib"
+L="${INST_DIR}/lib"
 libpath() { [[ -f "${L}/lib$1.a" ]] && echo "${L}/lib$1.a" || echo "${L}/$1.a"; }
 LIBGGML="$(libpath ggml)"
 LIBVULKAN="$(libpath ggml-vulkan)"
@@ -79,7 +107,7 @@ nm --undefined-only "${LIBVULKAN}" 2>/dev/null | grep -oE '\bvk[A-Za-z0-9]+' | s
 # variant-forwarding half of that file would be a duplicate-symbol error here.
 # The backend-selection half - all this probe cares about - is outside that
 # split and is byte for byte the code the real filters link.
-${CC} -O2 -I"${WORK}/inst/include" -I"${WORK}/vkinc" -I"${REPO}/scripts/includes" \
+${CC} -O2 -I"${INST_DIR}/include" -I"${WORK}/vkinc" -I"${REPO}/scripts/includes" \
     -DNM_GGML_CPU_FIXED='"harness"' -static \
     "${REPO}/tools/ggml-variants/vulkan-probe.c" "${REPO}/scripts/includes/vk_loader_shim.c" \
     "${REPO}/scripts/includes/ggml_cpu_dispatch.c" \

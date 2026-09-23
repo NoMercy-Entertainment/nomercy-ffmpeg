@@ -285,3 +285,51 @@ if ldd ./ffmpeg 2>&1 | grep -qi vulkan; then echo "  FAIL: links the loader"; fa
 
 [[ ${fail} -eq 0 ]] && echo PASS || { echo FAILED; exit 1; }
 '
+
+# The machine this whole guard exists for: a software Vulkan stack (Mesa) and no
+# GPU. A SEPARATE container, because the checks above deliberately run in the
+# clean base image and installing mesa-vulkan-drivers there would change what
+# every one of them is testing.
+#
+# This is the filter-level version of the regression that shipped once: the
+# guard used to be the right-hand side of an && with use_gpu, so
+# whisper=...:use_gpu=0 skipped it and died at exit 139 - on the exact option a
+# user reaches for when a GPU is causing trouble. The parse check further up
+# cannot see that, because it runs where there are no ICDs at all. Both filters,
+# both values of use_gpu, all four must exit 0.
+echo
+echo "=== Mesa-container regression: both filters must survive with and without use_gpu ==="
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(cygpath -w "${WORK}")":/work "${IMAGE}" bash -c '
+set -u
+apt-get update -qq >/dev/null 2>&1
+apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers >/dev/null 2>&1
+cd /work
+chmod +x ./ffmpeg
+echo "  ICD manifests present: $(ls /usr/share/vulkan/icd.d/ | wc -l)"
+fail=0
+wh_model=ggml-base.en.bin
+[[ -f ggml-base.en-real.bin ]] && wh_model=ggml-base.en-real.bin
+
+for ug in 1 0; do
+    ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn \
+        -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment:use_gpu=${ug}" \
+        -f null - >/dev/null 2>&1
+    rc=$?
+    echo "  stemsplit use_gpu=${ug}: exit ${rc}"
+    [[ ${rc} -eq 0 ]] || { echo "  FAIL: stemsplit died on a software-Vulkan machine with use_gpu=${ug}"; fail=1; }
+
+    ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn \
+        -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=${wh_model}:language=en:queue=3:use_gpu=${ug}" \
+        -f null - >/dev/null 2>&1
+    rc=$?
+    echo "  whisper   use_gpu=${ug}: exit ${rc}"
+    [[ ${rc} -eq 0 ]] || { echo "  FAIL: whisper died on a software-Vulkan machine with use_gpu=${ug}"; fail=1; }
+done
+
+echo "  guard notice, as the filters report it:"
+./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn \
+    -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment" -f null - 2>&1 \
+    | grep -oE "stemsplit: .*vulkan.*" | head -1 | sed "s/^/    /"
+
+[[ ${fail} -eq 0 ]] && echo "  PASS" || { echo "  FAILED"; exit 1; }
+'

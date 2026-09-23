@@ -2,11 +2,14 @@
  * Exits 0 whether or not a GPU exists - "no GPU" is a valid, expected answer.
  * Exits non-zero only on a crash or a wrong result, which is what we test for.
  *
- * Two modes:
+ * Three modes:
  *   (no argument)      the registry/matmul probe this file started as.
  *   select [use_gpu]   exercise the PRODUCTION selector, nm_ggml_backend_init(),
  *                      so the filters and this probe share one code path and a
- *                      machine that crashes here would have crashed FFmpeg. */
+ *                      machine that crashes here would have crashed FFmpeg.
+ *   whisper-init [ug]  reproduce af_whisper.c's init() ORDERING, which is a
+ *                      different thing from the selector and is where the
+ *                      use_gpu=0 short circuit lived. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -65,6 +68,20 @@ static int mode_select(int use_gpu)
      * existed. */
     usable = nm_ggml_gpu_usable();
     printf("gpu_usable=%d\n", usable);
+    if (nm_ggml_backend_notice())
+        printf("guard_notice=%s\n", nm_ggml_backend_notice());
+    /* Printed AFTER the guard has run, because the guard may rewrite these for
+     * the whole process - which FFmpeg's own Vulkan code reads too. On a
+     * healthy machine they must come back exactly as the caller set them; a
+     * "(unset)" here that turns into "/nonexistent.json" is the whole of
+     * finding C2. */
+    {
+        const char *icd = getenv("VK_ICD_FILENAMES");
+        const char *drv = getenv("VK_DRIVER_FILES");
+
+        printf("vk_icd_filenames=%s\n", icd && *icd ? icd : "(unset)");
+        printf("vk_driver_files=%s\n", drv && *drv ? drv : "(unset)");
+    }
 
     be = nm_ggml_backend_init(use_gpu);
     if (!be) {
@@ -150,9 +167,38 @@ static int mode_registry(void)
     return 0;
 }
 
+/* af_whisper.c's init() ordering, reduced to the lines that matter.
+ *
+ * This mode exists because of a shipped bug no other mode could see: the guard
+ * used to be the right-hand side of `use_gpu && nm_ggml_gpu_usable()`, so
+ * use_gpu=0 short-circuited it away and the ggml_backend_load_all() on the next
+ * line built the registry unguarded - exit 139 on a Mesa machine. `select 0`
+ * cannot catch that: it calls nm_ggml_gpu_usable() unconditionally, which is
+ * precisely what the filter failed to do. So this mode reproduces the FILTER's
+ * control flow, not the selector's. */
+static int mode_whisper_init(int use_gpu)
+{
+    int gpu_usable, gpu_active;
+
+    printf("use_gpu=%d\n", use_gpu);
+
+    /* The line under test: it must not be guarded by use_gpu. */
+    gpu_usable = nm_ggml_gpu_usable();
+    gpu_active = use_gpu && gpu_usable;
+    printf("gpu_usable=%d gpu_active=%d\n", gpu_usable, gpu_active);
+
+    /* What af_whisper.c does next, and what kills an unguarded process. */
+    ggml_backend_load_all();
+    printf("survived ggml_backend_load_all(), devices=%zu\n", ggml_backend_dev_count());
+    printf("PASS\n");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "select"))
         return mode_select(argc > 2 ? atoi(argv[2]) : 1);
+    if (argc > 1 && !strcmp(argv[1], "whisper-init"))
+        return mode_whisper_init(argc > 2 ? atoi(argv[2]) : 1);
     return mode_registry();
 }
