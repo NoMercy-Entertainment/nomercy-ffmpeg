@@ -20,11 +20,28 @@ const char *nm_ggml_cpu_variant_name(void);
 /*
  * Which device should a filter run on?
  *
- * The four functions below share one cached decision, taken the first time any
- * of them is called. That first call is also what runs the software-Vulkan
- * guard, so it MUST happen before anything else in the process touches ggml's
- * backend registry - see ggml_cpu_dispatch.c for why that ordering is a
- * correctness requirement and not a preference.
+ * The functions below share one cached decision, taken the first time any of
+ * them is called. That first call is also what runs the software-Vulkan guard,
+ * so it MUST happen before anything else in the process touches ggml's backend
+ * registry - see ggml_cpu_dispatch.c for why that ordering is a correctness
+ * requirement and not a preference.
+ *
+ * CALL THEM UNCONDITIONALLY. In particular, do not put one on the right-hand
+ * side of an `&&` whose left-hand side can be false: C short-circuits, the
+ * guard then never runs, and the next thing that touches ggml's registry
+ * segfaults on a machine with software Vulkan installed. That is not
+ * hypothetical - it shipped once, as `use_gpu && nm_ggml_gpu_usable()`, and
+ * `use_gpu=0` is precisely the option someone sets when a GPU is misbehaving.
+ *
+ * SIDE EFFECT, deliberate and load bearing: on Linux the first call may
+ * rewrite this PROCESS's VK_ICD_FILENAMES and VK_DRIVER_FILES, because the
+ * Vulkan loader is global and some drivers kill a statically linked binary
+ * during enumeration. FFmpeg's own Vulkan code (the vulkan hwaccel,
+ * libplacebo) reads the same two variables and therefore sees the same reduced
+ * driver list. This happens only when a probe PROVED a crash, or when a
+ * hardware-only list can be substituted for one containing a software
+ * rasteriser; an inconclusive probe changes nothing at all. The first call
+ * also forks, once. Call these early, from one thread, for both reasons.
  */
 
 /*
@@ -57,6 +74,15 @@ const char *nm_ggml_backend_name(void);
  * "what is available", not "what did this filter use".
  */
 const char *nm_ggml_backend_device(void);
+
+/*
+ * One sentence about anything surprising the guard did to this process -
+ * drivers it had to disable, a probe it could not run - or NULL, which is the
+ * answer on every machine where nothing was wrong. Filters log it once at
+ * AV_LOG_INFO so that a user whose GPU quietly vanished has something to pull
+ * on; without it the guard is completely silent about removing a driver.
+ */
+const char *nm_ggml_backend_notice(void);
 
 #ifdef __cplusplus
 }

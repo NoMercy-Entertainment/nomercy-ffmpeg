@@ -935,10 +935,14 @@ static int ss_model_load(AVFilterContext *ctx)
         ret = AVERROR(ENOMEM);
         goto done;
     }
-    /* Asked AFTER the init, not before: a device that enumerated but failed to
-     * open is retired inside nm_ggml_backend_init(), and this has to reflect
-     * what we were actually handed. */
-    s->gpu_active = s->use_gpu && nm_ggml_gpu_usable();
+    /* Read off the backend we were HANDED, not off the request and not off a
+     * global flag. nm_ggml_backend_init() falls back to the CPU on its own if
+     * the device refuses to open a second time, and asking the backend is the
+     * only way to see that - it is also exact, and free of the shared mutable
+     * state (and the data race) a previous version used for the same job. */
+    s->gpu_active = s->use_gpu && !ggml_backend_is_cpu(s->backend);
+    if (nm_ggml_backend_notice())
+        av_log(ctx, AV_LOG_INFO, "stemsplit: %s.\n", nm_ggml_backend_notice());
     av_log(ctx, AV_LOG_INFO, "stemsplit: ggml cpu variant '%s'.\n",
            nm_ggml_cpu_variant_name());
     av_log(ctx, AV_LOG_INFO, "stemsplit: ggml backend '%s' (%s).\n",
@@ -1415,9 +1419,18 @@ static int ss_collect_weight_slots(StemSplitContext *s, struct ggml_tensor ***sl
                 &layers[i]->w, &layers[i]->b, &layers[i]->bn_a, &layers[i]->bn_b,
             };
 
-            for (j = 0; j < 4; j++)
-                if (*cand[j] && n < SS_NB_WEIGHTS)
-                    slots[n++] = cand[j];
+            for (j = 0; j < 4; j++) {
+                if (!*cand[j])
+                    continue;
+                /* Never truncate. Silently dropping a slot here would leave
+                 * that weight host-resident while the graph runs on the
+                 * device - a null dereference inside ggml-vulkan, i.e. exactly
+                 * the failure the upload exists to prevent, on a future model
+                 * with more layers than this bound allows. */
+                if (n >= SS_NB_WEIGHTS)
+                    return -1;
+                slots[n++] = cand[j];
+            }
         }
     }
 
@@ -1443,8 +1456,12 @@ static int ss_weights_to_backend(AVFilterContext *ctx)
     av_assert0(!s->weights_ctx && !s->nb_weights);
 
     n = ss_collect_weight_slots(s, slots);
-    if (!n)
+    if (n <= 0) {
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: this model has more weight tensors than the GPU "
+               "upload can hold (max %d); staying on the CPU.\n", SS_NB_WEIGHTS);
         return AVERROR(EINVAL);
+    }
 
     /* Metadata only; ggml_backend_alloc_ctx_tensors owns the data. The slack
      * is ggml's own per-context bookkeeping allowance. */

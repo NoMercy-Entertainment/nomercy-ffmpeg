@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>   // strstr, for reading whisper.cpp back-end report out of its log
 
 #include <whisper.h>
 #include "nm_ggml_cpu.h"
@@ -52,6 +53,8 @@ typedef struct WhisperContext {
      * lavfi.whisper.backend metadata report this, never the request - a run
      * that asked for a GPU and quietly got the CPU must not claim otherwise. */
     int gpu_active;
+    /* Set by cb_log when whisper.cpp reports it did not get a GPU. */
+    int gpu_log_no_gpu;
     char *vad_model_path;
     float vad_threshold;
     int64_t vad_min_speech_duration;
@@ -85,7 +88,16 @@ typedef struct WhisperContext {
 static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
 {
     AVFilterContext *ctx = user_data;
+    WhisperContext *wctx = ctx->priv;
     int av_log_level = AV_LOG_DEBUG;
+
+    // whisper.cpp's own account of which backend it took. See the snapshot in
+    // init() for why this is read out of a log line rather than an API, and
+    // why only the negative direction is acted on.
+    if (text && (strstr(text, "whisper_backend_init_gpu: no GPU found") ||
+                 strstr(text, "whisper_backend_init_gpu: failed to initialize")))
+        wctx->gpu_log_no_gpu = 1;
+
     switch (level) {
     case GGML_LOG_LEVEL_ERROR:
         av_log_level = AV_LOG_ERROR;
@@ -104,15 +116,25 @@ static int init(AVFilterContext *ctx)
     static AVOnce init_static_once = AV_ONCE_INIT;
 
     // Ask FIRST, before ggml_backend_load_all() or anything else can reach
-    // ggml's backend registry. nm_ggml_gpu_usable()'s first call is what
-    // neutralises software Vulkan ICDs, and on a Linux box with Mesa installed
-    // the loader segfaults inside its own driver probe - i.e. inside the
-    // registry's constructor, which ggml_backend_load_all() would trigger.
-    // Once that guard has run, the order stops mattering; before it, this is
-    // the difference between a CPU fallback and exit 139.
-    wctx->gpu_active = wctx->use_gpu && nm_ggml_gpu_usable();
+    // ggml's backend registry. nm_ggml_gpu_usable()'s first call is what makes
+    // this process safe to enumerate Vulkan in, and on a Linux box with Mesa
+    // installed the loader segfaults inside its own driver probe - i.e. inside
+    // the registry's constructor, which ggml_backend_load_all() triggers.
+    //
+    // On its OWN LINE, not as the right-hand side of `use_gpu && ...`. That is
+    // what this was, and C short-circuits: with use_gpu=0 the guard never ran
+    // and the very next line killed the process. Reproduced at exit 139 - on
+    // the one option a user reaches for when a GPU is causing trouble.
+    const int gpu_usable = nm_ggml_gpu_usable();
+
+    wctx->gpu_active = wctx->use_gpu && gpu_usable;
 
     ff_thread_once(&init_static_once, ggml_backend_load_all);
+
+    // Only ever non-NULL when the guard had to do something a user would want
+    // to know about, such as disabling a driver.
+    if (nm_ggml_backend_notice())
+        av_log(ctx, AV_LOG_INFO, "whisper: %s.\n", nm_ggml_backend_notice());
 
     whisper_log_set(cb_log, ctx);
 
@@ -135,6 +157,26 @@ static int init(AVFilterContext *ctx)
     if (wctx->ctx_wsp == NULL) {
         av_log(ctx, AV_LOG_ERROR, "Failed to initialize whisper context from model: %s\n", wctx->model_path);
         return AVERROR(EIO);
+    }
+
+    // What whisper.cpp ACTUALLY got, which is not always what it was asked
+    // for: whisper_backend_init_gpu() calls ggml_backend_dev_init() itself and
+    // simply returns nullptr on failure, after which the whole context runs on
+    // the CPU without telling its caller. There is no public accessor for the
+    // chosen backend in whisper.h (checked, v1.9.1), so the only signal is the
+    // log line it emits on that path, which cb_log above has already seen by
+    // now - whisper_init_from_file_with_params() has returned.
+    //
+    // Deliberately one-directional: an observed failure clears the flag, and
+    // the absence of any message leaves it alone. A string that upstream
+    // renames therefore costs us a downgrade we failed to notice, never a
+    // downgrade we invented. Snapshotted HERE, before the VAD context below
+    // initialises, because whisper forces use_gpu=false for VAD and would emit
+    // the same "no GPU found" line for a run that has nothing to do with this.
+    if (wctx->gpu_active && wctx->gpu_log_no_gpu) {
+        av_log(ctx, AV_LOG_WARNING,
+               "whisper: whisper.cpp did not take the GPU after all; running on the CPU.\n");
+        wctx->gpu_active = 0;
     }
 
     // ggml_backend_cpu_init() inside whisper.cpp resolves to the

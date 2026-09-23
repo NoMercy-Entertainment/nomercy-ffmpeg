@@ -58,6 +58,19 @@ if [[ ${TARGET_OS} != darwin && ${TARGET_OS} != freebsd ]]; then
     NM_VULKAN=1
 fi
 
+# Told to ggml_cpu_dispatch.c so its fork-based Vulkan guard compiles out where
+# there is no Vulkan to guard: darwin and freebsd would otherwise fork a child
+# per process to probe a backend that is not linked.
+#
+# The polarity is deliberate. A build that says NOTHING gets the guard - one
+# wasted fork. The other way round, a forgotten flag would be a segfault on any
+# machine with software Vulkan installed, so the fail-safe direction is "guard
+# on unless the build explicitly says there is no Vulkan".
+NM_DISPATCH_VK_FLAG=""
+if [[ ${NM_VULKAN} == 0 ]]; then
+    NM_DISPATCH_VK_FLAG="-DNM_NO_VULKAN=1"
+fi
+
 if [[ ${NM_VULKAN} == 1 ]]; then
     # Vulkan_INCLUDE_DIR points at this platform's own Vulkan-Headers install
     # (scripts/45-vulkan.sh, which runs before this script on every platform
@@ -87,20 +100,25 @@ if [[ ${NM_VULKAN} == 1 ]]; then
 
     # SPIR-V headers, staged into ${PREFIX}/include.
     #
-    # ggml-vulkan.cpp finds them with __has_include (three candidate layouts,
-    # ggml-vulkan.cpp:40-45), so a miss is SILENT at the #include and only
-    # surfaces two thousand lines later as a wall of "'spv' has not been
-    # declared". The apt package installs them under /usr/include, which a
-    # native compiler searches and a cross compiler does not -- which is
-    # exactly why linux-x86_64 built clean while windows-x86_64 failed the
-    # moment NM_VULKAN reached it (mingw-w64 does not search /usr/include).
-    # ${PREFIX}/include is already on the include path for every target via
-    # Vulkan_INCLUDE_DIR below, so staging them there fixes the cross builds
-    # without changing the native ones. 3.5 MB of headers, build-time only.
+    # Why they are not already there: ggml-vulkan's own CMakeLists does
+    # find_package(SPIRV-Headers CONFIG REQUIRED) at line 14 but never links
+    # SPIRV-Headers::SPIRV-Headers -- its only target_link_libraries is
+    # Vulkan::Vulkan (line 100). So configure succeeds off the apt package's
+    # cmake config while the headers themselves only ever reach the compiler
+    # through Vulkan_INCLUDE_DIR, which is exactly what this staging provides.
+    # The apt package puts them in /usr/include, which a native compiler
+    # searches and a cross compiler does not -- which is why linux-x86_64 built
+    # clean and windows-x86_64 did not, the moment NM_VULKAN reached it.
     #
-    # The find_package(SPIRV-Headers CONFIG REQUIRED) in ggml-vulkan's own
-    # CMakeLists is a separate thing and is satisfied by the apt package's
-    # cmake config; it does not put the headers on the compiler's path.
+    # And the failure is silent where it hurts. ggml-vulkan.cpp:40-49 tries
+    # three layouts with __has_include and has an #else that re-includes
+    # <spirv/unified1/spirv.hpp> "to let the compiler throw a standard file not
+    # found error". With x86_64-w64-mingw32-g++ on Ubuntu 24.04 it does not:
+    # reproduced with a 14-line file, the #else branch is taken, the include
+    # produces NO diagnostic at all, and the only error is a wall of "'spv' has
+    # not been declared" two thousand lines further down. Hence the explicit
+    # check below -- it is what turns that into a one-line failure at the top
+    # of this script. 3.5 MB of headers, build-time only.
     if [[ ! -f ${PREFIX}/include/spirv/unified1/spirv.hpp && -d /usr/include/spirv ]]; then
         cp -r /usr/include/spirv ${PREFIX}/include/spirv \
             || { log "Error: staging SPIR-V headers into ${PREFIX}/include failed"; exit 1; }
@@ -374,7 +392,7 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
 
     log "Built ${nm_index} ggml CPU variants"
 
-    ${CC:-cc} ${CFLAGS} -I${nm_variant_dir} -I/scripts/includes -I${PREFIX}/include \
+    ${CC:-cc} ${CFLAGS} ${NM_DISPATCH_VK_FLAG} -I${nm_variant_dir} -I/scripts/includes -I${PREFIX}/include \
         -c /scripts/includes/ggml_cpu_dispatch.c -o ${nm_variant_dir}/dispatch.o 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: dispatcher build failed"; exit 1; fi
 
@@ -464,7 +482,7 @@ else
     nm_variant_dir=/build/whisper-variants
     rm -rf ${nm_variant_dir} && mkdir -p ${nm_variant_dir}
 
-    ${CC:-cc} ${CFLAGS} "-DNM_GGML_CPU_FIXED=\"${NM_GGML_CPU_FIXED_NAME}\"" \
+    ${CC:-cc} ${CFLAGS} "-DNM_GGML_CPU_FIXED=\"${NM_GGML_CPU_FIXED_NAME}\"" ${NM_DISPATCH_VK_FLAG} \
         -I/scripts/includes -I${PREFIX}/include \
         -c /scripts/includes/ggml_cpu_dispatch.c -o ${nm_variant_dir}/dispatch.o 2>&1 | log -a
     if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: fixed-mode dispatcher build failed"; exit 1; fi
