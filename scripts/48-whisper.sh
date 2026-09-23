@@ -85,6 +85,29 @@ if [[ ${NM_VULKAN} == 1 ]]; then
     nm_glslc=$(command -v glslc) \
         || { log "Error: NM_VULKAN=1 but glslc was not found on PATH"; exit 1; }
 
+    # SPIR-V headers, staged into ${PREFIX}/include.
+    #
+    # ggml-vulkan.cpp finds them with __has_include (three candidate layouts,
+    # ggml-vulkan.cpp:40-45), so a miss is SILENT at the #include and only
+    # surfaces two thousand lines later as a wall of "'spv' has not been
+    # declared". The apt package installs them under /usr/include, which a
+    # native compiler searches and a cross compiler does not -- which is
+    # exactly why linux-x86_64 built clean while windows-x86_64 failed the
+    # moment NM_VULKAN reached it (mingw-w64 does not search /usr/include).
+    # ${PREFIX}/include is already on the include path for every target via
+    # Vulkan_INCLUDE_DIR below, so staging them there fixes the cross builds
+    # without changing the native ones. 3.5 MB of headers, build-time only.
+    #
+    # The find_package(SPIRV-Headers CONFIG REQUIRED) in ggml-vulkan's own
+    # CMakeLists is a separate thing and is satisfied by the apt package's
+    # cmake config; it does not put the headers on the compiler's path.
+    if [[ ! -f ${PREFIX}/include/spirv/unified1/spirv.hpp && -d /usr/include/spirv ]]; then
+        cp -r /usr/include/spirv ${PREFIX}/include/spirv \
+            || { log "Error: staging SPIR-V headers into ${PREFIX}/include failed"; exit 1; }
+    fi
+    [[ -f ${PREFIX}/include/spirv/unified1/spirv.hpp ]] \
+        || { log "Error: NM_VULKAN=1 but no spirv/unified1/spirv.hpp under ${PREFIX}/include (is spirv-headers installed?)"; exit 1; }
+
     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_VULKAN=ON"
     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_INCLUDE_DIR=${PREFIX}/include"
     WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DVulkan_LIBRARY=${nm_vk_dir}/libvulkan-stub.a"
