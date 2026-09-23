@@ -84,16 +84,53 @@ if [[ ${TARGET_OS} != windows && ${TARGET_OS} != freebsd ]]; then
     extra_libs="${extra_libs} -fopenmp"
 fi
 
+# NM_SEED_PREFIX (optional): a host directory whose contents get copied into
+# ${PREFIX} inside the container before 48-whisper.sh/60-stemsplit.sh run.
+# The harness only ever runs those two numbered scripts, not the full
+# init.sh pipeline, so anything an EARLIER numbered script would normally
+# have installed into PREFIX (e.g. windows-x86_64's OpenBLAS, built by
+# includes/windows/48-openblas.sh before 48-whisper.sh in a real init.sh
+# run) has to be seeded in some other way for this harness to reach the
+# same code path (48-whisper.sh's `-f ${PREFIX}/lib/libopenblas.a` gate for
+# -DGGML_BLAS=ON). Not needed on platforms with nothing to seed.
+seed_mount=()
+if [[ -n "${NM_SEED_PREFIX:-}" ]]; then
+    [[ -d ${NM_SEED_PREFIX} ]] || { echo "build-common.sh: no such NM_SEED_PREFIX dir: ${NM_SEED_PREFIX}" >&2; exit 1; }
+    seed_mount=(-v "$(cygpath -w "${NM_SEED_PREFIX}")":/seed:ro)
+fi
+
+# windows-x86_64/aarch64: the base image (nomercyentertainment/ffmpeg-base)
+# carries no mingw-w64 cross toolchain -- that gets installed by a RUN
+# apt-get in the platform's own ffmpeg-windows-*.dockerfile, a layer this
+# harness deliberately does not build (it only lifts ENV lines out of the
+# dockerfile; see the loop above). Install just the packages 48-whisper.sh's
+# CC/CXX/AR/NM/LD/etc. env vars point at, so this harness reaches the same
+# compiler the real image would have. No-op on every other TARGET_OS.
+windows_setup=""
+if [[ ${TARGET_OS} == windows ]]; then
+    windows_setup='
+apt-get update >/tmp/apt.log 2>&1 || { cat /tmp/apt.log; exit 1; }
+apt-get install -y --no-install-recommends mingw-w64 mingw-w64-tools mingw-w64-x86-64-dev mingw-w64-common >>/tmp/apt.log 2>&1 \
+    || { cat /tmp/apt.log; exit 1; }
+'
+fi
+
 mkdir -p "${WORK}"
 MSYS_NO_PATHCONV=1 docker run --rm \
     -v "$(cygpath -w "${REPO}/scripts")":/scripts:ro \
     -v "$(cygpath -w "${WORK}")":/out \
+    "${seed_mount[@]}" \
     "${env_args[@]}" -e TARGET_OS="${TARGET_OS}" -e ARCH="${ARCH}" \
     -e NM_FFMPEG_TARGET_OS="${ffmpeg_target_os}" -e NM_EXTRA_LIBS="${extra_libs}" \
+    -e NM_WINDOWS_SETUP="${windows_setup}" \
     "${IMAGE}" bash -c '
 set -eu
+eval "${NM_WINDOWS_SETUP}"
 export PATH="${PREFIX}/bin:${PATH}"
 mkdir -p /build "${PREFIX}/lib/pkgconfig" "${PREFIX}/include" "${PREFIX}/bin"
+if [[ -d /seed ]]; then
+    cp -a /seed/. "${PREFIX}/"
+fi
 cd /build
 
 # init.sh normally sources these and exports them before running any
@@ -141,5 +178,9 @@ if [[ -f ${PREFIX}/lib/libggml-cpu-variants.a ]]; then
         ${NM_EXTRA_LIBS}
 fi
 cp /ffmpeg_build.log /out/ffmpeg_build.log 2>/dev/null || true
+# Verification-only: expose the generated whisper.pc so a harness can grep
+# it for real (e.g. -lggml-blas / -lggml-cpu-variants) instead of only
+# reading the generator script that produced it.
+cp ${PREFIX}/lib/pkgconfig/whisper.pc /out/whisper.pc 2>/dev/null || true
 '
 echo "built into ${WORK}"
