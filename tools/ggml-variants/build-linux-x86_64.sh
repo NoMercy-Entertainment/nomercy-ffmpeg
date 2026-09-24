@@ -339,17 +339,23 @@ done
 # the process to die inside ggml_backend_load_all(); it now pins as a
 # precaution, so the real filter must survive an unusable budget on a machine
 # with fatal ICDs. Both filters, both use_gpu values.
+# Both knobs, because they are distinct paths into the precaution: an
+# exhausted total budget returns UNKNOWN from nm_vk_probe before it forks at
+# all, while an unusable per-probe cap forks and then times out. Only the first
+# was covered when this block was added.
 echo "  with an unusable guard budget (the precautionary path):"
+for knob in NOMERCY_VK_GUARD_MS NOMERCY_VK_PROBE_MS; do
 for ug in 1 0; do
-    NOMERCY_VK_GUARD_MS=1 ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn         -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=${wh_model}:language=en:queue=3:use_gpu=${ug}"         -f null - >/dev/null 2>&1
+    env ${knob}=1 ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn         -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=${wh_model}:language=en:queue=3:use_gpu=${ug}"         -f null - >/dev/null 2>&1
     rc=$?
-    echo "    whisper   use_gpu=${ug}, GUARD_MS=1: exit ${rc}"
-    [[ ${rc} -eq 0 ]] || { echo "  FAIL: whisper died when the guard could not finish in time"; fail=1; }
+    echo "    whisper   use_gpu=${ug}, ${knob}=1: exit ${rc}"
+    [[ ${rc} -eq 0 ]] || { echo "  FAIL: whisper died when the guard could not finish (${knob})"; fail=1; }
 
-    NOMERCY_VK_GUARD_MS=1 ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn         -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment:use_gpu=${ug}"         -f null - >/dev/null 2>&1
+    env ${knob}=1 ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn         -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment:use_gpu=${ug}"         -f null - >/dev/null 2>&1
     rc=$?
-    echo "    stemsplit use_gpu=${ug}, GUARD_MS=1: exit ${rc}"
-    [[ ${rc} -eq 0 ]] || { echo "  FAIL: stemsplit died when the guard could not finish in time"; fail=1; }
+    echo "    stemsplit use_gpu=${ug}, ${knob}=1: exit ${rc}"
+    [[ ${rc} -eq 0 ]] || { echo "  FAIL: stemsplit died when the guard could not finish (${knob})"; fail=1; }
+done
 done
 
 # The precautionary pin must never be reported as an observed crash: that
@@ -359,6 +365,19 @@ echo "  precautionary wording: ${notice:-<none>}"
 case "${notice}" in
     *"could not verify"*) echo "    ok: reported as a precaution" ;;
     *) echo "  FAIL: the precautionary path did not say so (got: ${notice:-<none>})"; fail=1 ;;
+esac
+
+# ...and the same discipline pointing the other way. A budget big enough to
+# watch the whole set crash but too small to finish the bisect reaches the
+# precaution arm having ALREADY seen the machine die. It must not then claim
+# nothing is broken, nor recommend NOMERCY_VK_ICD_GUARD=0, which on this exact
+# machine is exit 139.
+crashnotice=$(NOMERCY_VK_GUARD_MS=80 ./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn     -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment" -f null - 2>&1     | grep -oE "stemsplit: (could not verify|this machine.s vulkan drivers crash)[^.]*" | head -1)
+echo "  wording after an observed crash: ${crashnotice:-<none>}"
+case "${crashnotice}" in
+    *"could not verify"*) echo "  FAIL: told a machine we watched crash that nothing is broken"; fail=1 ;;
+    *"crash"*)            echo "    ok: still reported as the crash it observed" ;;
+    *)                    echo "    note: the bisect completed at this budget; nothing to check here" ;;
 esac
 
 echo "  guard notice, as the filters report it:"
