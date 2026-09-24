@@ -397,8 +397,10 @@ order. So the GPU is a speed change and nothing else.
 **`stemsplit` is off by default because the output does change.** ggml's
 Vulkan backend accumulates convolutions in 16-bit float on any GPU with
 cooperative-matrix support. Against the CPU reference that is **-58.8 dB** —
-audible in principle, and well outside the ~-103 dB that separates the CPU
-instruction levels above. `GGML_VK_DISABLE_COOPMAT=1` takes it to -98.7 dB at
+well below the threshold of audibility, but not bit-identical, and far larger
+than the ~-103 dB that separates the CPU instruction levels above. The default
+is off because it would silently change the output every existing `stemsplit`
+command line produces, not because you would hear it. `GGML_VK_DISABLE_COOPMAT=1` takes it to -98.7 dB at
 the same speed, but that variable is process-global and costs `whisper` 3.5x,
 so the two filters cannot both have what they want in one process. Until that
 is settled, `stemsplit` will not move anyone's audio without being asked:
@@ -447,7 +449,7 @@ found, and the three are deliberately worded differently:
 The middle one is not a fault report — it means the check ran out of time, not
 that your machine is broken.
 
-**Two escape hatches**, if the check ever gets it wrong on your machine:
+**Escape hatches**, if the check ever gets it wrong on your machine:
 
 | variable | effect |
 |---|---|
@@ -456,15 +458,17 @@ that your machine is broken.
 
 `NOMERCY_VK_GUARD_MS=<ms>` raises the check's time budget, which is the right
 knob if you see the "could not verify" message on a machine you know is fine.
-All three exist only where the check does; Windows has no driver check and
-`NOMERCY_GGML_GPU=0` is the only one of the three that applies there.
+`NOMERCY_GGML_GPU=0` works on **every** platform — it is read by the backend
+selector, not by the driver check. `NOMERCY_VK_ICD_GUARD` and
+`NOMERCY_VK_GUARD_MS` belong to the driver check, so they do nothing on Windows
+and macOS, which have none.
 
 **Platforms.**
 
 | platform | Vulkan | notes |
 |---|---|---|
-| linux-x86_64 | ✅ | Verified. |
-| windows-x86_64 | ✅ | Verified on an RTX 3070. |
+| linux-x86_64 | ✅ | Verified **without** a GPU: no-driver, hostile-driver and software-rasteriser machines all fall back to the CPU cleanly. GPU *selection* has only been measured on Windows — no Linux box with a real GPU has been tested. |
+| windows-x86_64 | ✅ | Verified with a GPU, on an RTX 3070. The only row where GPU selection itself was measured. |
 | linux-aarch64 | ✅ | Built and verified under emulation; no ARM GPU has been measured. |
 | windows-aarch64 | ✅ | Built and statically verified; not yet executed on Windows-on-ARM hardware. |
 | freebsd-x86_64 | ❌ | These binaries link statically, and FreeBSD's static `dlopen` always fails, so a loader could never be opened. |

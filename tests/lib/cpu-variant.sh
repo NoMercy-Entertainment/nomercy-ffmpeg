@@ -269,47 +269,58 @@ vulkan_platform_has_guard() {
 	esac
 }
 
-# The guard reaches three DIFFERENT verdicts and must never confuse them in
-# what it tells the user:
+# The guard's VOCABULARY, not its behaviour. It reaches four different
+# verdicts and must never confuse them in what it tells the user:
 #
-#   1. an observed crash        - a conclusion. "your drivers crash a static
-#                                 binary, vulkan is off".
-#   2. a precaution             - the guard could not finish deciding. It must
-#                                 say in so many words that this is NOT a
-#                                 report that anything is broken, and name the
-#                                 escape hatches, because the machine may be
-#                                 perfectly healthy.
-#   3. a clean machine          - software rasteriser only; nothing is wrong
-#                                 and the loader configuration is left alone.
+#   1. an observed crash, fully identified - a conclusion.
+#   2. an observed crash the bisect could not finish attributing - it must say
+#      it could not finish, and offer the budget knob, but NOT offer to skip
+#      the check, which on that machine means reproducing the crash.
+#   3. a precaution - the guard could not decide at all. It must say in so many
+#      words that this is NOT a report that anything is broken.
+#   4. a clean machine - software rasteriser only; the loader is left alone.
 #
-# Four review rounds went into separating these, and two of the findings were
-# exactly this wording collapsing: an unverifiable machine being told it had
-# crashed, and a machine that had just crashed being told nothing was broken.
-# Asserting the three phrases still exist and are distinct is cheap, works on
-# platforms no runner can execute, and catches a refactor that merges the arms
-# far earlier than any runtime test would.
+# Four review rounds went into separating these and two of the findings were
+# exactly this wording collapsing, so the phrases are the feature.
 #
-# Prints a diagnostic and returns 1 on failure; silent on success.
-vulkan_guard_verdicts_distinct() {
+# WHAT THIS PROVES, AND WHAT IT DOES NOT. It proves the vocabulary survives: if
+# an arm is deleted or its message merged into another's, at least one phrase
+# leaves the binary and this fails by name. It does NOT prove the arms still
+# print their own message - a refactor that made arm 2 print arm 3's wording,
+# leaving all four strings in the image, passes here. That claim needs the arms
+# actually observed, which needs a machine whose drivers misbehave, and it
+# lives in tools/ggml-variants/build-linux-x86_64.sh's Mesa block instead.
+#
+# It is deliberately kept as a string search anyway, and deliberately not made
+# cleverer: on linux-aarch64, windows-aarch64 and freebsd-x86_64 no runner here
+# can execute the binary at all, so this is the ONLY automated coverage those
+# platforms can get. Its job is breadth.
+#
+# Renamed from vulkan_guard_verdicts_distinct, which promised what the Mesa
+# block delivers.
+vulkan_guard_vocabulary_intact() {
 	local bin="$1" missing="" phrase
-	# One phrase per arm, each unique to that arm.
+	# One phrase per arm, each unique to that arm. Arm 2 ("could not finish
+	# identifying which") arrives from 7b98498 and was missing from this
+	# list until the Task 6 review caught it - the arm round 5 exists to
+	# create could have been deleted with this check still green.
 	for phrase in \
 		"vulkan disabled for this process" \
+		"could not finish identifying which" \
 		"not a report that anything is broken" \
 		"the loader configuration is unchanged"; do
 		grep -aq "${phrase}" "${bin}" || missing="${missing}
     missing: \"${phrase}\""
 	done
-	# The precaution arm must name both escape hatches it tells people to
-	# reach for. A notice that says "this is not a report that anything is
-	# broken" and then leaves the reader no way to act on it is worse than
-	# no notice.
+	# Both escape hatches the notices tell people to reach for. A notice that
+	# says "this is not a report that anything is broken" and then leaves the
+	# reader no way to act on it is worse than no notice.
 	for phrase in NOMERCY_VK_GUARD_MS NOMERCY_VK_ICD_GUARD; do
 		grep -aq "${phrase}" "${bin}" || missing="${missing}
     missing escape hatch: ${phrase}"
 	done
 	if [[ -n "${missing}" ]]; then
-		echo "FAIL: the guard's verdict wording has been collapsed or lost:${missing}"
+		echo "FAIL: the guard's verdict vocabulary has been collapsed or lost:${missing}"
 		return 1
 	fi
 	return 0
@@ -321,39 +332,166 @@ vulkan_guard_verdicts_distinct() {
 # makes it the single most representative environment available for the case
 # four separate startup crashes were found in.
 #
-# Four configurations, all needing nothing but the binary:
-#   * as the runner is           - the plain no-driver case.
-#   * VK_ICD_FILENAMES / VK_DRIVER_FILES pointing at a file that is not there
-#                                - a loader present and configured to find
-#                                  nothing, which is the shape the guard
-#                                  itself pins to.
-#   * NOMERCY_VK_ICD_GUARD=0     - the escape hatch the precaution notice tells
-#   * NOMERCY_GGML_GPU=0           people to use. If either stopped working the
-#                                  advice printed on a struggling machine would
-#                                  be wrong, which is worse than not offering
-#                                  it.
+# THIS USED TO RUN `ffmpeg -version`, AND THAT WAS THE BUG. `-version` never
+# builds a filtergraph, so it never instantiates whisper or stemsplit, so it
+# never reaches ggml's backend registry -- and the registry is the thing that
+# crashes. Measured by the Task 6 reviewer on one binary in one
+# mesa-vulkan-drivers container, back to back:
 #
-# $1 = ffmpeg path. Prints one line per failing attempt and returns 1; silent
-# on success.
+#     whisper instantiated, guard ON   -> exit 251   (clean error)
+#     whisper instantiated, guard OFF  -> exit 139   (Segmentation fault)
+#     ffmpeg -version,      guard ON   -> exit 0
+#     ffmpeg -version,      guard OFF  -> exit 0
+#
+# So the old predicate reported PASS for a configuration guaranteed to kill a
+# real filter on that machine, while its success line claimed the binary
+# "starts cleanly ... with either escape hatch set". An assertion that
+# advertises coverage it does not have is the fifth instance of that shape on
+# this branch; it is not going to be the one that ships.
+#
+# The probe therefore instantiates the whisper filter for real. af_whisper.c's
+# init() calls nm_ggml_gpu_usable() and ggml_backend_load_all() BEFORE it
+# rejects a missing model (af_whisper.c:168-182), so this needs no model file
+# and no media -- and the "No whisper model path specified" error it comes back
+# with is positive proof that ggml init was reached and survived, which is
+# stronger than merely not crashing.
+
+# 0.1 s of 16 kHz mono silence, written by hand. Only used when the binary has
+# no lavfi input device: the shipped builds do, but the ggml harness builds are
+# --disable-everything and do not, and a probe that quietly degrades to "could
+# not test anything" on some builds is how this check went wrong the first
+# time. 44-byte canonical WAV header + 3200 zero samples.
+_vulkan_write_silence() {
+	local out="$1" n=3200 bytes=$((3200 * 2))
+	{
+		printf 'RIFF'
+		printf "$(printf '\x%02x\x%02x\x%02x\x%02x' \
+			$(( (bytes + 36) & 255 )) $(( ((bytes + 36) >> 8) & 255 )) \
+			$(( ((bytes + 36) >> 16) & 255 )) $(( ((bytes + 36) >> 24) & 255 )))"
+		printf 'WAVEfmt '
+		printf '\x10\x00\x00\x00\x01\x00\x01\x00\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00'
+		printf 'data'
+		printf "$(printf '\x%02x\x%02x\x%02x\x%02x' \
+			$(( bytes & 255 )) $(( (bytes >> 8) & 255 )) \
+			$(( (bytes >> 16) & 255 )) $(( (bytes >> 24) & 255 )))"
+		head -c "${bytes}" /dev/zero
+	} > "${out}" 2>/dev/null || return 1
+	[[ -s "${out}" ]]
+}
+
+# Runs the whisper filter once, under whatever environment the caller has set,
+# and classifies what came back. Echoes a diagnostic; returns:
+#   0 - reached ggml init and returned (proved by the model rejection)
+#   1 - died on a signal: a crash, which is exactly what is being tested for
+#   2 - the filter could not be instantiated here at all, for an unrelated
+#       reason. Never reported as a pass.
+# $1 = ffmpeg, $2 = "lavfi" or a path to a wav.
+_vulkan_filter_probe() {
+	local ffmpeg="$1" input="$2" out code
+	if [[ "${input}" == "lavfi" ]]; then
+		out=$("${ffmpeg}" -hide_banner -loglevel error -nostats \
+			-f lavfi -i "anullsrc=channel_layout=mono:sample_rate=16000" -t 0.1 \
+			-af whisper -f null - 2>&1)
+	else
+		out=$("${ffmpeg}" -hide_banner -loglevel error -nostats \
+			-i "${input}" -t 0.1 -af whisper -f null - 2>&1)
+	fi
+	code=$?
+
+	# Positive proof FIRST, and it is the real discriminator. af_whisper.c
+	# prints this only after nm_ggml_gpu_usable() and ggml_backend_load_all()
+	# have both returned (af_whisper.c:168-182), so seeing it means the
+	# process reached ggml init and came back. A crash during init means it
+	# never prints.
+	if echo "${out}" | grep -q "No whisper model path specified"; then
+		return 0
+	fi
+
+	# Only then the exit code, and NOT as ">= 128". That rule is wrong here:
+	# ffmpeg exits with 256+AVERROR, so a perfectly ordinary
+	# AVERROR(EINVAL) is 234 and AVERROR(EIO) is 251 -- measured, this probe
+	# returns 234 for the missing model. Reading those as "signal 106" and
+	# "signal 123" would turn every healthy run into a reported crash, which
+	# is the same kind of wrong as the bug this rewrite fixes, pointing the
+	# other way. Only the signals a crash actually arrives as.
+	case ${code} in
+	132 | 134 | 135 | 136 | 137 | 139)
+		echo "crashed: exit ${code} (killed by signal $((code - 128)))"
+		echo "${out}" | tail -6
+		return 1 ;;
+	esac
+
+	echo "could not instantiate the whisper filter here (exit ${code}); this configuration proved nothing"
+	echo "${out}" | tail -4
+	return 2
+}
+
+# $1 = ffmpeg path. Echoes diagnostics; returns 0 on proof, 1 on a crash in a
+# configuration that promises not to crash, 2 if the filter could not be
+# instantiated at all on this build.
+#
+# WHICH CONFIGURATIONS ARE ALLOWED TO CRASH, which is the whole contract:
+#
+#   * default, no driver findable, NOMERCY_GGML_GPU=0 -- these MUST NOT crash,
+#     ever, on any machine. That is the branch's headline guarantee.
+#   * NOMERCY_VK_ICD_GUARD=0 -- this one is ALLOWED to crash, and asserting
+#     otherwise would be wrong. It means "skip the driver check and use Vulkan
+#     as-is", i.e. opt out of the protection; on a machine whose drivers really
+#     do kill a static binary, crashing is the documented consequence of
+#     setting it (Task 3's N11 is exactly about not recommending it to such a
+#     machine). Measured here: on a container with mesa installed, the guard-on
+#     run returns cleanly and the guard-off run is exit 139. Failing CI for
+#     that would be a false failure on correct behaviour -- and GitHub's
+#     ubuntu runners do ship software Vulkan drivers, so it would fire. It is
+#     run anyway, because "the guard is load-bearing on this machine" is worth
+#     printing; it just reports instead of failing.
 vulkan_startup_ok() {
-	local ffmpeg="$1" out code label
+	local ffmpeg="$1" input="lavfi" tmp spec label rc diag
+	local inconclusive=0
+
+	# lavfi first: no temp file, and it is what a shipped build uses. The
+	# ggml harness builds are --disable-everything and have no lavfi indev,
+	# so fall back to a silent wav rather than quietly proving nothing.
+	if ! _vulkan_filter_probe "${ffmpeg}" lavfi >/dev/null 2>&1; then
+		tmp="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/nm-vk-$$")"
+		mkdir -p "${tmp}"
+		if _vulkan_write_silence "${tmp}/silence.wav"; then
+			input="${tmp}/silence.wav"
+		fi
+	fi
+
+	# label:may-crash:env
 	local -a envs=(
-		"as the runner is:"
-		"no driver findable:VK_ICD_FILENAMES=/nonexistent.json VK_DRIVER_FILES=/nonexistent.json"
-		"guard disabled:NOMERCY_VK_ICD_GUARD=0"
-		"gpu disabled:NOMERCY_GGML_GPU=0"
+		"as the runner is:no:"
+		"no driver findable:no:VK_ICD_FILENAMES=/nonexistent.json VK_DRIVER_FILES=/nonexistent.json"
+		"gpu disabled:no:NOMERCY_GGML_GPU=0"
+		"guard disabled:yes:NOMERCY_VK_ICD_GUARD=0"
 	)
-	local spec
 	for spec in "${envs[@]}"; do
 		label="${spec%%:*}"
+		# Two statements, not one `local a=.. b=..`: the second initialiser
+		# would be expanded before the first assignment lands, which under
+		# set -u is an unbound-variable abort rather than an empty string.
+		local rest="${spec#*:}"
+		local may_crash="${rest%%:*}"
 		# shellcheck disable=SC2086
-		out=$(env ${spec#*:} "${ffmpeg}" -hide_banner -version 2>&1)
-		code=$?
-		if [[ ${code} -ne 0 ]]; then
-			echo "FAIL: '${ffmpeg} -version' did not start (${label}), exit ${code}"
-			echo "${out}" | tail -5
-			return 1
-		fi
+		diag=$(env ${rest#*:} bash -c '
+			source "$0"
+			_vulkan_filter_probe "$1" "$2"' "${BASH_SOURCE[0]}" "${ffmpeg}" "${input}")
+		rc=$?
+		case ${rc} in
+		0) ;;
+		1) if [[ ${may_crash} == yes ]]; then
+			   echo "note: ${label}: this machine's drivers do kill a static binary, so the guard is load-bearing here - which is what opting out of it means, not a failure"
+		   else
+			   echo "FAIL: the binary died instantiating a ggml filter (${label})"
+			   echo "${diag}" | sed 's/^/    /'
+			   return 1
+		   fi ;;
+		*) echo "note: ${label}: ${diag}"
+		   inconclusive=1 ;;
+		esac
 	done
+	[[ ${inconclusive} -eq 0 ]] || return 2
 	return 0
 }

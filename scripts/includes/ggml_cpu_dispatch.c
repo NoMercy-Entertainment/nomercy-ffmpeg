@@ -1131,9 +1131,20 @@ static void nm_vk_pin_precaution(const char *reason, int seen_crash)
 {
     nm_vk_pin("/nonexistent.json");
     if (seen_crash)
+        /* NOMERCY_VK_GUARD_MS is offered on this arm and NOMERCY_VK_ICD_GUARD=0
+         * is not, and the asymmetry is the whole point. The other arm offers
+         * both. On a machine we have just watched crash, telling someone to
+         * skip the check entirely is telling them to reproduce the crash -
+         * that was N11. But RAISING THE BUDGET is the safe half of that advice
+         * and the useful half: this arm is reached because the bisect ran out
+         * of time before it could say WHICH driver is at fault, so more time
+         * is exactly what turns this unhelpful answer into a real one, with
+         * the guard still protecting them while it does. */
         nm_vk_say("this machine's vulkan drivers crash a statically linked "
                   "binary, and the check could not finish identifying which "
-                  "(%s); vulkan disabled for this process", reason);
+                  "(%s); vulkan disabled for this process. Set "
+                  "NOMERCY_VK_GUARD_MS higher to let the check finish "
+                  "identifying the driver at fault", reason);
     else
         nm_vk_say("could not verify this machine's vulkan drivers (%s); "
                   "disabling vulkan for this process as a precaution. This is "

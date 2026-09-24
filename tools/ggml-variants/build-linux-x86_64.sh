@@ -358,27 +358,100 @@ for ug in 1 0; do
 done
 done
 
-# The precautionary pin must never be reported as an observed crash: that
-# wording sends a user chasing a driver bug they do not have.
-notice=$(NOMERCY_VK_GUARD_MS=1 ./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn     -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment" -f null - 2>&1     | grep -oE "stemsplit: (could not verify|this machine.s vulkan drivers crash)[^.]*" | head -1)
-echo "  precautionary wording: ${notice:-<none>}"
-case "${notice}" in
-    *"could not verify"*) echo "    ok: reported as a precaution" ;;
-    *) echo "  FAIL: the precautionary path did not say so (got: ${notice:-<none>})"; fail=1 ;;
-esac
+# --- the four verdict arms of the guard, actually observed ------------------
+#
+# NOTE FOR EDITORS: this whole block is inside a single-quoted string, so it
+# cannot contain an apostrophe. Hence the stilted wording below.
+#
+# vulkan_guard_vocabulary_intact in tests/lib/cpu-variant.sh proves the phrases
+# still EXIST in the binary; that is all a string search can do, and on the
+# platforms no runner can execute it is all there is. THIS is where the
+# stronger claim belongs: that each arm still prints its own message and not
+# the message of a neighbour. It needs a machine whose drivers misbehave, which
+# is what this Mesa container is.
+#
+# The negative half of each assertion is the part that was missing everywhere
+# until the Task 6 review: nothing would have caught an arm printing BOTH
+# messages, which is precisely what a collapse looks like.
 
-# ...and the same discipline pointing the other way. A budget big enough to
-# watch the whole set crash but too small to finish the bisect reaches the
-# precaution arm having ALREADY seen the machine die. It must not then claim
-# nothing is broken, nor recommend NOMERCY_VK_ICD_GUARD=0, which on this exact
-# machine is exit 139.
-crashnotice=$(NOMERCY_VK_GUARD_MS=80 ./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn     -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment" -f null - 2>&1     | grep -oE "stemsplit: (could not verify|this machine.s vulkan drivers crash)[^.]*" | head -1)
-echo "  wording after an observed crash: ${crashnotice:-<none>}"
-case "${crashnotice}" in
-    *"could not verify"*) echo "  FAIL: told a machine we watched crash that nothing is broken"; fail=1 ;;
-    *"crash"*)            echo "    ok: still reported as the crash it observed" ;;
-    *)                    echo "    note: the bisect completed at this budget; nothing to check here" ;;
-esac
+notice_for() {  # notice_for <env assignments...>; echoes the guard notice, if any
+    env "$@" ./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn \
+        -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment" -f null - 2>&1 \
+        | grep -oE "stemsplit: (could not verify|this machine.s vulkan drivers crash|the only vulkan device)[^$]*" \
+        | head -1
+}
+
+assert_arm() {  # assert_arm <label> <notice> <must-contain> <must-not-contain>
+    local label="$1" notice="$2" want="$3" nope="$4"
+    echo "  ${label}:"
+    echo "    said: ${notice:-<nothing>}"
+    if [[ "${notice}" != *"${want}"* ]]; then
+        echo "  FAIL: ${label} did not say \"${want}\""; fail=1; return
+    fi
+    # The half nothing checked before. An arm that says its own message AND the
+    # message of a neighbour has collapsed just as surely as one that says only
+    # the wrong message, and it reads as a pass to any positive-only assertion.
+    if [[ "${notice}" == *"${nope}"* ]]; then
+        echo "  FAIL: ${label} ALSO said \"${nope}\" - the wording of two arms in one notice"; fail=1; return
+    fi
+    echo "    ok: said its own message, and not \"${nope}\""
+}
+
+# Arm 3, the precaution. The guard could not decide anything at all, so it must
+# say in so many words that this is not a fault report, and must NOT use the
+# crash wording - that sends a user chasing a driver bug they do not have.
+assert_arm "precaution (NOMERCY_VK_GUARD_MS=1)" \
+    "$(notice_for NOMERCY_VK_GUARD_MS=1)" \
+    "not a report that anything is broken" \
+    "crash a statically linked"
+
+# Arm 2, a crash the bisect could not finish attributing. Reached only in a
+# window: long enough to watch the whole set die, too short to finish the
+# bisect. It must not claim nothing is broken.
+#
+# R1: that window MOVES. This used to pin NOMERCY_VK_GUARD_MS=80 with a
+# "the bisect completed at this budget; nothing to check here" fallback, and on
+# a faster container 80 ms now completes - so the check quietly passed through
+# the plain crash arm without ever exercising the truncated path it was written
+# for. It could not false-fail, but it had stopped covering, which is how every
+# dead check on this branch started. Sweep instead, and FAIL if no budget in
+# the sweep reaches the arm: better to be told the path is unreachable than to
+# be told nothing.
+truncated=""
+for ms in 30 40 60 80 120 160; do
+    n="$(notice_for NOMERCY_VK_GUARD_MS=${ms})"
+    if [[ "${n}" == *"could not finish identifying which"* ]]; then
+        truncated="${n}"
+        echo "  truncated-bisect arm reached at NOMERCY_VK_GUARD_MS=${ms}"
+        break
+    fi
+done
+if [[ -z "${truncated}" ]]; then
+    echo "  FAIL: no budget in 30..160 ms reached the truncated-bisect arm."
+    echo "        Either the arm is gone, or the timings of this machine have moved out of the"
+    echo "        swept range - widen it. Do NOT downgrade this to a note: that is what let the"
+    echo "        old fixed-80ms version stop covering silently."
+    fail=1
+else
+    assert_arm "observed crash, bisect truncated" "${truncated}" \
+        "could not finish identifying which" \
+        "not a report that anything is broken"
+    # This arm offers the budget knob - safe, and the thing that would actually
+    # finish the bisect - and must NOT offer to skip the guard, which on this
+    # exact machine is exit 139. That was N11.
+    case "${truncated}" in
+    *NOMERCY_VK_ICD_GUARD*) echo "  FAIL: recommended skipping the guard to a machine we watched crash"; fail=1 ;;
+    *NOMERCY_VK_GUARD_MS*)  echo "    ok: offers the budget knob, and does not offer to skip the guard" ;;
+    *) echo "  FAIL: offers no way forward at all"; fail=1 ;;
+    esac
+fi
+
+# Arm 1, a fully identified crash: a conclusion, and the only arm allowed to
+# state one. At the shipped budget the bisect finishes here.
+assert_arm "observed crash, fully identified (default budget)" \
+    "$(notice_for NOMERCY_VK_DUMMY=0)" \
+    "crash a statically linked" \
+    "not a report that anything is broken"
 
 echo "  guard notice, as the filters report it:"
 ./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn \

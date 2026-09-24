@@ -148,12 +148,12 @@ function Assert-VulkanBackendPresent($bin, $platform) {
         if (-not (Test-VulkanGuardPresent -Bin $bin)) {
             Fail "$(Split-Path $bin -Leaf): the ICD guard is missing from $platform, which needs it"
         }
-        $verdicts = Test-VulkanGuardVerdictsDistinct -Bin $bin
+        $verdicts = Test-VulkanGuardVocabularyIntact -Bin $bin
         if (-not $verdicts.Ok) {
             Write-Host $verdicts.Output
-            Fail "$(Split-Path $bin -Leaf): the ICD guard's three verdicts are no longer distinct on $platform"
+            Fail "$(Split-Path $bin -Leaf): the ICD guard's verdict vocabulary has been lost on $platform"
         }
-        Write-Host "✅ $(Split-Path $bin -Leaf): ICD guard present, and its three verdicts are still distinct"
+        Write-Host "✅ $(Split-Path $bin -Leaf): ICD guard present, and all four verdict messages plus both escape hatches survive in the binary"
     } else {
         if (Test-VulkanGuardPresent -Bin $bin) {
             Fail "$(Split-Path $bin -Leaf): the ICD guard is compiled into $platform, which must not have it"
@@ -171,10 +171,14 @@ function Assert-VulkanStartup($bin, $platform) {
     }
     $result = Test-VulkanStartup -FFmpegExe $bin
     if ($result.Ok) {
-        Write-Host "✅ $(Split-Path $bin -Leaf): starts cleanly with no driver, with the loader pointed at nothing, and with either escape hatch set"
+        if ($result.Output) { Write-Host $result.Output }
+        Write-Host "✅ $(Split-Path $bin -Leaf): a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with the GPU switched off"
+    } elseif ($result.Crash) {
+        Write-Host $result.Output
+        Fail "$(Split-Path $bin -Leaf): crashes initialising a ggml filter on a machine with no usable GPU driver"
     } else {
         Write-Host $result.Output
-        Fail "$(Split-Path $bin -Leaf): does not start on a machine with no usable GPU driver"
+        Note "$(Split-Path $bin -Leaf): could not instantiate a ggml filter on this build - the no-GPU guarantee is NOT asserted here"
     }
 }
 

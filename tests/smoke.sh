@@ -148,11 +148,11 @@ assert_vulkan_backend_present() {  # bin, platform
   if vulkan_platform_has_guard "${platform}"; then
     vulkan_guard_compiled_in "${bin}" \
       || fail "vulkan: the ICD guard is missing from ${platform}, which needs it"
-    if ! diag="$(vulkan_guard_verdicts_distinct "${bin}")"; then
+    if ! diag="$(vulkan_guard_vocabulary_intact "${bin}")"; then
       echo "${diag}"
-      fail "vulkan: the ICD guard's three verdicts are no longer distinct on ${platform}"
+      fail "vulkan: the ICD guard's verdict vocabulary has been lost on ${platform}"
     fi
-    ok "vulkan: ICD guard present, and its three verdicts (observed crash / precaution / clean machine) are still distinct"
+    ok "vulkan: ICD guard present, and all four verdict messages plus both escape hatches survive in the binary (that the arms still USE them is asserted in the Mesa block of build-linux-x86_64.sh, which needs a machine with drivers)"
   else
     vulkan_guard_compiled_in "${bin}" \
       && fail "vulkan: the ICD guard is compiled into ${platform}, which must not have it"
@@ -164,19 +164,30 @@ assert_vulkan_backend_present() {  # bin, platform
 # every performance goal on this branch. A CI runner has no GPU, which makes it
 # the most representative machine available for the case that produced every
 # crash found here so far.
+#
+# This instantiates a real ggml filter rather than running `ffmpeg -version`.
+# -version never builds a filtergraph and so never reaches the backend
+# registry that actually crashes: it exits 0 even in configurations measured
+# to segfault a real filter on the same machine. See vulkan_startup_ok.
+#
+# Three outcomes, not two. "Could not instantiate the filter here" is reported
+# as exactly that and never as a pass — the whole reason this check was
+# rewritten is that it used to claim coverage it did not have.
 assert_vulkan_startup() {  # bin, platform
-  local bin="$1" platform="$2" diag
+  local bin="$1" platform="$2" diag rc
 
   if ! vulkan_platform_has_backend "${platform}"; then
     note "vulkan: startup check skipped on ${platform} (no Vulkan linked)"
     return 0
   fi
-  if diag="$(vulkan_startup_ok "${bin}")"; then
-    ok "vulkan: starts cleanly with no driver, with the loader pointed at nothing, and with either escape hatch set"
-  else
-    echo "${diag}"
-    fail "vulkan: binary does not start on a machine with no usable GPU driver"
-  fi
+  diag="$(vulkan_startup_ok "${bin}")"; rc=$?
+  case ${rc} in
+  0) ok "vulkan: a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with either escape hatch set" ;;
+  1) echo "${diag}"
+     fail "vulkan: the binary crashes initialising a ggml filter on a machine with no usable GPU driver" ;;
+  *) echo "${diag}"
+     note "vulkan: could not instantiate a ggml filter on this build — the no-GPU guarantee is NOT asserted here" ;;
+  esac
 }
 
 ffmpeg_bin="${WORKSPACE}/ffmpeg"
