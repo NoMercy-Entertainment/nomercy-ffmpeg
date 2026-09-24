@@ -96,7 +96,9 @@ rm -f /tmp/ts-report.json
     -f null - >/tmp/ts-meta.txt 2>&1
 for k in detected silence_start silence_duration stream_duration recommended_end safety_margin; do
     meta=$(sed -n "s/^.*lavfi\.trailingsilence\.$k=//p" /tmp/ts-meta.txt | tail -1)
+    : "${meta:?empty extraction}"
     json=$(sed -n "s/.*\"$k\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^,\"}]*\).*/\1/p" /tmp/ts-report.json | head -1)
+    : "${json:?empty extraction}"
     check "json $k matches metadata" "$json" "$meta"
 done
 
