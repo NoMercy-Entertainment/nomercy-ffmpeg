@@ -1117,14 +1117,29 @@ static void nm_vk_pin(const char *value)
  * driver bug they did not have, and keeping the two arms apart in the code is
  * what stops a future edit merging the messages.
  *
- * `reason` completes "could not verify this machine's vulkan drivers (%s)". */
-static void nm_vk_pin_precaution(const char *reason)
+ * `reason` completes "could not verify this machine's vulkan drivers (%s)".
+ *
+ * `seen_crash` is the other half of the same wording discipline, pointing the
+ * other way. Two of the three call sites are reachable only AFTER a whole-set
+ * probe already crashed - we could not finish the bisect, but we did watch the
+ * machine die - and on those the reassurance is a lie in the opposite
+ * direction: telling someone nothing is broken when we saw their drivers kill
+ * the process, and recommending NOMERCY_VK_ICD_GUARD=0, which on that machine
+ * is exit 139. Four rounds went into making sure this guard never overstates
+ * what it knows; understating it is the worse half of the same failure. */
+static void nm_vk_pin_precaution(const char *reason, int seen_crash)
 {
     nm_vk_pin("/nonexistent.json");
-    nm_vk_say("could not verify this machine's vulkan drivers (%s); disabling "
-              "vulkan for this process as a precaution. This is not a report "
-              "that anything is broken - set NOMERCY_VK_GUARD_MS higher, or "
-              "NOMERCY_VK_ICD_GUARD=0 to skip the check entirely", reason);
+    if (seen_crash)
+        nm_vk_say("this machine's vulkan drivers crash a statically linked "
+                  "binary, and the check could not finish identifying which "
+                  "(%s); vulkan disabled for this process", reason);
+    else
+        nm_vk_say("could not verify this machine's vulkan drivers (%s); "
+                  "disabling vulkan for this process as a precaution. This is "
+                  "not a report that anything is broken - set "
+                  "NOMERCY_VK_GUARD_MS higher, or NOMERCY_VK_ICD_GUARD=0 to "
+                  "skip the check entirely", reason);
 }
 
 static void nm_vk_make_safe(void)
@@ -1144,13 +1159,18 @@ static void nm_vk_make_safe(void)
 
     verdict = nm_vk_probe(NULL, deadline);
 
-    /* One retry, and only for a timeout. A cold ggml_vk_init on a loaded box is
-     * the plausible way a healthy machine reaches the deadline, and the second
-     * attempt runs against a warm shader cache - so this converts the most
-     * likely false precaution into a real answer, for the price of one fork on
-     * a path that is already going badly. A crash is not retried: it will crash
-     * again, and we already have our answer. */
-    if (verdict == NM_VK_TIMEOUT)
+    /* One retry, for either way of learning nothing. A cold ggml_vk_init on a
+     * loaded box is the plausible way a healthy machine reaches the deadline,
+     * and the second attempt runs against a warm shader cache; a fork() or
+     * pipe2() that failed under a pids cgroup limit or fd pressure is just as
+     * likely to be transient, and without a retry one unlucky moment costs the
+     * machine its GPU for the life of the process. Both convert the most likely
+     * false precaution into a real answer for the price of one fork on a path
+     * that is already going badly.
+     *
+     * A crash is never retried: it will crash again, and we already have our
+     * answer. Nor is a clean one - there is nothing to improve on. */
+    if (nm_vk_inconclusive(verdict))
         verdict = nm_vk_probe(NULL, deadline);
 
     /* A clean answer: the loader's own configuration is fine as it stands. */
@@ -1160,9 +1180,11 @@ static void nm_vk_make_safe(void)
     /* No answer at all. The process still has to be made safe - see the rule at
      * the top of this section - but it is a precaution, and it says so. */
     if (nm_vk_inconclusive(verdict)) {
+        /* The one site that genuinely observed nothing: the whole-set probe
+         * never came back, so there is no crash to report. */
         nm_vk_pin_precaution(verdict == NM_VK_TIMEOUT
                              ? "the check did not finish in time"
-                             : "the check could not be run");
+                             : "the check could not be run", 0);
         return;
     }
 
@@ -1223,14 +1245,16 @@ static void nm_vk_make_safe(void)
                       "statically linked binary; vulkan disabled for this process");
             return;
         }
-        nm_vk_pin_precaution("the surviving drivers could not be confirmed together");
+        nm_vk_pin_precaution("the surviving drivers could not be confirmed together",
+                             verdict == NM_VK_CRASHED);
         return;
     }
 
     /* Nothing survived. Whether that is a conclusion or a precaution depends
      * entirely on whether we actually looked at everything. */
     if (unexamined) {
-        nm_vk_pin_precaution("some of them were never tested");
+        nm_vk_pin_precaution("some of them were never tested",
+                             verdict == NM_VK_CRASHED);
         return;
     }
 
