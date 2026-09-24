@@ -48,7 +48,17 @@ check_platform() { # target-os  expected-tags
     # Windows-on-ARM PE on this host at all.
     local compute=0
     [[ ${os} == linux ]] && compute=1
-    NM_COMPUTE_PROBE=${compute} "${REPO}/tools/ggml-variants/build-common.sh" "${os}" aarch64 "${out}"
+    # NM_SKIP_BUILD=1 re-runs every CHECK against the artifacts already in
+    # ${out} without rebuilding them. For iterating on the checks themselves -
+    # a full cross build is ~25 minutes and a bug in an assertion should not
+    # cost that. It is not a way to verify a source change: what it tests is
+    # whatever binary is sitting in the work directory, so any report that used
+    # it has to say which build that was.
+    if [[ ${NM_SKIP_BUILD:-0} == 1 ]]; then
+        echo "  (NM_SKIP_BUILD=1: checking the existing artifacts in ${out}, not rebuilding)"
+    else
+        NM_COMPUTE_PROBE=${compute} "${REPO}/tools/ggml-variants/build-common.sh" "${os}" aarch64 "${out}"
+    fi
 
     echo "=== ${os}-aarch64: variants in the build log ==="
     # whisper_build.log, not ffmpeg_build.log: 60-stemsplit.sh truncates the
@@ -117,6 +127,104 @@ ${N} --defined-only /o/${NM_BIN} 2>/dev/null | grep -E "nm_ggml_cpu_variant_name
     grep -E "^Libs" "${out}/whisper.pc"
     MSYS_NO_PATHCONV=1 docker run --rm -v "$(cygpath -w "${out}")":/o:ro "${IMAGE}" \
         bash -c "file /o/${bin}"
+
+    check_vulkan "${os}" "${out}" "${bin}" "${unstripped}"
+}
+
+# ggml's Vulkan backend on a target that has never been run.
+#
+# Both aarch64 targets build it (48-whisper.sh sets NM_VULKAN=1 everywhere but
+# darwin and freebsd) and neither had ever been checked for it. windows-aarch64
+# is the one with a real reason to break: it has no `ld -r`, so 48-whisper.sh
+# assembles its variants archive per-member with an `ar -M` MRI script whose
+# ADDLIB expects archives, and the Vulkan shim is a bare object that needed its
+# own ADDMOD line. `ar -M` is also documented in that script to report a failed
+# script on stdout while still exiting 0, so "the build succeeded" is not
+# evidence that the shim is in the archive. These checks are what makes it
+# evidence.
+check_vulkan() { # target-os  outdir  binary  unstripped-binary
+    local os="$1" out="$2" bin="$3" unstripped="$4"
+
+    echo "=== ${os}-aarch64: vulkan backend, shim and link order ==="
+    [[ -f ${out}/libggml-vulkan.a ]] || fail "${os}: no libggml-vulkan.a was produced (NM_VULKAN should be 1 here)"
+
+    # Link order. A static linker resolves left to right, so -lggml-vulkan must
+    # come before the archive carrying the shim that defines its three loader
+    # symbols. Checked on the generated whisper.pc, not on the generator.
+    local libs; libs=$(grep -E "^Libs:" "${out}/whisper.pc")
+    case "${libs}" in
+    *-lggml-vulkan*-lggml-cpu-variants*) echo "  ok: -lggml-vulkan precedes -lggml-cpu-variants" ;;
+    *) fail "${os}: whisper.pc link order is wrong for the shim: ${libs}" ;;
+    esac
+
+    # The guard is compiled only for non-Windows, non-Apple builds, so
+    # linux-aarch64 must carry it and windows-aarch64 must not. Read off the
+    # binary rather than off the preprocessor conditions: a string only the
+    # guarded build emits. (Both are also confirmed by running, for linux under
+    # qemu below; windows-aarch64 cannot be executed on this host at all.)
+    local want_guard=1
+    [[ ${os} == windows ]] && want_guard=0
+
+    MSYS_NO_PATHCONV=1 docker run --rm -v "$(cygpath -w "${out}")":/o:ro \
+        -e NM_BIN="${bin}" -e NM_UNSTRIPPED="${unstripped}" -e NM_OS="${os}" \
+        -e NM_WANT_GUARD="${want_guard}" "${IMAGE}" bash -c '
+set -eu
+N=aarch64-linux-gnu-nm
+command -v ${N} >/dev/null || {
+    apt-get update >/tmp/a.log 2>&1 && apt-get install -y --no-install-recommends binutils-aarch64-linux-gnu >>/tmp/a.log 2>&1
+} || { cat /tmp/a.log; exit 1; }
+OD=aarch64-linux-gnu-objdump
+
+echo "-- undefined loader symbols in libggml-vulkan.a (the shim has to supply these)"
+undef=$(${N} --undefined-only /o/libggml-vulkan.a 2>/dev/null | grep -oE "\bvk[A-Za-z0-9]+" | sort -u)
+echo "${undef}" | sed "s/^/   /"
+for s in vkGetInstanceProcAddr vkCmdCopyBuffer vkGetPhysicalDeviceFeatures2; do
+    echo "${undef}" | grep -qx "${s}" || { echo "   MISSING undefined symbol ${s}"; exit 1; }
+done
+n=$(echo "${undef}" | grep -c . )
+[ "${n}" = "3" ] || { echo "   expected exactly 3 undefined vk* symbols, got ${n}"; exit 1; }
+
+echo "-- the shim itself, inside libggml-cpu-variants.a"
+# This is the windows-aarch64 MRI/ADDMOD check. One definition, not zero (the
+# ADDMOD line silently dropped) and not several (the object added twice).
+for s in vkGetInstanceProcAddr vkCmdCopyBuffer vkGetPhysicalDeviceFeatures2; do
+    c=$(${N} --defined-only /o/libggml-cpu-variants.a 2>/dev/null | grep -cE "[ ]T ${s}$")
+    echo "   ${s}: ${c} definition(s)"
+    [ "${c}" = "1" ] || { echo "   expected exactly 1"; exit 1; }
+done
+
+echo "-- and resolved in the linked binary (nothing left undefined)"
+left=$(${N} --undefined-only /o/${NM_UNSTRIPPED} 2>/dev/null | grep -cE "\bvk[A-Za-z0-9]+" || true)
+echo "   undefined vk* symbols in ${NM_UNSTRIPPED}: ${left}"
+[ "${left}" = "0" ] || { echo "   the shim did not resolve them"; exit 1; }
+
+echo "-- no Vulkan loader as a link-time dependency (the binary must stay static)"
+if [ "${NM_OS}" = windows ]; then
+    # PE import table. NOT a string search: vk_loader_shim.c contains the
+    # literal "vulkan-1.dll" for its LoadLibraryA call, so grepping the binary
+    # would match a perfectly correct build.
+    dlls=$(${OD} -p /o/${NM_BIN} 2>/dev/null | grep -i "DLL Name:" | sed "s/.*DLL Name: //" | sort -u)
+    [ -n "${dlls}" ] || { echo "   could not read the PE import table"; exit 1; }
+    echo "${dlls}" | tr "\n" " " | sed "s/^/   /"; echo
+    if echo "${dlls}" | grep -qi vulkan; then echo "   FAIL: imports a Vulkan loader"; exit 1; fi
+    echo "   ok: no vulkan DLL in the import table"
+else
+    dyn=$(aarch64-linux-gnu-readelf -d /o/${NM_BIN} 2>/dev/null | grep NEEDED || true)
+    echo "   NEEDED entries: ${dyn:-<none, fully static>}"
+    if echo "${dyn}" | grep -qi vulkan; then echo "   FAIL: links a Vulkan loader"; exit 1; fi
+    echo "   ok: no loader dependency"
+fi
+
+echo "-- the fork-and-probe guard: compiled in here? (expected ${NM_WANT_GUARD})"
+# A notice only the guarded build can print. NOT "software rasteriser": that
+# phrase is also in nm_vk_scan s device-name table, which is compiled on every
+# platform, so it is present in a Windows binary with the guard correctly
+# absent. Caught by this check failing on windows-aarch64 for a reason that
+# turned out to be the check, not the build.
+if strings -a /o/${NM_BIN} | grep -q "crash a statically linked"; then got=1; else got=0; fi
+echo "   guard present=${got}"
+[ "${got}" = "${NM_WANT_GUARD}" ] || { echo "   guard is on the wrong side of its #if for ${NM_OS}"; exit 1; }
+' || fail "${os}: vulkan checks failed"
 }
 
 smoke_linux() { # qemu-user smoke run; NOT a benchmark
@@ -187,10 +295,81 @@ echo "   all variants produced identical audio output"
 ' || fail "linux: qemu smoke run failed"
 }
 
+# The GPU path on linux-aarch64, under arm64 emulation.
+#
+# WHAT THIS IS AND IS NOT. qemu offers no GPU, so the only correct answer here
+# is "cpu" in every configuration - which is exactly the case that must never
+# regress, and exactly the case four separate startup crashes were found in on
+# x86_64. It is NOT a test that a real Mali/Adreno/Tegra GPU is selected; no
+# such machine exists on this host. Timings are meaningless under qemu and are
+# not taken.
+#
+# Two conditions, because they are genuinely different machines:
+#   * no ICD at all      - the common case, and the cheap one.
+#   * a software ICD     - mesa's lavpipe. This is the guard's whole reason for
+#                          existing: on x86_64 a software Vulkan stack in a
+#                          static binary is what crashed, and the fork-and-probe
+#                          guard is compiled into this target too. Whether it
+#                          crashes the same way on arm64 is a question only
+#                          running it can answer.
+smoke_linux_vulkan() {
+    local out="${WORK}/linux-aarch64"
+    echo "=== linux-aarch64: vulkan under qemu (no GPU exists here; cpu is the right answer) ==="
+    MSYS_NO_PATHCONV=1 docker run --rm --platform linux/arm64 \
+        -v "$(cygpath -w "${out}")":/o:ro -v "${SMOKE_MODEL_VOL}":/vol:ro \
+        -e SMOKE_MODEL="${SMOKE_MODEL}" ubuntu:24.04 bash -c '
+set -eu
+cp /o/ffmpeg /o/nm-probe /tmp/ && chmod +x /tmp/ffmpeg /tmp/nm-probe
+fail=0
+
+run_whisper() { # run_whisper <label> <use_gpu-suffix>
+    rc=0
+    /tmp/ffmpeg -hide_banner -y -nostats -v info -i /o/silence.wav \
+        -af "whisper=model=${SMOKE_MODEL}:queue=1$2" -f wav /tmp/vk-out.wav \
+        > /tmp/vk.log 2>&1 || rc=$?
+    # sed, not `tr -d`, to take the quotes off: this whole script is inside a
+    # single-quoted bash -c string, so a literal apostrophe cannot appear here
+    # and `tr -d "\x27"` does NOT mean what it looks like - bash passes it
+    # through unchanged and tr deletes the characters \ x 2 7 instead, leaving
+    # the quotes on. That read as "expected cpu, got cpu" on the first run of
+    # this check. The dot in the pattern is the quote.
+    be=$(grep -oE "whisper: ggml backend .[a-z0-9]+." /tmp/vk.log | head -1 | sed -E "s/.*backend .([a-z0-9]+)./\1/")
+    echo "   $1: exit=${rc} backend=${be:-<none>}"
+    # exit 0 is the load-bearing assertion. A machine with no usable GPU must
+    # behave exactly as it did before any of this existed.
+    [ "${rc}" = "0" ] || { echo "      FAIL: did not exit cleanly"; tail -8 /tmp/vk.log | sed "s/^/      /"; fail=1; }
+    [ "${be}" = "cpu" ] || { echo "      FAIL: expected the cpu backend under qemu, got ${be:-<none>}"; fail=1; }
+}
+
+echo "-- no ICD registered at all"
+ls /usr/share/vulkan/icd.d/ 2>/dev/null | sed "s/^/   icd: /" || echo "   (no icd.d directory)"
+run_whisper "whisper default (use_gpu=1)" ""
+run_whisper "whisper use_gpu=0" ":use_gpu=0"
+echo "-- the dispatcher still picks a cpu variant with vulkan linked in"
+/tmp/nm-probe | sed "s/^/   nm-probe: /"
+
+echo "-- now with a software vulkan stack installed (the guard s motivating case)"
+export DEBIAN_FRONTEND=noninteractive
+if apt-get update >/tmp/apt.log 2>&1 && apt-get install -y --no-install-recommends mesa-vulkan-drivers >>/tmp/apt.log 2>&1; then
+    echo "   ICD manifests present: $(ls /usr/share/vulkan/icd.d/ | tr "\n" " ")"
+    run_whisper "whisper default (use_gpu=1), software ICD" ""
+    run_whisper "whisper use_gpu=0, software ICD" ":use_gpu=0"
+    echo "-- what the guard said, if anything:"
+    grep -oE "whisper: .*vulkan.*" /tmp/vk.log | head -2 | sed "s/^/   /" || echo "   (nothing)"
+else
+    echo "   SKIPPED: mesa-vulkan-drivers could not be installed in this arm64 container"
+    tail -3 /tmp/apt.log | sed "s/^/   /"
+    fail=1
+fi
+
+[ "${fail}" = "0" ] || { echo "vulkan qemu checks failed"; exit 1; }
+' || fail "linux: qemu vulkan run failed"
+}
+
 case "${WHAT}" in
-linux)   check_platform linux "${linux_tags}";   smoke_linux ;;
+linux)   check_platform linux "${linux_tags}";   smoke_linux; smoke_linux_vulkan ;;
 windows) check_platform windows "${windows_tags}" ;;
-both)    check_platform linux "${linux_tags}";   smoke_linux
+both)    check_platform linux "${linux_tags}";   smoke_linux; smoke_linux_vulkan
          check_platform windows "${windows_tags}" ;;
 *) echo "usage: $0 [linux|windows|both] [workdir]" >&2; exit 1 ;;
 esac

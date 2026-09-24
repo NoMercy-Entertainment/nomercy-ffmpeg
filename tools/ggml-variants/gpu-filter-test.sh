@@ -296,12 +296,29 @@ PY
     else
         echo "  ok: no vulkan-1.dll (or any vulkan DLL) in the import table"
     fi
+    # The fork-and-probe ICD guard is compiled only for non-Windows, non-Apple
+    # builds. Asserted on the binary rather than read off the #if, and with a
+    # notice only the guarded build can print - "software rasteriser" would not
+    # do, because that phrase is also in nm_vk_scan's device-name table, which
+    # every platform compiles.
+    if grep -aq "crash a statically linked" "${FF}"; then
+        echo "  FAIL: the fork-and-probe guard is compiled into a Windows binary"
+        fail=1
+    else
+        echo "  ok: the fork-and-probe guard is absent, as it must be on Windows"
+    fi
 elif command -v ldd >/dev/null 2>&1; then
     ldd "${FF}" 2>&1 | sed "s/^/  /" | head -5
     if ldd "${FF}" 2>&1 | grep -qi vulkan; then
         echo "  FAIL: links a Vulkan loader"; fail=1
     else
         echo "  ok: no loader dependency"
+    fi
+    if grep -aq "crash a statically linked" "${FF}"; then
+        echo "  ok: the fork-and-probe guard is compiled in, as it must be here"
+    else
+        echo "  FAIL: the fork-and-probe guard is missing from a non-Windows build"
+        fail=1
     fi
 else
     echo "  FAIL: cannot inspect ${FF} for loader dependencies here"; fail=1

@@ -465,5 +465,10 @@ cp ${PREFIX}/lib/pkgconfig/whisper.pc /out/whisper.pc 2>/dev/null || true
 # Verification-only: the packed archive itself, so a harness can count the
 # prefixed entry points with the right cross-nm instead of trusting the log.
 cp ${PREFIX}/lib/libggml-cpu-variants.a /out/libggml-cpu-variants.a 2>/dev/null || true
+# Verification-only: ggml-vulkan as built for THIS target, so a harness can run
+# `nm --undefined-only` on it and see the three loader symbols the shim has to
+# satisfy (Task 1 step 4). Absent by design on darwin and freebsd, hence the
+# usual tolerant cp.
+cp ${PREFIX}/lib/libggml-vulkan.a /out/libggml-vulkan.a 2>/dev/null || true
 '
 echo "built into ${WORK}"
