@@ -63,23 +63,41 @@ bash "${REPO}/tools/ggml-variants/build-common.sh" windows x86_64 "${WORK}"
 
 cat > "${WORK}/check-windows.ps1" <<'PS'
 param([string]$Dir = $PSScriptRoot)
+# NB: the input file is $inFile, NOT $input. $input is a PowerShell automatic
+# variable (the pipeline enumerator) and inside a function it is rebound to that
+# function's own pipeline input, so a script-scope $input reads as empty there.
+# It did: every ffmpeg invocation below ran as `-i  -vn ...` and failed with
+# "Error opening input file -vn", which this script then reported as a variant
+# dispatch failure.
+# Same class of trap in the filter string: it must be $($model):stem=..., not
+# $model:stem=... . PowerShell reads $name: as namespace syntax (a scope or a
+# PSDrive), so $model:stem interpolated to nothing and ffmpeg was handed
+# model==accompaniment - reported, again, as a variant dispatch failure.
 $ff = Join-Path $Dir 'ffmpeg.exe'
-$model = Join-Path $Dir 'spleeter-2stems-f16.gguf'
-$input = Join-Path $Dir 'input.mp3'
+# ffmpeg's filter-option parser, not PowerShell, owns this string: a backslash
+# escapes the next character and a colon ends the option, so a plain Windows
+# path silently becomes a different filename. ".\spleeter-2stems-f16.gguf"
+# reached ffmpeg as ".spleeter-2stems-f16.gguf". Forward slashes, and the drive
+# colon escaped, for any $Dir. [char]92 rather than a literal backslash because
+# this file is generated from a shell script and a lone backslash does not
+# survive the round trip intact - it came out as .Replace('', '/'), which is
+# valid PowerShell that does nothing, so the bug reappeared looking fixed.
+$model = (Join-Path $Dir 'spleeter-2stems-f16.gguf').Replace([char]92, '/').Replace(':', [char]92 + ':')
+$inFile = Join-Path $Dir 'input.mp3'
 if ((Get-Item $ff).Length -eq 0) { Write-Host 'FAIL: ffmpeg.exe is empty - COFF packing renamed section symbols'; exit 1 }
 
 function Run-Split([string]$variant, [string]$out) {
     $env:NOMERCY_GGML_CPU = $variant
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    & $ff -hide_banner -loglevel error -nostats -y -t 30 -i $input -vn `
-        -af "stemsplit=model=$model:stem=accompaniment" -f wav $out | Out-Null
+    & $ff -hide_banner -loglevel error -nostats -y -t 30 -i $inFile -vn `
+        -af "stemsplit=model=$($model):stem=accompaniment" -f wav $out | Out-Null
     $sw.ElapsedMilliseconds
 }
 $auto = Run-Split '' (Join-Path $Dir 'auto.wav')
 $base = Run-Split 'x64' (Join-Path $Dir 'base.wav')
 $env:NOMERCY_GGML_CPU = ''
-$logged = (& $ff -hide_banner -v verbose -nostats -t 12 -i $input -vn `
-    -af "stemsplit=model=$model:stem=accompaniment" -f wav NUL 2>&1 |
+$logged = (& $ff -hide_banner -v verbose -nostats -t 12 -i $inFile -vn `
+    -af "stemsplit=model=$($model):stem=accompaniment" -f wav NUL 2>&1 |
     Select-String -Pattern "cpu variant '([a-z0-9.+_]+)'" | Select-Object -First 1).Matches.Value
 "  auto: $auto ms, forced baseline: $base ms"
 "  logged: $logged"
