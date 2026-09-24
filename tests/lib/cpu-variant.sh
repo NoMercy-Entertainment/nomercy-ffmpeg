@@ -204,3 +204,156 @@ test_cpu_variant() {
 	echo "selected ${auto_variant} automatically; baseline override selects ${baseline}; unknown override falls back safely"
 	return 0
 }
+
+# --------------------------------------------------------------------------
+# ggml Vulkan GPU backend (2026-09-23-ggml-vulkan-backend plan, Task 6)
+# --------------------------------------------------------------------------
+#
+# Same division of labour as the CPU half above: predicates live here so
+# tests/smoke.sh -- the script CI actually runs on every platform -- and
+# tests/tests.sh can assert the same things in their own reporting voice.
+#
+# DEVIATION from the task-6 plan snippet, which excluded only darwin and said
+# "Vulkan lands in five of the seven platforms". It lands in FOUR of seven.
+# freebsd-x86_64 is excluded too, and has been since Task 2: these binaries
+# link statically and FreeBSD's libc.a supplies dlopen() as a stub that sets
+# "Service unavailable" and returns NULL unconditionally (verified for Task 5
+# by disassembling dlopen in a statically linked FreeBSD 14.3 binary), so the
+# loader shim could never open a real loader there. scripts/48-whisper.sh sets
+# NM_VULKAN=0 for darwin AND freebsd. Shipping the plan's snippet as written
+# would have failed every freebsd build for carrying no Vulkan, which is the
+# correct state.
+vulkan_platform_has_backend() {
+	case "$1" in
+	*darwin* | *freebsd*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+# True if ggml's Vulkan backend is really linked in. Greppable, so it works on
+# the cross-exec platforms a runner cannot execute -- which, as with the CPU
+# dispatcher check above, are the ones with the least other evidence
+# (linux-aarch64 and windows-aarch64 have never been executed by any runner
+# here).
+#
+# Two independent strings, either of which is enough: "ggml_vulkan" is
+# ggml-vulkan.cpp's own log prefix, and vkGetInstanceProcAddr is one of the
+# three loader symbols scripts/includes/vk_loader_shim.c defines. Checking the
+# shim symbol matters as much as the backend: ggml-vulkan.a without the shim
+# does not link at all, but a future refactor that dropped the shim while
+# keeping the backend would produce a binary that cannot open a loader on any
+# machine, and "ggml_vulkan" alone would still be there.
+vulkan_backend_compiled_in() {
+	grep -aq "ggml_vulkan" "$1" && grep -aq "vkGetInstanceProcAddr" "$1"
+}
+
+# True if the fork-and-probe ICD guard is compiled in. It is built only for
+# non-Windows, non-Apple (ggml_cpu_dispatch.c's
+# `#if !defined(_WIN32) && !defined(__APPLE__) && !defined(NM_NO_VULKAN)`), so
+# this is an expectation that differs per platform rather than a thing that
+# must always be true -- see vulkan_platform_has_guard.
+#
+# The marker is a notice only the guarded code can print. NOT "software
+# rasteriser": that phrase is also in nm_vk_scan's device-name table, which
+# every platform compiles, so it is present in a correct Windows binary whose
+# guard is correctly absent. That mistake was made once already, during Task 5,
+# and it accused windows-aarch64 of a bug it did not have.
+vulkan_guard_compiled_in() {
+	grep -aq "crash a statically linked" "$1"
+}
+
+vulkan_platform_has_guard() {
+	case "$1" in
+	*windows* | *darwin* | *freebsd*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+# The guard reaches three DIFFERENT verdicts and must never confuse them in
+# what it tells the user:
+#
+#   1. an observed crash        - a conclusion. "your drivers crash a static
+#                                 binary, vulkan is off".
+#   2. a precaution             - the guard could not finish deciding. It must
+#                                 say in so many words that this is NOT a
+#                                 report that anything is broken, and name the
+#                                 escape hatches, because the machine may be
+#                                 perfectly healthy.
+#   3. a clean machine          - software rasteriser only; nothing is wrong
+#                                 and the loader configuration is left alone.
+#
+# Four review rounds went into separating these, and two of the findings were
+# exactly this wording collapsing: an unverifiable machine being told it had
+# crashed, and a machine that had just crashed being told nothing was broken.
+# Asserting the three phrases still exist and are distinct is cheap, works on
+# platforms no runner can execute, and catches a refactor that merges the arms
+# far earlier than any runtime test would.
+#
+# Prints a diagnostic and returns 1 on failure; silent on success.
+vulkan_guard_verdicts_distinct() {
+	local bin="$1" missing="" phrase
+	# One phrase per arm, each unique to that arm.
+	for phrase in \
+		"vulkan disabled for this process" \
+		"not a report that anything is broken" \
+		"the loader configuration is unchanged"; do
+		grep -aq "${phrase}" "${bin}" || missing="${missing}
+    missing: \"${phrase}\""
+	done
+	# The precaution arm must name both escape hatches it tells people to
+	# reach for. A notice that says "this is not a report that anything is
+	# broken" and then leaves the reader no way to act on it is worse than
+	# no notice.
+	for phrase in NOMERCY_VK_GUARD_MS NOMERCY_VK_ICD_GUARD; do
+		grep -aq "${phrase}" "${bin}" || missing="${missing}
+    missing escape hatch: ${phrase}"
+	done
+	if [[ -n "${missing}" ]]; then
+		echo "FAIL: the guard's verdict wording has been collapsed or lost:${missing}"
+		return 1
+	fi
+	return 0
+}
+
+# The guarantee that outranks every performance goal on this branch: a machine
+# with no usable GPU must behave exactly as it did before any of this existed.
+# A CI runner is that machine -- no GPU, and usually no driver at all -- which
+# makes it the single most representative environment available for the case
+# four separate startup crashes were found in.
+#
+# Four configurations, all needing nothing but the binary:
+#   * as the runner is           - the plain no-driver case.
+#   * VK_ICD_FILENAMES / VK_DRIVER_FILES pointing at a file that is not there
+#                                - a loader present and configured to find
+#                                  nothing, which is the shape the guard
+#                                  itself pins to.
+#   * NOMERCY_VK_ICD_GUARD=0     - the escape hatch the precaution notice tells
+#   * NOMERCY_GGML_GPU=0           people to use. If either stopped working the
+#                                  advice printed on a struggling machine would
+#                                  be wrong, which is worse than not offering
+#                                  it.
+#
+# $1 = ffmpeg path. Prints one line per failing attempt and returns 1; silent
+# on success.
+vulkan_startup_ok() {
+	local ffmpeg="$1" out code label
+	local -a envs=(
+		"as the runner is:"
+		"no driver findable:VK_ICD_FILENAMES=/nonexistent.json VK_DRIVER_FILES=/nonexistent.json"
+		"guard disabled:NOMERCY_VK_ICD_GUARD=0"
+		"gpu disabled:NOMERCY_GGML_GPU=0"
+	)
+	local spec
+	for spec in "${envs[@]}"; do
+		label="${spec%%:*}"
+		# shellcheck disable=SC2086
+		out=$(env ${spec#*:} "${ffmpeg}" -hide_banner -version 2>&1)
+		code=$?
+		if [[ ${code} -ne 0 ]]; then
+			echo "FAIL: '${ffmpeg} -version' did not start (${label}), exit ${code}"
+			echo "${out}" | tail -5
+			return 1
+		fi
+	done
+	return 0
+}

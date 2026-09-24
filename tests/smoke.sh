@@ -120,6 +120,65 @@ assert_elf_header() {  # bin, machine_le_hex, osabi_hex|any
   fi
 }
 
+# ggml Vulkan GPU backend: the same two-part shape as the CPU dispatcher
+# above, and for the same reason. The presence checks are greps, so they run
+# for the cross-exec platforms this runner cannot execute — linux-aarch64 and
+# freebsd-x86_64 here, windows-aarch64 on the PowerShell side — and those are
+# precisely the platforms with the least other evidence behind them. The
+# startup check needs execution, so it runs past the early return.
+assert_vulkan_backend_present() {  # bin, platform
+  local bin="$1" platform="$2" diag
+
+  if ! vulkan_platform_has_backend "${platform}"; then
+    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin gets Metal in a later phase; freebsd's static dlopen cannot open a loader at all)"
+    return 0
+  fi
+
+  if vulkan_backend_compiled_in "${bin}"; then
+    ok "vulkan: ggml Vulkan backend and loader shim are both linked in"
+  else
+    fail "vulkan: ${bin} does not carry the ggml Vulkan backend (or the loader shim it needs)"
+  fi
+
+  # The guard is a separate question from the backend, with the OPPOSITE
+  # expectation on Windows, so it is asserted in both directions rather than
+  # only where it should be present. A guard appearing in a Windows build
+  # would be as much of a regression as one vanishing from Linux, and only an
+  # assertion that can fail both ways catches both.
+  if vulkan_platform_has_guard "${platform}"; then
+    vulkan_guard_compiled_in "${bin}" \
+      || fail "vulkan: the ICD guard is missing from ${platform}, which needs it"
+    if ! diag="$(vulkan_guard_verdicts_distinct "${bin}")"; then
+      echo "${diag}"
+      fail "vulkan: the ICD guard's three verdicts are no longer distinct on ${platform}"
+    fi
+    ok "vulkan: ICD guard present, and its three verdicts (observed crash / precaution / clean machine) are still distinct"
+  else
+    vulkan_guard_compiled_in "${bin}" \
+      && fail "vulkan: the ICD guard is compiled into ${platform}, which must not have it"
+    ok "vulkan: ICD guard correctly absent on ${platform}"
+  fi
+}
+
+# Nothing may regress for a user without a GPU — the constraint that outranks
+# every performance goal on this branch. A CI runner has no GPU, which makes it
+# the most representative machine available for the case that produced every
+# crash found here so far.
+assert_vulkan_startup() {  # bin, platform
+  local bin="$1" platform="$2" diag
+
+  if ! vulkan_platform_has_backend "${platform}"; then
+    note "vulkan: startup check skipped on ${platform} (no Vulkan linked)"
+    return 0
+  fi
+  if diag="$(vulkan_startup_ok "${bin}")"; then
+    ok "vulkan: starts cleanly with no driver, with the loader pointed at nothing, and with either escape hatch set"
+  else
+    echo "${diag}"
+    fail "vulkan: binary does not start on a machine with no usable GPU driver"
+  fi
+}
+
 ffmpeg_bin="${WORKSPACE}/ffmpeg"
 ffprobe_bin="${WORKSPACE}/ffprobe"
 
@@ -133,6 +192,7 @@ chmod +x "${ffmpeg_bin}" "${ffprobe_bin}" 2>/dev/null || true
 # the comment on assert_cpu_variant_dispatcher_present above for why it has
 # to come before the cross-exec early-return, not after it.
 assert_cpu_variant_dispatcher_present "${ffmpeg_bin}" "${PLATFORM}"
+assert_vulkan_backend_present "${ffmpeg_bin}" "${PLATFORM}"
 
 # Cross-exec platforms: never execute — validate ELF headers and stop here.
 if spec="$(cross_exec_spec "${PLATFORM}")"; then
@@ -161,4 +221,5 @@ assert_version "${ffprobe_bin}" "ffprobe version"
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.
 assert_cpu_variant_startup "${ffmpeg_bin}" "${PLATFORM}"
+assert_vulkan_startup "${ffmpeg_bin}" "${PLATFORM}"
 ok "Smoke test passed."

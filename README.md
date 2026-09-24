@@ -368,6 +368,112 @@ hash with a tolerance, or don't rely on the hash matching across machines —
 a plain `md5` comparison across CPUs can fail even though the audio itself
 is the same.
 
+#### 🎮 **GPU acceleration — `whisper` and `stemsplit`**
+
+The same two filters can also run on a **GPU, through Vulkan**, compiled into
+the same static binary. There is nothing to install: no driver package, no
+SDK, no extra DLL or `.so`. If the machine has a working Vulkan driver the
+binary finds it at runtime; if it does not, both filters run on the CPU
+exactly as they did before, and nothing about the command line changes.
+
+**Should you turn it on?** Short answer:
+
+| filter | default | why |
+|---|---|---|
+| `whisper` | **GPU on** (`use_gpu=1`) | Faster, and the transcript is unchanged — see below. |
+| `stemsplit` | **CPU** (`use_gpu=0`) | Opt in with `use_gpu=1`. It is faster, but the audio is not the same. |
+
+**Measured — `stemsplit` on a GPU.** 30 s of audio, twenty runs each on one
+RTX 3070, whole-process wall time including model load, so the filter itself
+is faster than this: **830 ms** mean with `use_gpu=1` against **2198 ms** on
+the CPU (2.6x). No other GPU has been measured.
+
+**`whisper` is on by default because the output does not change.** GPU and CPU
+transcripts were compared on an RTX 3070 across three inputs — clean speech,
+90 s of speech, and 60 s of music where the model is at its least certain and
+hallucinates. All three are **byte-identical**, same segments in the same
+order. So the GPU is a speed change and nothing else.
+
+**`stemsplit` is off by default because the output does change.** ggml's
+Vulkan backend accumulates convolutions in 16-bit float on any GPU with
+cooperative-matrix support. Against the CPU reference that is **-58.8 dB** —
+audible in principle, and well outside the ~-103 dB that separates the CPU
+instruction levels above. `GGML_VK_DISABLE_COOPMAT=1` takes it to -98.7 dB at
+the same speed, but that variable is process-global and costs `whisper` 3.5x,
+so the two filters cannot both have what they want in one process. Until that
+is settled, `stemsplit` will not move anyone's audio without being asked:
+
+```bash
+ffmpeg -i in.mp3 -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=vocals:use_gpu=1" out.wav
+```
+
+**Options.** `use_gpu=0|1` on both filters, and `gpu_device=<n>` to pick a GPU
+on a machine with more than one. An out-of-range index does not silently use
+the wrong GPU — it says so and falls back to the CPU:
+
+```
+stemsplit: gpu_device=99 but this machine has 1 GPU device(s); running on the CPU.
+```
+
+What actually ran is logged once at `-v info` and published as frame metadata,
+so a media server can record it without scraping logs —
+`lavfi.whisper.backend`, `lavfi.stemsplit.backend`, alongside the
+`cpu_variant` keys above:
+
+```
+whisper: ggml backend 'vulkan' (NVIDIA GeForce RTX 3070).
+```
+
+**If you have no GPU, nothing changes.** That is the rule this feature was
+built under, and most of the work went into it rather than into speed. A
+machine with no driver, a machine with a driver the binary cannot use, and a
+machine with only a software rasteriser all fall back to the CPU and carry on.
+Software rasterisers (llvmpipe, lavapipe) are deliberately **refused** even
+when they work: they are slower than the CPU backend they would replace.
+
+On Linux and other non-Windows, non-Apple platforms, some Vulkan drivers
+cannot be loaded into a statically linked binary at all and take the process
+down when enumerated. Rather than let that happen, the binary tests the
+drivers in a throwaway child process before touching them, and switches Vulkan
+off for itself if they are unsafe. It tells you which of three things it
+found, and the three are deliberately worded differently:
+
+```
+… drivers crash a statically linked binary; vulkan disabled for this process
+… could not verify … as a precaution. This is not a report that anything is broken …
+… the only vulkan device here is a software rasteriser; running on the CPU …
+```
+
+The middle one is not a fault report — it means the check ran out of time, not
+that your machine is broken.
+
+**Two escape hatches**, if the check ever gets it wrong on your machine:
+
+| variable | effect |
+|---|---|
+| `NOMERCY_VK_ICD_GUARD=0` | Skip the driver check entirely and use Vulkan as-is. |
+| `NOMERCY_GGML_GPU=0` | Turn the GPU off for both filters, whatever they are asked for. |
+
+`NOMERCY_VK_GUARD_MS=<ms>` raises the check's time budget, which is the right
+knob if you see the "could not verify" message on a machine you know is fine.
+All three exist only where the check does; Windows has no driver check and
+`NOMERCY_GGML_GPU=0` is the only one of the three that applies there.
+
+**Platforms.**
+
+| platform | Vulkan | notes |
+|---|---|---|
+| linux-x86_64 | ✅ | Verified. |
+| windows-x86_64 | ✅ | Verified on an RTX 3070. |
+| linux-aarch64 | ✅ | Built and verified under emulation; no ARM GPU has been measured. |
+| windows-aarch64 | ✅ | Built and statically verified; not yet executed on Windows-on-ARM hardware. |
+| freebsd-x86_64 | ❌ | These binaries link statically, and FreeBSD's static `dlopen` always fails, so a loader could never be opened. |
+| darwin-x86_64 / darwin-arm64 | ❌ | Metal, not Vulkan, is the right backend on macOS; a later phase. |
+
+The GPU path adds no runtime dependency on any of them: the binaries stay
+fully static, and there is no Vulkan loader in the import table or the dynamic
+section anywhere.
+
 #### 🤖 **AI & Analysis**
 - **OpenAI Whisper Integration**: Built-in speech-to-text via whisper.cpp (`--enable-whisper`)
 - **Tesseract OCR**: Text recognition for subtitle extraction (`--enable-libtesseract`)

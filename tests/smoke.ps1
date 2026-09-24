@@ -125,10 +125,64 @@ if (-not (Test-Path $ffprobe)) { Fail "ffprobe.exe not found at $ffprobe" }
 if ((Get-Item $ffmpeg).Length  -eq 0) { Fail 'ffmpeg.exe is empty' }
 if ((Get-Item $ffprobe).Length -eq 0) { Fail 'ffprobe.exe is empty' }
 
+# ggml Vulkan GPU backend, mirroring smoke.sh. The presence checks are string
+# searches over the file, so they run for windows-aarch64 too - the platform
+# no runner here can execute and therefore the one with the least other
+# evidence behind it.
+function Assert-VulkanBackendPresent($bin, $platform) {
+    if (-not (Test-VulkanPlatformHasBackend $platform)) {
+        Note "$(Split-Path $bin -Leaf): $platform carries no Vulkan by design; check skipped"
+        return
+    }
+
+    if (Test-VulkanBackendPresent -Bin $bin) {
+        Write-Host "✅ $(Split-Path $bin -Leaf): ggml Vulkan backend and loader shim are both linked in"
+    } else {
+        Fail "$(Split-Path $bin -Leaf): does not carry the ggml Vulkan backend (or the loader shim it needs)"
+    }
+
+    # Asserted in BOTH directions. On Windows the guard must be absent, and an
+    # assertion that only ever checks for presence would pass a Windows build
+    # that had wrongly acquired it.
+    if (Test-VulkanPlatformHasGuard $platform) {
+        if (-not (Test-VulkanGuardPresent -Bin $bin)) {
+            Fail "$(Split-Path $bin -Leaf): the ICD guard is missing from $platform, which needs it"
+        }
+        $verdicts = Test-VulkanGuardVerdictsDistinct -Bin $bin
+        if (-not $verdicts.Ok) {
+            Write-Host $verdicts.Output
+            Fail "$(Split-Path $bin -Leaf): the ICD guard's three verdicts are no longer distinct on $platform"
+        }
+        Write-Host "✅ $(Split-Path $bin -Leaf): ICD guard present, and its three verdicts are still distinct"
+    } else {
+        if (Test-VulkanGuardPresent -Bin $bin) {
+            Fail "$(Split-Path $bin -Leaf): the ICD guard is compiled into $platform, which must not have it"
+        }
+        Write-Host "✅ $(Split-Path $bin -Leaf): ICD guard correctly absent on $platform"
+    }
+}
+
+# Nothing may regress for a user without a GPU - the constraint that outranks
+# every performance goal on this branch. A CI runner has no GPU.
+function Assert-VulkanStartup($bin, $platform) {
+    if (-not (Test-VulkanPlatformHasBackend $platform)) {
+        Note "$(Split-Path $bin -Leaf): $platform carries no Vulkan; startup check skipped"
+        return
+    }
+    $result = Test-VulkanStartup -FFmpegExe $bin
+    if ($result.Ok) {
+        Write-Host "✅ $(Split-Path $bin -Leaf): starts cleanly with no driver, with the loader pointed at nothing, and with either escape hatch set"
+    } else {
+        Write-Host $result.Output
+        Fail "$(Split-Path $bin -Leaf): does not start on a machine with no usable GPU driver"
+    }
+}
+
 # Runs regardless of whether this runner can execute the binary at all — see
 # the comment on Assert-CpuVariantDispatcherPresent above for why it has to
 # come before the cross-exec early-return, not after it.
 Assert-CpuVariantDispatcherPresent $ffmpeg $Platform
+Assert-VulkanBackendPresent $ffmpeg $Platform
 
 # Cross-exec platforms: never execute — validate PE headers and stop here.
 $machine = Get-CrossExecMachine $Platform
@@ -154,5 +208,6 @@ Assert-Version $ffprobe 'ffprobe version'
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.
 Assert-CpuVariantStartup $ffmpeg $Platform
+Assert-VulkanStartup $ffmpeg $Platform
 Write-Host '✅ Smoke test passed.'
 exit 0
