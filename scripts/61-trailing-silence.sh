@@ -57,4 +57,47 @@ else
     exit 1
 fi
 
+log "Step 4: Verifying configure actually resolves the dependency"
+# Steps 1-3 only prove the sed landed in the right files. That is not the
+# same thing as the filter being buildable: a dependency name configure does
+# not recognize (this is exactly how "lm" vs "libm" was found) leaves the
+# filter silently disabled while every check above still passes and the
+# script still exits 0. This script runs before the real ./configure, so the
+# only place that can catch the drift at build time -- in seconds, not after
+# a full platform build -- is a throwaway configure invocation of our own,
+# scoped to just this filter, read for its actual verdict.
+ts_target_os="${TARGET_OS}"
+[[ "${TARGET_OS}" == "windows" ]] && ts_target_os="mingw32" # matches every ffmpeg-windows-*.dockerfile's --target-os
+ts_check_log="$(mktemp)"
+(
+    cd /build/ffmpeg
+    CFLAGS="${CFLAGS} $(cat /build/cflags.txt 2>/dev/null)" \
+    LDFLAGS="${LDFLAGS} $(cat /build/ldflags.txt 2>/dev/null)" \
+    ./configure \
+        --arch="${ARCH}" \
+        --target-os="${ts_target_os}" \
+        --cross-prefix="${CROSS_PREFIX}" \
+        --enable-cross-compile \
+        --disable-everything \
+        --enable-avfilter \
+        --enable-filter=trailingsilence
+) >"${ts_check_log}" 2>&1
+
+if grep -q "Disabled trailingsilence_filter" "${ts_check_log}"; then
+    log "  ✗ ERROR: configure disabled trailingsilence_filter:"
+    log "  $(grep "Disabled trailingsilence_filter" "${ts_check_log}")"
+    rm -f "${ts_check_log}"
+    exit 1
+fi
+
+if ! grep -qw "trailingsilence" "${ts_check_log}"; then
+    log "  ✗ ERROR: trailingsilence did not appear as an enabled filter in configure's output"
+    tail -n 40 "${ts_check_log}" | log
+    rm -f "${ts_check_log}"
+    exit 1
+fi
+
+log "  ✓ configure resolves the dependency and enables trailingsilence"
+rm -f "${ts_check_log}"
+
 exit 0
