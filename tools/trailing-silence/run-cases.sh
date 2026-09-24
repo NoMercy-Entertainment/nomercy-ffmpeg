@@ -55,11 +55,30 @@ printf -v rounded_nopts '%.1f' "${nopts:-0}"
 check "silence_start without pts" "$rounded_nopts"                         "6.0"
 
 # Review Focus 2: a stream that does not start at pts 0 still measures from
-# its own start, not from absolute pts.
-mid=$("$FF" -hide_banner -v error -ss 2 -i "$FIX/tail_long.wav" \
-        -af "trailingsilence,ametadata=mode=print" -f null - 2>&1 \
+# its own start, not from absolute pts. min_stream_duration=0 is required
+# here: -ss 2 on the 11 s fixture leaves the filter only 9 s of audio, which
+# is legitimately below the 10 s default and would be skipped -- that would
+# test the min_stream_duration gate, not pts-independence, which is the
+# unrelated case right below this one. Also note: no "-v error" here (unlike
+# the original draft of this check) -- ametadata's mode=print writes at
+# AV_LOG_INFO, which "-v error" silences outright, so that flag made this
+# check read nothing and pass by accident via printf's empty-string-to-0.0
+# fallback, regardless of min_stream_duration. "-nostats" is enough to quiet
+# the progress line without hiding the metadata.
+mid=$("$FF" -hide_banner -nostats -ss 2 -i "$FIX/tail_long.wav" \
+        -af "trailingsilence=min_stream_duration=0,ametadata=mode=print" -f null - 2>&1 \
       | sed -n 's/^.*lavfi\.trailingsilence\.silence_start=//p' | tail -1)
 printf -v rounded_mid '%.1f' "$mid"
 check "offset stream silence_start" "$rounded_mid"                         "4.0"
+
+# The other half of that fixture/option interaction, pinned on purpose: at
+# the DEFAULT min_stream_duration (10 s), the same -ss 2 run only has 9 s of
+# audio to offer the filter, so it must be skipped -- detected=0 is the
+# correct, specified behaviour for a stream shorter than min_stream_duration,
+# not a bug. Same "-nostats" note as above applies here.
+skipped=$("$FF" -hide_banner -nostats -ss 2 -i "$FIX/tail_long.wav" \
+            -af "trailingsilence,ametadata=mode=print" -f null - 2>&1 \
+          | sed -n 's/^.*lavfi\.trailingsilence\.detected=//p' | tail -1)
+check "short-after-seek skipped" "$skipped" "0"
 
 exit $fail
