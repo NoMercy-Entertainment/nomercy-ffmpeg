@@ -28,18 +28,22 @@ check "stereo_both_quiet detected" "$(get stereo_both_quiet.wav detected)" "1"
 check "too_short detected"        "$(get too_short.wav detected)"          "0"
 
 # The measurement itself, to 0.1 s.
+# ${var:?...} rather than a bare "$var": an empty extraction (a broken or
+# renamed metadata key) must abort loudly instead of printf silently
+# formatting "" to "0.0" and the check passing by accident whenever the
+# expected value happens to be 0-valued.
 start=$(get tail_long.wav silence_start)
-printf -v rounded '%.1f' "$start"
+printf -v rounded '%.1f' "${start:?empty extraction}"
 check "tail_long silence_start"   "$rounded"                               "6.0"
 
 # Advice = measurement + margin, and both are reported.
 end=$(get tail_long.wav recommended_end)
-printf -v rounded_end '%.2f' "$end"
+printf -v rounded_end '%.2f' "${end:?empty extraction}"
 check "tail_long recommended_end" "$rounded_end"                           "6.25"
 
 # Review Focus 5: a margin larger than the silence clamps to the stream end.
 end=$(get tail_long.wav recommended_end "safety_margin=30")
-printf -v rounded_end '%.1f' "$end"
+printf -v rounded_end '%.1f' "${end:?empty extraction}"
 check "clamped recommended_end"   "$rounded_end"                           "11.0"
 
 # Review Focus 4: linear noise behaves like the equivalent dB value.
@@ -51,7 +55,10 @@ check "linear noise"              "$(get tail_long.wav detected "noise=0.0031622
 nopts=$("$FF" -hide_banner -nostats -i "$FIX/tail_long.wav" \
           -af "asetpts=NAN,trailingsilence,ametadata=mode=print" -f null - 2>&1 \
         | sed -n 's/^.*lavfi\.trailingsilence\.silence_start=//p' | tail -1)
-printf -v rounded_nopts '%.1f' "${nopts:-0}"
+# ${nopts:?...}, not ${nopts:-0}: the old default masked an empty extraction
+# behind a second layer of the same "" -> 0.0 fallback that printf already
+# applies on its own -- two coercions stacked, doubly silent.
+printf -v rounded_nopts '%.1f' "${nopts:?empty extraction}"
 check "silence_start without pts" "$rounded_nopts"                         "6.0"
 
 # Review Focus 2: a stream that does not start at pts 0 still measures from
@@ -68,7 +75,7 @@ check "silence_start without pts" "$rounded_nopts"                         "6.0"
 mid=$("$FF" -hide_banner -nostats -ss 2 -i "$FIX/tail_long.wav" \
         -af "trailingsilence=min_stream_duration=0,ametadata=mode=print" -f null - 2>&1 \
       | sed -n 's/^.*lavfi\.trailingsilence\.silence_start=//p' | tail -1)
-printf -v rounded_mid '%.1f' "$mid"
+printf -v rounded_mid '%.1f' "${mid:?empty extraction}"
 check "offset stream silence_start" "$rounded_mid"                         "4.0"
 
 # The other half of that fixture/option interaction, pinned on purpose: at
