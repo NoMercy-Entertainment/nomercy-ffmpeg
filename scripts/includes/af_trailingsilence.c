@@ -18,6 +18,7 @@
 
 #include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
+#include "libavutil/macros.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 
@@ -78,23 +79,69 @@ static int config_input(AVFilterLink *inlink)
     return 0;
 }
 
-/* Task 3 replaces this with the real scan. */
+/* A sample position is silent when every channel is below the threshold, so
+ * the per-position test is the max across channels. Scanning per sample
+ * rather than per frame puts silence_start on the real sample instead of a
+ * frame boundary -- at 1024 samples that is the difference between ~21 ms of
+ * slop and none, and this value is what the caller will cut on. */
 static void scan_frame(TrailingSilenceContext *s, const AVFrame *frame)
 {
+    const int nb_ch = frame->ch_layout.nb_channels;
+
+    for (int i = 0; i < frame->nb_samples; i++) {
+        float peak = 0.f;
+
+        for (int c = 0; c < nb_ch; c++) {
+            const float v = fabsf(((const float *)frame->extended_data[c])[i]);
+            if (v > peak)
+                peak = v;
+        }
+
+        if (peak > s->noise)
+            s->silent_run_start = -1;                 /* audible: close any run */
+        else if (s->silent_run_start < 0)
+            s->silent_run_start = s->nb_samples + i;  /* a new run opens here */
+    }
+
     s->nb_samples += frame->nb_samples;
 }
 
 static void set_report(AVFilterContext *ctx, AVFrame *frame)
 {
     TrailingSilenceContext *s = ctx->priv;
+    const double rate = s->sample_rate ? s->sample_rate : 1.0;
+    const double stream_duration = s->nb_samples / rate;
+    const double margin = s->safety_margin / (double)AV_TIME_BASE;
+    double silence_start = 0.0, silence_duration = 0.0, recommended_end;
+    int detected = 0;
     char buf[64];
 
-    av_dict_set(&frame->metadata, "lavfi.trailingsilence.detected", "0", 0);
+    /* A run must be open at EOF, long enough, in a stream long enough, and
+     * must not be the whole stream: an entirely silent file has no audible
+     * content to preserve, so there is no honest cut point to recommend. */
+    if (s->silent_run_start > 0 &&
+        s->nb_samples * AV_TIME_BASE / (int64_t)rate >= s->min_stream_duration) {
+        silence_start    = s->silent_run_start / rate;
+        silence_duration = stream_duration - silence_start;
+        if (silence_duration * AV_TIME_BASE >= (double)s->duration)
+            detected = 1;
+    }
 
-    snprintf(buf, sizeof(buf), "%.6f",
-             s->sample_rate ? (double)s->nb_samples / s->sample_rate : 0.0);
+    recommended_end = detected ? FFMIN(silence_start + margin, stream_duration)
+                               : stream_duration;
+
+    snprintf(buf, sizeof(buf), "%d", detected);
+    av_dict_set(&frame->metadata, "lavfi.trailingsilence.detected", buf, 0);
+    snprintf(buf, sizeof(buf), "%.6f", silence_start);
+    av_dict_set(&frame->metadata, "lavfi.trailingsilence.silence_start", buf, 0);
+    snprintf(buf, sizeof(buf), "%.6f", silence_duration);
+    av_dict_set(&frame->metadata, "lavfi.trailingsilence.silence_duration", buf, 0);
+    snprintf(buf, sizeof(buf), "%.6f", stream_duration);
     av_dict_set(&frame->metadata, "lavfi.trailingsilence.stream_duration", buf, 0);
+    snprintf(buf, sizeof(buf), "%.6f", recommended_end);
     av_dict_set(&frame->metadata, "lavfi.trailingsilence.recommended_end", buf, 0);
+    snprintf(buf, sizeof(buf), "%.6f", margin);
+    av_dict_set(&frame->metadata, "lavfi.trailingsilence.safety_margin", buf, 0);
 
     s->reported = 1;
 }
@@ -134,6 +181,11 @@ static int activate(AVFilterContext *ctx)
                 s->held = NULL;
                 if (ret < 0)
                     return ret;
+            } else if (!s->reported) {
+                /* No frame ever arrived, so there is nothing to attach
+                 * metadata to. Say so rather than exiting silently. */
+                av_log(ctx, AV_LOG_INFO,
+                       "trailingsilence: no audio frames seen; nothing to report.\n");
             }
             ff_outlink_set_status(outlink, AVERROR_EOF, pts);
             return 0;
