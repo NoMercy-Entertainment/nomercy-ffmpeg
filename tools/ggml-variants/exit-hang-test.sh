@@ -47,13 +47,14 @@ fail=0
 
 run_series() { # run_series <label> <filter-suffix> <expected-backend>
     local label="$1" suffix="$2" want="$3"
-    local hung=0 nonzero=0 ok=0 wrong=0 i rc t0 t1 secs backend
+    local hung=0 nonzero=0 ok=0 wrong=0 i rc t0 t1 ms backend
+    local lo="" hi="" total=0 all=""
     local logdir="${WORK}/hangtest-${label}"
     rm -rf "${logdir}" && mkdir -p "${logdir}"
 
     echo "== ${RUNS} stemsplit runs, ${label} (timeout ${TMO}s each) =="
     for ((i = 1; i <= RUNS; i++)); do
-        t0=$(date +%s)
+        t0=$(date +%s%N)
         set +e
         timeout -k 5 "${TMO}" "${FF}" -hide_banner -loglevel info -nostats -y \
             -t 30 -i input.mp3 -vn \
@@ -61,19 +62,30 @@ run_series() { # run_series <label> <filter-suffix> <expected-backend>
             -f wav "${logdir}/out.wav" > "${logdir}/run-${i}.log" 2>&1
         rc=$?
         set -e
-        t1=$(date +%s)
-        secs=$((t1 - t0))
+        t1=$(date +%s%N)
+        ms=$(( (t1 - t0) / 1000000 ))
         # timeout reports 124 when it fired, 137 when the -k SIGKILL was what
         # actually stopped it. Both mean the process did not leave on its own.
         if [[ ${rc} -eq 124 || ${rc} -eq 137 ]]; then
             hung=$((hung + 1))
-            echo "  run ${i}: HUNG (killed after ${secs}s)"
+            echo "  run ${i}: HUNG (killed after ${ms} ms)"
         elif [[ ${rc} -ne 0 ]]; then
             nonzero=$((nonzero + 1))
-            echo "  run ${i}: exit ${rc} after ${secs}s"
+            echo "  run ${i}: exit ${rc} after ${ms} ms"
             tail -3 "${logdir}/run-${i}.log" | sed "s/^/      /"
         else
             ok=$((ok + 1))
+            # Kept, not discarded. These are NOT a benchmark and are worthless
+            # off this machine -- what they are for is that a series which
+            # passes in 0.9 s and one that passes in 90 s are not the same
+            # result, and #64's fault class shows up as drift before it shows
+            # up as a hang. They also make the two series visibly distinct
+            # populations, which is a second, independent reason to believe the
+            # GPU half was not silently running on the CPU.
+            total=$((total + ms))
+            all="${all}${ms} "
+            [[ -z ${lo} || ${ms} -lt ${lo} ]] && lo=${ms}
+            [[ -z ${hi} || ${ms} -gt ${hi} ]] && hi=${ms}
         fi
         # Asserted on every run, not once at the start: a binary that used the
         # GPU on run 1 and silently fell back afterwards would otherwise read as
@@ -87,6 +99,10 @@ run_series() { # run_series <label> <filter-suffix> <expected-backend>
 
     echo "  ${label}: ${ok}/${RUNS} exited cleanly, ${hung} hung, ${nonzero} exited non-zero"
     echo "  ${label}: backend '${want}' on $((RUNS - wrong))/${RUNS} runs"
+    if [[ ${ok} -gt 0 ]]; then
+        echo "  ${label}: clean runs took min ${lo} ms, max ${hi} ms, mean $((total / ok)) ms (this machine only, not a benchmark)"
+        echo "  ${label}: every clean run, in order: ${all}"
+    fi
     [[ ${hung} -eq 0 ]]    || { echo "  FAIL: ${hung} run(s) failed to exit - this is issue #64's fault class"; fail=1; }
     [[ ${nonzero} -eq 0 ]] || { echo "  FAIL: ${nonzero} run(s) exited non-zero"; fail=1; }
     [[ ${wrong} -eq 0 ]]   || { echo "  FAIL: ${wrong} run(s) did not use the ${want} backend, so this series proves less than it claims"; fail=1; }
