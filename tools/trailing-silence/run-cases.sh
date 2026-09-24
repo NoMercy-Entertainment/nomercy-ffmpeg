@@ -88,4 +88,16 @@ skipped=$("$FF" -hide_banner -nostats -ss 2 -i "$FIX/tail_long.wav" \
           | sed -n 's/^.*lavfi\.trailingsilence\.detected=//p' | tail -1)
 check "short-after-seek skipped" "$skipped" "0"
 
+# The JSON report must agree with the metadata field for field -- they come
+# from one computation and a test should hold them to that.
+rm -f /tmp/ts-report.json
+"$FF" -hide_banner -nostats -i "$FIX/tail_long.wav" \
+    -af "trailingsilence=destination=/tmp/ts-report.json,ametadata=mode=print" \
+    -f null - >/tmp/ts-meta.txt 2>&1
+for k in detected silence_start silence_duration stream_duration recommended_end safety_margin; do
+    meta=$(sed -n "s/^.*lavfi\.trailingsilence\.$k=//p" /tmp/ts-meta.txt | tail -1)
+    json=$(sed -n "s/.*\"$k\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^,\"}]*\).*/\1/p" /tmp/ts-report.json | head -1)
+    check "json $k matches metadata" "$json" "$meta"
+done
+
 exit $fail

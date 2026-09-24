@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "libavformat/avio.h"
 #include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/macros.h"
@@ -106,6 +107,49 @@ static void scan_frame(TrailingSilenceContext *s, const AVFrame *frame)
     s->nb_samples += frame->nb_samples;
 }
 
+static void write_report(AVFilterContext *ctx, int detected,
+                         double silence_start, double silence_duration,
+                         double stream_duration, double recommended_end,
+                         double margin)
+{
+    TrailingSilenceContext *s = ctx->priv;
+    AVIOContext *out = NULL;
+    char buf[512];
+    int ret;
+
+    if (!s->destination || !*s->destination)
+        return;
+
+    if (av_strcasecmp(s->format, "json")) {
+        av_log(ctx, AV_LOG_ERROR,
+               "trailingsilence: unknown format '%s'; only 'json' is supported.\n",
+               s->format);
+        return;
+    }
+
+    ret = avio_open(&out, s->destination, AVIO_FLAG_WRITE);
+    if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "trailingsilence: could not open %s: %s\n",
+               s->destination, av_err2str(ret));
+        return;
+    }
+
+    snprintf(buf, sizeof(buf),
+             "{\n"
+             "  \"detected\": %d,\n"
+             "  \"silence_start\": %.6f,\n"
+             "  \"silence_duration\": %.6f,\n"
+             "  \"stream_duration\": %.6f,\n"
+             "  \"recommended_end\": %.6f,\n"
+             "  \"safety_margin\": %.6f\n"
+             "}\n",
+             detected, silence_start, silence_duration,
+             stream_duration, recommended_end, margin);
+
+    avio_write(out, (const unsigned char *)buf, strlen(buf));
+    avio_closep(&out);
+}
+
 static void set_report(AVFilterContext *ctx, AVFrame *frame)
 {
     TrailingSilenceContext *s = ctx->priv;
@@ -142,6 +186,9 @@ static void set_report(AVFilterContext *ctx, AVFrame *frame)
     av_dict_set(&frame->metadata, "lavfi.trailingsilence.recommended_end", buf, 0);
     snprintf(buf, sizeof(buf), "%.6f", margin);
     av_dict_set(&frame->metadata, "lavfi.trailingsilence.safety_margin", buf, 0);
+
+    write_report(ctx, detected, silence_start, silence_duration,
+                 stream_duration, recommended_end, margin);
 
     s->reported = 1;
 }
