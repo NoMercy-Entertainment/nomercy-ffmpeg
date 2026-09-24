@@ -47,12 +47,19 @@ fi
 # levels into throwaway prefixes and never touches Vulkan at all, so setting
 # these flags there instead would silently build nothing Vulkan-related.
 #
-# freebsd-x86_64 is excluded too, alongside darwin: FreeBSD's base system
-# libc is static-only and its dlopen() is a stub that always fails there (no
-# dynamic loader exists on a static libc), so vk_loader_shim.c could never
-# actually open a real Vulkan loader on this platform at runtime. Building
-# Vulkan in anyway would just cost ~59 MB of dead weight that can never do
-# anything but return the shim's own stub failures. Task 5 confirms this.
+# freebsd-x86_64 is excluded too, alongside darwin, because vk_loader_shim.c
+# could never open a real Vulkan loader there: these binaries are linked
+# statically, and FreeBSD's libc.a supplies dlopen() as a stub that sets
+# "Service unavailable" and returns NULL, unconditionally. Not a guess and not
+# a property of FreeBSD in general -- FreeBSD's DYNAMIC libc has a working
+# dlopen, and an earlier version of this comment wrongly said the base system
+# libc was static-only. Verified for Task 5 on the same FreeBSD 14.3 sysroot
+# this target builds against: libc.a's dlfcn.o carries the string, and the
+# disassembly of dlopen in a statically linked FreeBSD binary is four
+# instructions -- load that string, call _rtld_error, return 0.
+#
+# So building Vulkan in here would cost ~59 MB of dead weight that can never do
+# anything but return the shim's own stub failures.
 NM_VULKAN=0
 if [[ ${TARGET_OS} != darwin && ${TARGET_OS} != freebsd ]]; then
     NM_VULKAN=1
