@@ -179,6 +179,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 | **`keydetect`** | Audio filter | Musical key and chord detection |
 | **`beatdetect`** | Audio filter | Tempo, beat grid and confidence as `lavfi.beatdetect.*` frame metadata; octave decided from the onsets, not from a preferred range |
 | **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems (Spleeter 2stems on ggml) |
+| **`trailingsilence`** | Audio filter | Reports where a stream's audible content ends as `lavfi.trailingsilence.*` frame metadata (and an optional JSON report); never cuts anything itself |
 | **OCR subtitle encoder** | Codec | Converts bitmap subtitles (DVD/Blu-ray) to WebVTT text using Tesseract OCR |
 | **Sprite-sheet muxer** | Muxer | Generates thumbnail sprite sheets with a WebVTT timeline for player scrubbing |
 | **Chapter VTT muxer** | Muxer | Exports chapter metadata as WebVTT |
@@ -286,6 +287,66 @@ cite:
 As with any source-separation tool, **you must hold the rights to any
 copyrighted material you process** — this carries forward Spleeter's own
 upstream advisory.
+
+#### 🔇 **`trailingsilence` — Trailing-Silence Detection**
+
+Reports where a stream's audible content ends, so a media server can store
+the point and a player can stop there. **It never cuts anything.** Trimming
+is the caller's job, with a second, ordinary `ffmpeg -to` pass:
+
+```bash
+# Step 1: measure. destination writes the JSON report; the metadata is also
+# on the final frame either way, so a bare -af trailingsilence works too.
+ffmpeg -i in.mka -af trailingsilence=destination=report.json -f null -
+
+# Step 2: cut, using the value from step 1. Often needs no re-encode.
+ffmpeg -i in.mka -to <recommended_end> -c copy out.mka
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `noise` (`n`) | double | `-50dB` | Silence threshold. Accepts a dB value (e.g. `-50dB`) or a linear amplitude (e.g. `0.00316227766`, the same threshold) |
+| `duration` (`d`) | duration | `2` | Minimum length a trailing quiet run must reach before it counts as the silence |
+| `min_stream_duration` | duration | `10` | Streams shorter than this are skipped entirely — nothing is reported as detected |
+| `safety_margin` | duration | `0.25` | How far past the measured silence start the recommended cut point sits |
+| `destination` | string | *(empty)* | Path to write the JSON report; empty disables the report (the frame metadata is still emitted) |
+| `format` | string | `json` | Report format. Only `json` is currently supported |
+
+**Metadata keys** — all six are attached to the final frame on **every run**,
+including when nothing is found, as `lavfi.trailingsilence.<key>`:
+
+| Key | What it is |
+|---|---|
+| `detected` | `1` if a qualifying trailing silence was found, else `0` |
+| `silence_start` | **Measured.** Seconds from stream start to where the trailing quiet run begins |
+| `silence_duration` | **Measured.** Length of that quiet run |
+| `stream_duration` | **Measured.** Total stream duration |
+| `recommended_end` | **Advice.** `min(silence_start + safety_margin, stream_duration)` |
+| `safety_margin` | The margin actually applied (echoes the option, for a caller that only sees the report) |
+
+**Measurement versus advice is the distinction that matters here.**
+`silence_start` is where the signal crossed below `noise` and stayed there —
+a measurement. `recommended_end` is advice: the measurement plus a small
+safety margin, because a very quiet outro (a fading tail, room tone, a soft
+sustained note) can sit below the threshold while still being audible.
+Reporting both lets a server pick the exact measured point, the padded
+recommendation, or its own policy in between — and always know which of the
+two numbers it is looking at.
+
+**Safe to consume blind.** When `detected=0` — the stream was too short,
+entirely silent, only had silence in the middle, or simply had no
+qualifying trailing run — every key is still emitted, and `recommended_end`
+is set to `stream_duration`. A caller can read `recommended_end` and pass it
+straight to `-to` without first checking `detected`; on a stream with
+nothing to trim, that command trims nothing.
+
+**Skipped by design, not by bug:**
+- Streams shorter than `min_stream_duration` (default 10 s).
+- Entirely silent streams — there is no audible content to preserve, so no
+  honest cut point to recommend.
+- Silence that sits in the middle of the stream but does not reach the end.
+- Live input: the report is produced at end-of-stream, which live input
+  never reaches.
 
 #### 🤖 **AI & Analysis**
 - **OpenAI Whisper Integration**: Built-in speech-to-text via whisper.cpp (`--enable-whisper`)
