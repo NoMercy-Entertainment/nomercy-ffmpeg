@@ -334,6 +334,33 @@ for ug in 1 0; do
     [[ ${rc} -eq 0 ]] || { echo "  FAIL: whisper died on a software-Vulkan machine with use_gpu=${ug}"; fail=1; }
 done
 
+# The third route to the same crash, and the one the review could only
+# demonstrate with a static probe. An inconclusive guard verdict used to leave
+# the process to die inside ggml_backend_load_all(); it now pins as a
+# precaution, so the real filter must survive an unusable budget on a machine
+# with fatal ICDs. Both filters, both use_gpu values.
+echo "  with an unusable guard budget (the precautionary path):"
+for ug in 1 0; do
+    NOMERCY_VK_GUARD_MS=1 ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn         -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=${wh_model}:language=en:queue=3:use_gpu=${ug}"         -f null - >/dev/null 2>&1
+    rc=$?
+    echo "    whisper   use_gpu=${ug}, GUARD_MS=1: exit ${rc}"
+    [[ ${rc} -eq 0 ]] || { echo "  FAIL: whisper died when the guard could not finish in time"; fail=1; }
+
+    NOMERCY_VK_GUARD_MS=1 ./ffmpeg -hide_banner -loglevel error -nostats -t 2 -i input.mp3 -vn         -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment:use_gpu=${ug}"         -f null - >/dev/null 2>&1
+    rc=$?
+    echo "    stemsplit use_gpu=${ug}, GUARD_MS=1: exit ${rc}"
+    [[ ${rc} -eq 0 ]] || { echo "  FAIL: stemsplit died when the guard could not finish in time"; fail=1; }
+done
+
+# The precautionary pin must never be reported as an observed crash: that
+# wording sends a user chasing a driver bug they do not have.
+notice=$(NOMERCY_VK_GUARD_MS=1 ./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn     -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment" -f null - 2>&1     | grep -oE "stemsplit: (could not verify|this machine.s vulkan drivers crash)[^.]*" | head -1)
+echo "  precautionary wording: ${notice:-<none>}"
+case "${notice}" in
+    *"could not verify"*) echo "    ok: reported as a precaution" ;;
+    *) echo "  FAIL: the precautionary path did not say so (got: ${notice:-<none>})"; fail=1 ;;
+esac
+
 echo "  guard notice, as the filters report it:"
 ./ffmpeg -hide_banner -loglevel info -nostats -t 2 -i input.mp3 -vn \
     -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=accompaniment" -f null - 2>&1 \
