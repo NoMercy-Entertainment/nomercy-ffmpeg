@@ -391,23 +391,41 @@ static int nm_device_is_software(ggml_backend_dev_t dev)
 /* What a probe found. The first three are also the byte the child sends back,
  * so those values are small and stable on purpose.
  *
- * THE RULE THIS FILE IS BUILT ON: the guard may only ever act on evidence it
- * actually obtained. Exactly one verdict is evidence of danger - NM_VK_CRASHED,
- * the child died - and only that one may rewrite the process's loader
- * configuration. Everything else that is not a clean answer means "we do not
- * know", and "we do not know" must leave the environment exactly as found and
- * report no GPU.
+ * THE RULE THIS FILE IS BUILT ON, in its corrected form. There are THREE
+ * actions, not two, and which one applies depends on what was observed:
  *
- * NM_VK_TIMEOUT exists because it was once folded into NM_VK_CRASHED, and that
- * single conflation put a healthy machine's Vulkan back in the bin: with
- * NOMERCY_VK_GUARD_MS=1, on a container where nothing crashes at all, the guard
- * announced "this machine's vulkan drivers crash a statically linked binary"
- * and pinned both variables. It had observed no such thing. A deadline that
- * expires is a statement about us, not about the driver.
+ *   observed crash       -> pin, and report it as the observation it is
+ *   observed survival    -> pin the survivors, or leave a clean machine alone
+ *   nothing observed     -> pin /nonexistent.json AS A PRECAUTION, and say so
  *
- * nm_vk_inconclusive() below is the single place that decides which verdicts
- * are "we do not know", so a future verdict cannot quietly acquire the power to
- * modify the process by being added in the wrong branch. */
+ * The third one is the part that is easy to get wrong in both directions, and
+ * this file has now been wrong in both.
+ *
+ * It was first wrong by reporting a precaution as evidence: a deadline that
+ * expired announced "this machine's vulkan drivers crash a statically linked
+ * binary" on a container where nothing crashed at all, sending a user to chase
+ * a driver bug they do not have. That is what NM_VK_TIMEOUT exists to prevent,
+ * and the wording rule below is permanent: a precautionary pin must NEVER be
+ * described as an observed crash.
+ *
+ * It was then wrong the other way, by concluding that "no evidence" meant "do
+ * nothing". Doing nothing protects the guard, not the process. af_whisper.c
+ * calls ggml_backend_load_all() a few lines after asking us, and there is no
+ * way to use whisper at all without constructing ggml's registry
+ * (whisper_backend_init() reaches get_reg() through ggml_backend_dev_count()
+ * in its ACCEL loop and again through ggml_backend_init_by_type(...CPU...)),
+ * so on a machine with a fatal ICD, declining to pin means the process dies a
+ * few lines later. Measured: exit 139 for both use_gpu values.
+ *
+ * The outcomes are not symmetric, which is what settles it. A precautionary pin
+ * costs one process an accelerator it might have been able to use. Declining to
+ * pin costs that process its life. /nonexistent.json is survivable; SIGSEGV is
+ * not. NOMERCY_VK_ICD_GUARD=0 remains for anyone who would rather have the
+ * crash than the precaution.
+ *
+ * The other half of getting this right is making the precautionary state RARE -
+ * see the budget defaults below, which are deliberately far larger than any
+ * healthy machine needs. */
 #define NM_VK_OK_GPU    0   /* survived; a hardware GPU is usable       */
 #define NM_VK_NO_GPU    1   /* survived; nothing usable, nothing scary  */
 #define NM_VK_SOFTWARE  2   /* survived; a software device is present   */
@@ -509,14 +527,22 @@ static char nm_vk_notice[512];
 
 #ifdef NM_VK_ICD_GUARD
 
-/* Did this verdict tell us anything? Everything that is not a clean survival
- * and not an observed crash is "no". Every decision site asks THIS, rather than
- * testing verdicts individually, so a verdict added later cannot quietly
- * acquire the power to modify the process by being written into the wrong
- * branch. Lives inside the guard because nothing outside it probes. */
+/* Did this verdict tell us anything?
+ *
+ * Written as a NEGATIVE list - anything that is not one of the four observed
+ * outcomes - rather than the positive list of TIMEOUT and UNKNOWN it used to
+ * be. The polarity is the whole point: it is what makes the claim above true,
+ * that a verdict added later cannot quietly acquire the power to act by being
+ * written into the wrong branch. With a positive list a new verdict defaulted
+ * to CONCLUSIVE, and the bisect's trailing `else dropped++` would have rejected
+ * a manifest on no evidence at all. Now a new verdict defaults to "we do not
+ * know", which is the safe direction for every caller.
+ *
+ * Lives inside the guard because nothing outside it probes. */
 static int nm_vk_inconclusive(int verdict)
 {
-    return verdict == NM_VK_TIMEOUT || verdict == NM_VK_UNKNOWN;
+    return verdict != NM_VK_OK_GPU && verdict != NM_VK_NO_GPU &&
+           verdict != NM_VK_SOFTWARE && verdict != NM_VK_CRASHED;
 }
 
 static void nm_vk_say(const char *fmt, ...)
@@ -545,8 +571,24 @@ static void nm_vk_say(const char *fmt, ...)
  * device open a few hundred ms. Both are overridable for a machine with a
  * pathologically slow driver, because the failure mode of too small a budget
  * is only "no GPU". */
-#define NM_VK_BUDGET_MS_DEFAULT 8000
-#define NM_VK_PROBE_MS_DEFAULT  5000
+/* Deliberately generous, because an inconclusive verdict now costs a machine
+ * its GPU (it pins as a precaution), so the only acceptable false-positive rate
+ * for "timed out" is one that never fires on a healthy machine.
+ *
+ * What the healthy paths actually measure here: 8 ms with no ICDs at all,
+ * 410 ms for the full Mesa bisect, and a few hundred ms for a cold
+ * ggml_vk_init on this project's RTX 3070. 10 s per probe is more than an
+ * order of magnitude above the slowest of those, which leaves room for a cold
+ * shader cache on a loaded or oversubscribed box - the case the 5 s cap was
+ * measured to be too tight for. 30 s overall covers the whole-set probe, a
+ * realistic bisect, and the retry below.
+ *
+ * The cost of being wrong the other way is bounded and visible: 30 s of
+ * startup delay in the worst case, on a machine that is genuinely wedged,
+ * versus a GPU silently switched off on a machine that was merely slow. Both
+ * are overridable. */
+#define NM_VK_BUDGET_MS_DEFAULT 30000
+#define NM_VK_PROBE_MS_DEFAULT  10000
 
 static long nm_vk_env_ms(const char *name, long dflt)
 {
@@ -624,6 +666,8 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
     pid_t pid;
     unsigned char verdict = 0;
     int got = 0, timed_out = 0, io_failed = 0;
+    int status = 0;
+    pid_t reaped = -1;
     long budget = deadline_ms - nm_now_ms();
     long cap = nm_vk_env_ms("NOMERCY_VK_PROBE_MS", NM_VK_PROBE_MS_DEFAULT);
 
@@ -751,27 +795,58 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
      * child has already reached its _exit(), and on a host that auto-reaps
      * (SIGCHLD = SIG_IGN, the very host this guard was rewritten for) its pid
      * can be free and recycled by the time a signal would land - so an
-     * unconditional kill here is a kill aimed at whatever now owns that pid.
-     * Reap either way, and do not care what waitpid says: on an auto-reaping
-     * host there may be nothing left to reap, which is fine, because the answer
-     * never came from waitpid in the first place. */
+     * unconditional kill here is a kill aimed at whatever now owns that pid. */
     if (!got)
         kill(pid, SIGKILL);
-    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+
+    /* The status is kept now, not discarded, for one specific question on one
+     * specific path: see below. On an auto-reaping host there may be nothing
+     * left to reap, which is why `reaped` gates every use of it - the verdict
+     * must never DEPEND on waitpid succeeding, which is the mistake the ECHILD
+     * finding was about. */
+    while ((reaped = waitpid(pid, &status, 0)) < 0 && errno == EINTR)
         ;
 
     if (got)
         return verdict <= NM_VK_SOFTWARE ? (int) verdict : NM_VK_CRASHED;
-    /* No byte. EOF - and only EOF - means the child closed the pipe without
-     * answering, i.e. it died, and that is evidence. Running out of time is
-     * not: the child may still be mid-enumeration behind a slow driver, a cold
-     * shader cache or a loaded machine, and we have learned nothing about
-     * whether Vulkan is safe here. Neither is our own poll() or read() failing:
-     * that is a statement about this process, not about the driver. */
+
+    /* Running out of time tells us nothing: the child may still be
+     * mid-enumeration behind a slow driver, a cold shader cache or a loaded
+     * machine. Neither does our own poll() or read() failing - that is a
+     * statement about this process, not about the driver. */
     if (timed_out)
         return NM_VK_TIMEOUT;
     if (io_failed)
         return NM_VK_UNKNOWN;
+
+    /* EOF: the child closed the pipe without answering, so it died. This is the
+     * one branch that can claim evidence, so it is worth asking WHAT killed it.
+     * A fault signal is the driver killing us, which is the thing being
+     * claimed. SIGKILL is not: in a memory-capped container - the media-server
+     * deployment, where the child forks from a process that already holds a
+     * model resident before Vulkan allocates anything - that is the OOM killer,
+     * or a cgroup, or an administrator, and reading it as "this machine's
+     * drivers crash" would pin a machine whose drivers were never the problem.
+     * We never signal the child on this path, so the signal is never ours.
+     *
+     * An unreaped or non-signal death falls through to CRASHED: a child that
+     * exited without writing its byte did so inside the enumeration it was sent
+     * to perform, and the verdict does not depend on waitpid having worked. */
+    if (reaped == pid && WIFSIGNALED(status)) {
+        switch (WTERMSIG(status)) {
+        case SIGSEGV: case SIGBUS: case SIGILL: case SIGFPE: case SIGABRT:
+#ifdef SIGTRAP
+        case SIGTRAP:
+#endif
+#ifdef SIGSYS
+        case SIGSYS:
+#endif
+            return NM_VK_CRASHED;
+        default:
+            /* Killed by something that is not a fault: not our evidence. */
+            return NM_VK_UNKNOWN;
+        }
+    }
     return NM_VK_CRASHED;
 }
 
@@ -1001,11 +1076,6 @@ static void nm_vk_pin(const char *value)
     setenv("VK_DRIVER_FILES", value, 1);
 }
 
-/* Set when the guard could not determine anything. The parent must then not
- * enumerate either: we have neither proof that it is safe nor a pin that would
- * make it safe. */
-static int nm_vk_gave_up;
-
 /*
  * Leave this process able to enumerate Vulkan without dying.
  *
@@ -1020,19 +1090,43 @@ static int nm_vk_gave_up;
  * that machine its GPU.
  *
  * What the guard does at the end depends on WHY it got here, and the
- * distinction is the difference between degrading and breaking:
+ * distinction between a CONCLUSION and a PRECAUTION is the one that must never
+ * blur - not the distinction between acting and not acting:
  *
  *   crashed, survivors      -> pin the survivors
- *   crashed, no survivors   -> pin /nonexistent.json; Vulkan really does kill
- *                              this process and there is nothing else to do
+ *   crashed, no survivors   -> pin /nonexistent.json, and say it crashed,
+ *                              because it did
  *   software, survivors     -> pin the survivors: strictly better than what
  *                              the loader had, hardware instead of llvmpipe
- *   software, no survivors  -> change NOTHING. Nothing crashed. ggml simply
- *                              will not use this device (nm_vk_scan already
- *                              refuses it), and FFmpeg's own filters, which
- *                              run happily on llvmpipe, keep it
- *   could not test          -> change NOTHING, and do not enumerate either
+ *   software, no survivors  -> change NOTHING. Nothing crashed, so there is
+ *                              nothing to protect the process from. ggml will
+ *                              not use the device, and FFmpeg's own filters,
+ *                              which run happily on llvmpipe, keep it
+ *   could not test          -> pin /nonexistent.json AS A PRECAUTION, and say
+ *                              exactly that. Doing nothing here does not leave
+ *                              the process unharmed; it leaves it to segfault
+ *                              in ggml_backend_load_all() a few lines later
  */
+/* The precautionary arm of the three actions.
+ *
+ * Called when nothing was observed - a probe timed out, a fork failed, a
+ * bisect could not be finished. It pins exactly as the observed-crash arm
+ * does, because the process has to be made safe either way, and it is a
+ * SEPARATE function purely so that the wording can never drift back into
+ * claiming a crash nobody saw. That claim is what sent a user chasing a
+ * driver bug they did not have, and keeping the two arms apart in the code is
+ * what stops a future edit merging the messages.
+ *
+ * `reason` completes "could not verify this machine's vulkan drivers (%s)". */
+static void nm_vk_pin_precaution(const char *reason)
+{
+    nm_vk_pin("/nonexistent.json");
+    nm_vk_say("could not verify this machine's vulkan drivers (%s); disabling "
+              "vulkan for this process as a precaution. This is not a report "
+              "that anything is broken - set NOMERCY_VK_GUARD_MS higher, or "
+              "NOMERCY_VK_ICD_GUARD=0 to skip the check entirely", reason);
+}
+
 static void nm_vk_make_safe(void)
 {
     char *cand[NM_VK_MAX_ICDS];
@@ -1043,27 +1137,32 @@ static void nm_vk_make_safe(void)
     long deadline = nm_now_ms() + nm_vk_env_ms("NOMERCY_VK_GUARD_MS", NM_VK_BUDGET_MS_DEFAULT);
     int verdict;
 
-    /* The escape hatch, and the harness's way of reproducing the pre-guard
-     * crash without a second binary. */
+    /* The escape hatch: skip the whole check, crash and all. Also how the
+     * harness reproduces the pre-guard crash without a second binary. */
     if (guard && !strcmp(guard, "0"))
         return;
 
     verdict = nm_vk_probe(NULL, deadline);
 
+    /* One retry, and only for a timeout. A cold ggml_vk_init on a loaded box is
+     * the plausible way a healthy machine reaches the deadline, and the second
+     * attempt runs against a warm shader cache - so this converts the most
+     * likely false precaution into a real answer, for the price of one fork on
+     * a path that is already going badly. A crash is not retried: it will crash
+     * again, and we already have our answer. */
+    if (verdict == NM_VK_TIMEOUT)
+        verdict = nm_vk_probe(NULL, deadline);
+
     /* A clean answer: the loader's own configuration is fine as it stands. */
     if (verdict == NM_VK_OK_GPU || verdict == NM_VK_NO_GPU)
         return;
 
-    /* No answer. Not "a bad answer" - no answer. Report no GPU, do not
-     * enumerate, and above all do not touch this process's loader
-     * configuration: we have observed nothing that would justify it. */
+    /* No answer at all. The process still has to be made safe - see the rule at
+     * the top of this section - but it is a precaution, and it says so. */
     if (nm_vk_inconclusive(verdict)) {
-        nm_vk_gave_up = 1;
-        nm_vk_say(verdict == NM_VK_TIMEOUT
-                  ? "could not finish testing this machine's vulkan drivers in time; "
-                    "running on the CPU and leaving the loader configuration untouched"
-                  : "could not test this machine's vulkan drivers at all (fork or pipe failed); "
-                    "running on the CPU and leaving the loader configuration untouched");
+        nm_vk_pin_precaution(verdict == NM_VK_TIMEOUT
+                             ? "the check did not finish in time"
+                             : "the check could not be run");
         return;
     }
 
@@ -1076,10 +1175,9 @@ static void nm_vk_make_safe(void)
         int pv = nm_vk_probe(cand[i], deadline);
 
         if (nm_vk_inconclusive(pv)) {
-            /* This one told us nothing. Count it, keep going - a later
-             * manifest may still be testable, and the budget check inside
-             * nm_vk_probe() makes the rest of the loop nearly free once the
-             * time is gone - but never treat it as rejected on its merits. */
+            /* This one told us nothing. Count it, keep going - a later manifest
+             * may still be testable - but never treat it as rejected on its
+             * merits. */
             unexamined++;
         } else if (pv == NM_VK_OK_GPU) {
             size_t len = strlen(cand[i]);
@@ -1106,10 +1204,8 @@ static void nm_vk_make_safe(void)
         /* Each survivor was proven on its own; the union was not, and the
          * difference is not academic - the full set is what we just watched
          * die. Confirm the union IN A CHILD, passing the candidate value
-         * through the probe's own VK_ICD_FILENAMES override, so this process
-         * is still untouched if the answer is bad or absent. The previous
-         * version pinned first and asked afterwards, which meant an
-         * inconclusive confirmation left a pin nobody had justified. */
+         * through the probe's own VK_ICD_FILENAMES override, so this process is
+         * still untouched if the answer is bad or absent. */
         int uv = kept > 1 ? nm_vk_probe(joined, deadline) : NM_VK_OK_GPU;
 
         if (uv == NM_VK_OK_GPU || uv == NM_VK_NO_GPU) {
@@ -1127,36 +1223,31 @@ static void nm_vk_make_safe(void)
                       "statically linked binary; vulkan disabled for this process");
             return;
         }
-        /* The union could not be confirmed. Fall through to "we do not know". */
-        nm_vk_gave_up = 1;
-        nm_vk_say("could not confirm a safe set of vulkan drivers in time; "
-                  "running on the CPU and leaving the loader configuration untouched");
+        nm_vk_pin_precaution("the surviving drivers could not be confirmed together");
         return;
     }
 
-    /* Nothing survived. Whether that is worth acting on depends entirely on
-     * whether we actually looked at everything. */
+    /* Nothing survived. Whether that is a conclusion or a precaution depends
+     * entirely on whether we actually looked at everything. */
     if (unexamined) {
-        nm_vk_gave_up = 1;
-        nm_vk_say("could not finish checking this machine's vulkan drivers "
-                  "(%d of %d were never tested); running on the CPU and leaving "
-                  "the loader configuration untouched", unexamined, dropped + unexamined);
+        nm_vk_pin_precaution("some of them were never tested");
         return;
     }
 
     if (verdict == NM_VK_CRASHED) {
         /* Every manifest examined, every one of them fatal, and the whole set
-         * proven fatal too. This is the one case where switching Vulkan off
-         * for the process is a conclusion rather than a guess. */
+         * proven fatal too. The one case where switching Vulkan off for the
+         * process is a conclusion rather than a guess, and the only place that
+         * is allowed to say so. */
         nm_vk_pin("/nonexistent.json");
         nm_vk_say("this machine's vulkan drivers crash a statically linked "
                   "binary; vulkan disabled for this process");
         return;
     }
 
-    /* Software only, and nothing crashed: leave the loader alone. ggml will
-     * not use the device (nm_vk_scan refuses it) and FFmpeg's own filters,
-     * which run perfectly well on llvmpipe, keep it. */
+    /* Software only, and nothing crashed: leave the loader alone. ggml will not
+     * use the device (nm_vk_scan refuses it) and FFmpeg's own filters, which run
+     * perfectly well on llvmpipe, keep it. */
     nm_vk_say("the only vulkan device here is a software rasteriser; "
               "running on the CPU (the loader configuration is unchanged)");
 }
@@ -1166,7 +1257,6 @@ static void nm_vk_make_safe(void)
 /* Windows, darwin, and any build that says Vulkan is not linked. Windows'
  * loader did not reproduce the crash (Task 1, on this project's own RTX 3070
  * host) and has no manifest directory of this shape. */
-static int nm_vk_gave_up;
 static void nm_vk_make_safe(void) { }
 
 #endif /* NM_VK_ICD_GUARD */
@@ -1249,12 +1339,14 @@ static void nm_backend_discover(void)
             return;
     }
 
-    /* The guard could not test anything, so it also could not make anything
-     * safe. Enumerating now would be exactly the unguarded call it exists to
-     * prevent. */
-    if (nm_vk_gave_up)
-        return;
-
+    /* No early return for "the guard could not tell": there used to be one, and
+     * it was the bug. Every path out of nm_vk_make_safe() now leaves this
+     * process safe to enumerate - either because nothing was wrong, or because
+     * the loader has been pinned at a path that does not exist - so enumerating
+     * here is safe in all of them, and on the pinned paths it simply finds
+     * nothing and reports no GPU. Declining to enumerate never protected
+     * anything: whisper builds the registry a few lines later regardless.
+     */
 #ifdef NM_VK_ICD_GUARD
     /* A child already opened the first device under this configuration, so the
      * parent does not need to open it again just to prove it can. */
