@@ -292,8 +292,41 @@ cd /build/osxcross
 wget -nc "https://github.com/joseluisq/macosx-sdks/releases/download/${SDK_VERSION}/MacOSX${SDK_VERSION}.sdk.tar.xz" >/tmp/sdk_wget.log 2>&1 \
     || { cat /tmp/sdk_wget.log; exit 1; }
 mv "MacOSX${SDK_VERSION}.sdk.tar.xz" "tarballs/MacOSX${SDK_VERSION}.sdk.tar.xz"
-UNATTENDED=1 SDK_VERSION="${SDK_VERSION}" OSX_VERSION_MIN="${MACOSX_DEPLOYMENT_TARGET%.0}" MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}" TARGET_DIR="${PREFIX}/osxcross" ./build.sh >/tmp/osxcross_build.log 2>&1 \
+# NOTE FOR EDITORS: this whole block is inside a single-quoted string, so it
+# cannot contain an apostrophe. Hence the slightly stilted wording below.
+#
+# osxcross build.sh runs under `env -i`, seeing only the variables it is meant
+# to read. Everything this script exports describes the compiler osxcross is
+# about to BUILD -- CC=x86_64-apple-darwin24.1-clang, plus the matching LD, AR,
+# CFLAGS and LDFLAGS lifted from the platform dockerfile ENV lines -- and
+# build.sh honours all of them for its own native cctools/ld64/libtapi/xar
+# compile. Left alone it aborts in four lines with "Required dependency
+# x86_64-apple-darwin24.1-clang is not installed", which reads like a missing
+# SDK and is not. Overriding CC/CXX alone gets one step further and then dies
+# in the xar configure with "C compiler cannot create executables", because the
+# cross LDFLAGS are still there. A clean environment is the honest fix: this is
+# a native build of a native toolchain and none of that belongs in it. With it,
+# the same image and the same osxcross checkout build all four slices
+# (arm64 arm64e x86_64 x86_64h).
+#
+# Pre-existing, not a regression from this branch: the darwin path here had
+# never been run end to end (task-6-report.md says so in as many words, and
+# verified darwin through a hand-driven docker run instead).
+env -i PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" HOME="${HOME:-/root}" \
+    UNATTENDED=1 SDK_VERSION="${SDK_VERSION}" OSX_VERSION_MIN="${MACOSX_DEPLOYMENT_TARGET%.0}" MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET}" TARGET_DIR="${PREFIX}/osxcross" ./build.sh >/tmp/osxcross_build.log 2>&1 \
     || { tail -c 20000 /tmp/osxcross_build.log; exit 1; }
+# build.sh exiting 0 is not evidence that it produced a toolchain -- observed:
+# it returned success in well under a minute and left no compiler behind, and
+# the only symptom was 48-whisper.sh failing later with
+# "x86_64-apple-darwin24.1-clang: command not found", which points at the wrong
+# script entirely. Fail here, where the log that explains it is still in hand.
+if [[ ! -x "${PREFIX}/osxcross/bin/${CROSS_PREFIX}clang" ]]; then
+    echo "osxcross build.sh exited 0 but produced no ${CROSS_PREFIX}clang; its log ends:"
+    tail -c 20000 /tmp/osxcross_build.log
+    echo "--- what it did install:"
+    ls "${PREFIX}/osxcross/bin" 2>/dev/null | head -30 || echo "(nothing)"
+    exit 1
+fi
 echo "MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}" > "${PREFIX}/osxcross/bin/cc_target"
 cp "${PREFIX}/osxcross/bin/cc_target" "${SDK_PATH}/usr/bin/cc_target"
 cd /build
