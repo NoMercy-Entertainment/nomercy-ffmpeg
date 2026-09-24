@@ -159,27 +159,59 @@ wh_far_meta=$(echo "${wh_far}" | grep -oE "lavfi.whisper.backend=[a-z0-9_]+" | h
 #                        smallest numerical difference changes what it emits.
 #                        This is the input most likely to expose a divergence,
 #                        which is precisely why it is here.
-transcript() {   # transcript <use_gpu> <extra-input-args...> -- <input>
-    local ug="$1"; shift
+run_whisper() {  # run_whisper <use_gpu> <outfile> <input-args...>
+    local ug="$1" out="$2"; shift 2
     "${FF}" -hide_banner -loglevel info -nostats "$@" -vn \
         -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=${WMODEL}:language=en:queue=3:use_gpu=${ug},ametadata=mode=print" \
-        -f null - 2>&1 | grep -oE "lavfi\.whisper\.text=.*"
+        -f null - > "${out}" 2>&1 || true
 }
 
+# Three things have to be true before "the transcripts match" means anything,
+# and only the first was checked when this was written:
+#
+#   1. the two transcripts are equal;
+#   2. there IS a transcript - two empty outputs compare equal, so a model that
+#      transcribed nothing would have passed silently;
+#   3. the GPU run actually ran on the GPU - on a host where the guard had
+#      switched Vulkan off, both sides would run on the CPU and this would pass
+#      while proving nothing at all.
+#
+# A check that passes when it should not have run is worse than no check, so all
+# three are asserted here rather than relied on from elsewhere in the file.
 compare_transcripts() {   # compare_transcripts <label> <input-args...>
     local label="$1"; shift
-    local g c
+    local g c gb cb n
 
     echo "== whisper transcript, GPU vs CPU: ${label} =="
-    g=$(transcript 1 "$@")
-    c=$(transcript 0 "$@")
+    run_whisper 1 "${WORK}/wh_gpu.log" "$@"
+    run_whisper 0 "${WORK}/wh_cpu.log" "$@"
+
+    g=$(grep -oE "lavfi\.whisper\.text=.*" "${WORK}/wh_gpu.log" || true)
+    c=$(grep -oE "lavfi\.whisper\.text=.*" "${WORK}/wh_cpu.log" || true)
+    gb=$(grep -oE "lavfi\.whisper\.backend=[a-z0-9_]+" "${WORK}/wh_gpu.log" | head -1 || true)
+    cb=$(grep -oE "lavfi\.whisper\.backend=[a-z0-9_]+" "${WORK}/wh_cpu.log" | head -1 || true)
+    n=$(printf "%s" "${g}" | grep -c . || true)
+
+    echo "  gpu run backend: ${gb:-<none>}   cpu run backend: ${cb:-<none>}   segments: ${n}"
+
+    if [[ -z ${g} ]]; then
+        echo "  FAIL: the GPU run produced no transcript at all - two empty outputs"
+        echo "        would compare equal, so this comparison would have been vacuous"
+        fail=1
+        return
+    fi
+    [[ ${gb} == "lavfi.whisper.backend=vulkan" ]] \
+        || { echo "  FAIL: the use_gpu=1 run did not report vulkan (got ${gb:-<none>}); this comparison proves nothing"; fail=1; return; }
+    [[ ${cb} == "lavfi.whisper.backend=cpu" ]] \
+        || { echo "  FAIL: the use_gpu=0 run did not report cpu (got ${cb:-<none>})"; fail=1; return; }
+
     if [[ "${g}" == "${c}" ]]; then
-        echo "  IDENTICAL ($(echo "${g}" | grep -c . ) segment(s))"
-        echo "${g}" | head -3 | sed "s/^/    /"
+        echo "  IDENTICAL (${n} segment(s), both backends confirmed)"
+        printf "%s\n" "${g}" | head -3 | sed "s/^/    /"
     else
         echo "  *** DIFFERENT - this is a silent behaviour change for every whisper user ***"
-        echo "  --- gpu ---"; echo "${g}" | sed "s/^/    /"
-        echo "  --- cpu ---"; echo "${c}" | sed "s/^/    /"
+        echo "  --- gpu ---"; printf "%s\n" "${g}" | sed "s/^/    /"
+        echo "  --- cpu ---"; printf "%s\n" "${c}" | sed "s/^/    /"
         fail=1
     fi
 }

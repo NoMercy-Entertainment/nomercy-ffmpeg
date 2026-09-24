@@ -47,6 +47,20 @@ LOADER="${APT}; apt-get install -y -qq --no-install-recommends libvulkan1 >/dev/
 MESA="${APT}; apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers >/dev/null 2>&1
 echo 'ICD manifests installed:'; ls /usr/share/vulkan/icd.d/"
 
+# Three ICDs whose negotiate entry point never returns. Used twice below.
+HANG="${LOADER}
+${CC_SETUP}
+printf '%s\n' '#include <unistd.h>' \
+  'int vk_icdNegotiateLoaderICDInterfaceVersion(unsigned *v) { (void) v; for (;;) pause(); }' \
+  'void *vk_icdGetInstanceProcAddr(void *i, const char *n) { (void) i; (void) n; for (;;) pause(); }' \
+  > /tmp/hang.c
+gcc -shared -fPIC -o /usr/lib/x86_64-linux-gnu/libvulkan_hang.so /tmp/hang.c
+mkdir -p /usr/share/vulkan/icd.d
+for i in 1 2 3; do
+  printf '%s' '{\"file_format_version\":\"1.0.0\",\"ICD\":{\"library_path\":\"libvulkan_hang.so\",\"api_version\":\"1.2.0\"}}' > /usr/share/vulkan/icd.d/hang\${i}_icd.json
+done
+ls /usr/share/vulkan/icd.d/"
+
 # ---------------------------------------------------------------- the basics
 
 # No Vulkan loader at all. A bare image installs nothing; the probe is static,
@@ -98,6 +112,26 @@ echo 'running under a SIGCHLD-ignoring parent:'
 RUNNER=/tmp/ign" \
     select
 
+# N1. A TIMEOUT is not a crash. The guard used to return the same verdict for
+# "the child died" and "the deadline expired with the child still alive", so a
+# machine we merely failed to test in time was announced as one whose drivers
+# crash, and had VK_ICD_FILENAMES/VK_DRIVER_FILES pinned to /nonexistent.json
+# process-wide - the C2 outcome by another route. Nothing in this container
+# crashes; the budget is simply made impossible. Both vk_* must stay unset.
+run "N1: healthy machine, impossible budget (must not pin)"     "${LOADER}
+export NOMERCY_VK_GUARD_MS=1"     select
+
+run "N1: healthy machine, impossible per-probe cap (must not pin)"     "${LOADER}
+export NOMERCY_VK_PROBE_MS=1"     select
+
+# N1, second half: the same must hold with real, hanging drivers present. We
+# learn nothing about them, so we must change nothing - not pin on the strength
+# of the one manifest we managed to look at.
+run "N1: hung ICDs plus a tight budget (must not pin on a partial look)" \
+    "${HANG}
+export NOMERCY_VK_GUARD_MS=1500" \
+    select
+
 # I4. NixOS, Flatpak, Snap and Guix put the real driver in a directory reached
 # only through XDG_DATA_DIRS. The scan used to miss those, so the bisect could
 # never rescue a GPU there and the machine was pinned off instead. Move Mesa's
@@ -117,18 +151,7 @@ echo 'manifests now only under /opt/xdg:'; ls /opt/xdg/vulkan/icd.d/ | head -3" 
 # guard now shares one wall-clock budget. Three ICDs whose negotiate entry point
 # sleeps forever; the elapsed time run() prints is the assertion.
 run "I1: three ICDs that hang forever (must stay inside the budget)" \
-    "${LOADER}
-${CC_SETUP}
-printf '%s\n' '#include <unistd.h>' \
-  'int vk_icdNegotiateLoaderICDInterfaceVersion(unsigned *v) { (void) v; for (;;) pause(); }' \
-  'void *vk_icdGetInstanceProcAddr(void *i, const char *n) { (void) i; (void) n; for (;;) pause(); }' \
-  > /tmp/hang.c
-gcc -shared -fPIC -o /usr/lib/x86_64-linux-gnu/libvulkan_hang.so /tmp/hang.c
-mkdir -p /usr/share/vulkan/icd.d
-for i in 1 2 3; do
-  printf '%s' '{\"file_format_version\":\"1.0.0\",\"ICD\":{\"library_path\":\"libvulkan_hang.so\",\"api_version\":\"1.2.0\"}}' > /usr/share/vulkan/icd.d/hang\${i}_icd.json
-done
-ls /usr/share/vulkan/icd.d/" \
+    "${HANG}" \
     select
 
 echo
