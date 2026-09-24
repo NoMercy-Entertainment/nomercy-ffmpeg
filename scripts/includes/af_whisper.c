@@ -53,8 +53,6 @@ typedef struct WhisperContext {
      * lavfi.whisper.backend metadata report this, never the request - a run
      * that asked for a GPU and quietly got the CPU must not claim otherwise. */
     int gpu_active;
-    /* Set by cb_log when whisper.cpp reports it did not get a GPU. */
-    int gpu_log_no_gpu;
     char *vad_model_path;
     float vad_threshold;
     int64_t vad_min_speech_duration;
@@ -85,10 +83,29 @@ typedef struct WhisperContext {
     float language_confidence;
 } WhisperContext;
 
+// Whether whisper.cpp said it did not get a GPU. A FILE-STATIC flag, not a
+// field of the filter context, and that is the whole point.
+//
+// whisper_log_set() stores ONE global callback and one user pointer, so with
+// two whisper filters in a graph the last to initialise owns it - and a write
+// through `ctx->priv` from this callback would then land in the other
+// instance's state, telling a filter it had lost a GPU because its neighbour
+// did. af_stemsplit.c's uninit already carries the hard-won version of this
+// lesson (it restores ggml's default sink precisely so a stale ctx pointer
+// cannot be written through); this is the same hazard reached through
+// whisper_log_set instead of ggml_log_set.
+//
+// A process-wide flag cannot be attributed to the wrong instance because it is
+// not attributed to any instance: init() clears it immediately before its own
+// whisper_init_from_file_with_params() and reads it immediately after, so the
+// window belongs to that call. The worst a concurrent init can do is make us
+// report "cpu" for a run that did get a GPU - a conservative misreport, not a
+// write into another filter's memory.
+static int nm_whisper_saw_no_gpu;
+
 static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
 {
     AVFilterContext *ctx = user_data;
-    WhisperContext *wctx = ctx->priv;
     int av_log_level = AV_LOG_DEBUG;
 
     // whisper.cpp's own account of which backend it took. See the snapshot in
@@ -96,7 +113,7 @@ static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
     // why only the negative direction is acted on.
     if (text && (strstr(text, "whisper_backend_init_gpu: no GPU found") ||
                  strstr(text, "whisper_backend_init_gpu: failed to initialize")))
-        wctx->gpu_log_no_gpu = 1;
+        nm_whisper_saw_no_gpu = 1;
 
     switch (level) {
     case GGML_LOG_LEVEL_ERROR:
@@ -164,6 +181,9 @@ static int init(AVFilterContext *ctx)
     params.use_gpu = wctx->gpu_active;
     params.gpu_device = wctx->gpu_device;
 
+    // Cleared here, read immediately after the call below: that pair is what
+    // makes the process-wide flag above safe to attribute to this filter.
+    nm_whisper_saw_no_gpu = 0;
     wctx->ctx_wsp = whisper_init_from_file_with_params(wctx->model_path, params);
     if (wctx->ctx_wsp == NULL) {
         av_log(ctx, AV_LOG_ERROR, "Failed to initialize whisper context from model: %s\n", wctx->model_path);
@@ -184,7 +204,7 @@ static int init(AVFilterContext *ctx)
     // downgrade we invented. Snapshotted HERE, before the VAD context below
     // initialises, because whisper forces use_gpu=false for VAD and would emit
     // the same "no GPU found" line for a run that has nothing to do with this.
-    if (wctx->gpu_active && wctx->gpu_log_no_gpu) {
+    if (wctx->gpu_active && nm_whisper_saw_no_gpu) {
         av_log(ctx, AV_LOG_WARNING,
                "whisper: whisper.cpp did not take the GPU after all; running on the CPU.\n");
         wctx->gpu_active = 0;
@@ -284,6 +304,20 @@ static void uninit(AVFilterContext *ctx)
 
     if (wctx->avio_context)
         avio_closep(&wctx->avio_context);
+
+    // whisper_log_set() is process-global, not per-context: init() registered
+    // cb_log with THIS ctx as its user_data. Leaving that registration in place
+    // means any whisper call anywhere in the process after this AVFilterContext
+    // is freed - including from another whisper or stemsplit instance still
+    // running in the same filtergraph, which this media server routinely does -
+    // invokes cb_log with a dangling AVFilterContext* and writes through it via
+    // av_log(): a use-after-free. af_stemsplit.c's uninit does exactly this for
+    // ggml_log_set and says why at length; this is the same hazard, and this
+    // filter was missing the same guard. Restore whisper's default sink: if
+    // another instance is still live its messages fall back to whisper's own
+    // logging rather than being routed through freed memory, and degraded
+    // logging beats a crash. Do not remove this.
+    whisper_log_set(NULL, NULL);
 }
 
 // Resolve the spoken language once, on the first transcription window that
