@@ -93,7 +93,16 @@ ts_target_os="${TARGET_OS}"
 # block reproduces them literally.
 case "${TARGET_OS}" in
     darwin)
-        # The dockerfile strips the trailing ".0" before configure; do the same.
+        # Both darwin dockerfiles re-export MACOSX_DEPLOYMENT_TARGET with its
+        # trailing ".0" stripped -- "MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET%.0}
+        # export MACOSX_DEPLOYMENT_TARGET", four lines above the
+        # --extra-cflags that consumes it and inside the same && chain, so the
+        # real configure is passed 11.0 and not the ENV's 11.0.0. (Verified:
+        # that "VAR=x export VAR" form does persist -- export is a special
+        # builtin.) Not to be confused with the same strip applied to
+        # osxcross's OSX_VERSION_MIN much earlier in the file, which is a
+        # different variable for a different purpose. Do the same here so the
+        # throwaway passes the value the real one will.
         ts_extra_cflags="-arch ${ARCH} -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET%.0}"
         ts_extra_ldflags="${ts_extra_cflags}"
         ;;

@@ -11,6 +11,7 @@
  * back and attaches the result to it once EOF arrives.
  */
 
+#include <errno.h>
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
@@ -39,7 +40,8 @@ typedef struct TrailingSilenceContext {
     char    *format;
 
     /* state */
-    AVIOContext *report;            /* open report file, NULL when disabled */
+    AVIOContext *report;            /* open temp file, NULL when disabled/published */
+    char    *tmp_path;              /* "<destination>.part" */
     AVFrame *held;                  /* the one delayed frame */
     int64_t  nb_samples;            /* samples seen, the fallback clock */
     int      sample_rate;
@@ -83,7 +85,24 @@ AVFILTER_DEFINE_CLASS(trailingsilence);
  * frame is decoded. A bad report path therefore now refuses to start the run
  * rather than wasting it: failing before any work is done is a different
  * thing from throwing completed work away, and it is the loud failure the
- * caller needs. */
+ * caller needs.
+ *
+ * What is opened here is "<destination>.part", not destination itself, and
+ * finalize_report renames it into place once the content is complete. Opening
+ * destination directly cost the caller two things that only show up on a real
+ * server:
+ *
+ *   - AVIO_FLAG_WRITE truncates on open, so starting a re-probe destroyed the
+ *     previous good report immediately -- before knowing whether this run
+ *     would produce a better one, or produce one at all. That is data loss,
+ *     not untidiness.
+ *   - The content is only known at end of stream, so destination sat at zero
+ *     bytes for the whole transcode. A consumer polling it found an
+ *     unparseable file rather than an absence it could reason about, which is
+ *     the same ambiguity this filter exists to remove.
+ *
+ * With the temp path, destination appears exactly once, complete, and an
+ * unfinished or fruitless run leaves whatever was there before untouched. */
 static av_cold int init(AVFilterContext *ctx)
 {
     TrailingSilenceContext *s = ctx->priv;
@@ -97,10 +116,14 @@ static av_cold int init(AVFilterContext *ctx)
     }
 
     if (s->destination && *s->destination) {
-        ret = avio_open(&s->report, s->destination, AVIO_FLAG_WRITE);
+        s->tmp_path = av_asprintf("%s.part", s->destination);
+        if (!s->tmp_path)
+            return AVERROR(ENOMEM);
+
+        ret = avio_open(&s->report, s->tmp_path, AVIO_FLAG_WRITE);
         if (ret < 0) {
             av_log(ctx, AV_LOG_ERROR, "trailingsilence: could not open %s: %s\n",
-                   s->destination, av_err2str(ret));
+                   s->tmp_path, av_err2str(ret));
             return ret;
         }
     }
@@ -170,6 +193,36 @@ static void write_report(AVFilterContext *ctx, int detected,
              stream_duration, recommended_end, margin);
 
     avio_write(s->report, (const unsigned char *)buf, strlen(buf));
+}
+
+/* Publish the finished report: close the temp file and move it onto
+ * destination. rename() is used rather than an avio helper because FFmpeg's
+ * only rename wrapper is ff_rename(), which is library-local to libavformat
+ * and not linkable from libavfilter. The consequence is that destination must
+ * be a plain filesystem path -- a protocol URL still opens, but cannot be
+ * renamed; that case is reported and leaves the complete report at the temp
+ * path rather than losing it.
+ *
+ * The retry exists for Windows, where ANSI rename() refuses an existing
+ * destination. Removing it first is safe here precisely because the
+ * replacement is already complete on disk. */
+static void finalize_report(AVFilterContext *ctx)
+{
+    TrailingSilenceContext *s = ctx->priv;
+
+    if (!s->report)
+        return;
+
+    avio_closep(&s->report);
+
+    if (rename(s->tmp_path, s->destination) &&
+        (remove(s->destination) || rename(s->tmp_path, s->destination))) {
+        av_log(ctx, AV_LOG_ERROR,
+               "trailingsilence: could not move %s onto %s: %s. The report is "
+               "complete and left at %s; %s is unchanged.\n",
+               s->tmp_path, s->destination, av_err2str(AVERROR(errno)),
+               s->tmp_path, s->destination);
+    }
 }
 
 static void set_report(AVFilterContext *ctx, AVFrame *frame)
@@ -248,14 +301,23 @@ static int activate(AVFilterContext *ctx)
                 set_report(ctx, s->held);
                 ret = ff_filter_frame(outlink, s->held);
                 s->held = NULL;
-                if (ret < 0)
+                if (ret < 0) {
+                    finalize_report(ctx);
                     return ret;
+                }
             } else if (!s->reported) {
                 /* No frame ever arrived, so there is nothing to attach
-                 * metadata to. Say so rather than exiting silently. */
+                 * metadata to -- but the JSON report needs no frame, and a
+                 * caller who asked for one must not be left unable to tell
+                 * "scanned, saw nothing" from "never ran". Every field is 0,
+                 * which stream_duration == 0 identifies. */
                 av_log(ctx, AV_LOG_INFO,
-                       "trailingsilence: no audio frames seen; nothing to report.\n");
+                       "trailingsilence: no audio frames seen; reporting an empty result.\n");
+                write_report(ctx, 0, 0.0, 0.0, 0.0, 0.0,
+                             s->safety_margin / (double)AV_TIME_BASE);
+                s->reported = 1;
             }
+            finalize_report(ctx);
             ff_outlink_set_status(outlink, AVERROR_EOF, pts);
             return 0;
         }
@@ -268,8 +330,19 @@ static int activate(AVFilterContext *ctx)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     TrailingSilenceContext *s = ctx->priv;
+
     av_frame_free(&s->held);
-    avio_closep(&s->report);
+
+    /* Still open here means the graph was torn down before end of stream, so
+     * there is no report to publish. Drop the temp file and leave destination
+     * exactly as it was: a probe that never finished must not cost the caller
+     * the answer from the probe that did. */
+    if (s->report) {
+        avio_closep(&s->report);
+        if (s->tmp_path)
+            remove(s->tmp_path);
+    }
+    av_freep(&s->tmp_path);
 }
 
 static const AVFilterPad trailingsilence_inputs[] = {

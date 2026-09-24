@@ -124,4 +124,30 @@ for k in detected silence_start silence_duration stream_duration recommended_end
     check "json $k matches metadata" "$json" "$meta"
 done
 
+
+# Whole-branch review, second wave: an unfinished probe must not cost the
+# caller the answer from the probe that did finish. The report is written to
+# "<destination>.part" and renamed into place at EOF; opening destination
+# itself truncated it (AVIO_FLAG_WRITE) the instant a re-probe started, so an
+# interrupted or torn-down re-probe left a 0-byte file where a good report had
+# been. That is data loss for the consumer and nothing guarded it.
+#
+# Two checks, because one alone could pass vacuously: the first pins that
+# there really is a good report to lose, the second that it survives.
+# -frames:a 3 stops the graph with the held frame still owned, so the filter
+# never sees EOF -- the cheapest deterministic stand-in for a killed run.
+rm -f /tmp/ts-clobber.json /tmp/ts-clobber.json.part
+"$FF" -hide_banner -nostats -v error -i "$FIX/tail_long.wav" \
+    -af "trailingsilence=destination=/tmp/ts-clobber.json" -f null - >/dev/null 2>&1
+before_detected=$(sed -n 's/.*"detected"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /tmp/ts-clobber.json | head -1)
+before_md5=$(md5sum </tmp/ts-clobber.json | cut -d" " -f1)
+check "report present before re-probe"  "${before_detected:?empty extraction}" "1"
+
+"$FF" -hide_banner -nostats -v error -i "$FIX/tail_long.wav" \
+    -af "trailingsilence=destination=/tmp/ts-clobber.json" -frames:a 3 -f null - >/dev/null 2>&1
+after_md5=$(md5sum </tmp/ts-clobber.json | cut -d" " -f1)
+# ${var:?} on both sides, same as everywhere else here: a missing file must
+# abort, not compare two empty strings and call it a match.
+check "interrupted re-probe keeps it"   "${after_md5:?empty extraction}" "${before_md5:?empty extraction}"
+
 exit $fail

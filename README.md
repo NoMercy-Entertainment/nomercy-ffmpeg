@@ -312,14 +312,25 @@ ffmpeg -i in.mka -to <recommended_end> -c copy out.mka
 | `destination` | string | *(empty)* | Path to write the JSON report; empty disables the report (the frame metadata is still emitted) |
 | `format` | string | `json` | Report format. Only `json` is currently supported |
 
-**A report you asked for either arrives or the run refuses to start.**
-`destination` is opened and `format` is checked while the filter graph is
-built, before a single frame is decoded. An unwritable path or an unsupported
-format is therefore an error line and a non-zero exit, not a successful run
-with no file at the other end -- a caller cannot be left unable to tell
-"scanned, found nothing" from "never ran". Nothing is transcoded and then
-thrown away either: the failure happens before any work starts, so fixing the
-path and re-running costs nothing.
+**How the report is written.** Four properties a server can rely on:
+
+- **A bad report configuration fails before any work.** `destination` and
+  `format` are checked while the filter graph is built, before a single frame
+  is decoded, so an unwritable path or an unsupported format is an error line
+  and a non-zero exit -- never a successful run with no file at the other end.
+  Nothing is transcoded and then thrown away; fix the path and re-run.
+- **`destination` never exists half-written.** The content is written to
+  `<destination>.part` and renamed into place at end of stream, so the file
+  appears exactly once, complete. A consumer polling the path may treat
+  "present" as "finished".
+- **An unfinished probe cannot destroy a finished one.** A run that never
+  reaches end of stream -- killed, or a graph torn down early by `-frames:a`
+  or an output limit -- publishes nothing and leaves any previous report
+  exactly as it was. A stray `<destination>.part` is the signature of such a
+  run; it is never mistaken for the report.
+- **`destination` must be a plain filesystem path.** A protocol URL will open
+  but cannot be renamed into place; that is reported, and the completed report
+  is left at the temporary path rather than lost.
 
 **Metadata keys** — all six are attached to the final frame on **every run**,
 including when nothing is found, as `lavfi.trailingsilence.<key>`:
@@ -348,6 +359,14 @@ qualifying trailing run — every key is still emitted, and `recommended_end`
 is set to `stream_duration`. A caller can read `recommended_end` and pass it
 straight to `-to` without first checking `detected`; on a stream with
 nothing to trim, that command trims nothing.
+
+**The one exception.** If the filter saw no audio at all -- a seek past the end
+of the stream, an empty or undecodable track -- the report is still written, so
+a caller who asked for one is never left unable to tell "scanned, saw nothing"
+from "never ran". But every field in it is `0`, `recommended_end` included:
+there was no audio to measure, so there is no honest end point to recommend.
+`stream_duration == 0` identifies this case, and it is the one case a caller
+consuming `recommended_end` blindly must check for.
 
 **Skipped by design, not by bug:**
 - Streams shorter than `min_stream_duration` (default 10 s).
