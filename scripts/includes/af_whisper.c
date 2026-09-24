@@ -103,6 +103,14 @@ typedef struct WhisperContext {
 // write into another filter's memory.
 static int nm_whisper_saw_no_gpu;
 
+// Which context currently owns the global log callback. Compared on teardown so
+// that a filter being destroyed only resets the sink if it is still the owner:
+// otherwise tearing down the FIRST of two whisper filters would unregister the
+// SECOND one's callback, and that survivor's ggml messages would go straight to
+// stderr, around FFmpeg's -loglevel. Read and written only from filter init and
+// uninit, which FFmpeg runs on one thread per graph.
+static const AVFilterContext *nm_whisper_log_owner;
+
 static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
 {
     AVFilterContext *ctx = user_data;
@@ -165,6 +173,7 @@ static int init(AVFilterContext *ctx)
         av_log(ctx, AV_LOG_INFO, "whisper: %s.\n", nm_ggml_backend_notice());
 
     whisper_log_set(cb_log, ctx);
+    nm_whisper_log_owner = ctx;
 
     // Init whisper context
     if (!wctx->model_path) {
@@ -317,7 +326,16 @@ static void uninit(AVFilterContext *ctx)
     // another instance is still live its messages fall back to whisper's own
     // logging rather than being routed through freed memory, and degraded
     // logging beats a crash. Do not remove this.
-    whisper_log_set(NULL, NULL);
+    //
+    // Only when we are still the owner, though: with two whisper filters in a
+    // graph the second one's init took the registration over, and resetting it
+    // from the first one's teardown would push that live filter's messages to
+    // stderr, around -loglevel, for no benefit. The dangling pointer we are
+    // avoiding is only ours to avoid while the callback still points at us.
+    if (nm_whisper_log_owner == ctx) {
+        whisper_log_set(NULL, NULL);
+        nm_whisper_log_owner = NULL;
+    }
 }
 
 // Resolve the spoken language once, on the first transcription window that
