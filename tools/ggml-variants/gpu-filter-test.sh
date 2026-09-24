@@ -225,4 +225,86 @@ else
 fi
 compare_transcripts "60 s of music, the model at its least certain" -t 60 -i input.mp3
 
+# ------------------------------------------------------- still fully static
+#
+# The whole point of vk_loader_shim.c is that the binary never link-depends on
+# a Vulkan loader: it opens one at runtime if the machine happens to have one,
+# and runs on the CPU if it does not. Until now that was only ever checked by
+# hand on Windows, which is exactly the kind of check that quietly stops being
+# done. Asserted here instead.
+#
+# It has to be the IMPORT TABLE, not a string search: the shim itself contains
+# the literal "vulkan-1.dll" for its LoadLibraryA call, so `grep -a vulkan-1`
+# on the binary matches a correct build and would pass forever. The reader
+# below walks the PE optional header to the import directory and lists the
+# DLLs the loader would resolve at process start - the thing that actually
+# makes a binary non-portable.
+echo "== no Vulkan loader in the binary's link-time dependencies =="
+if [[ $(head -c 2 "${FF}") == MZ ]]; then
+    imports=$(python3 - "${FF}" <<"PY"
+import struct, sys
+
+f = open(sys.argv[1], "rb")
+f.seek(0x3C)
+pe = struct.unpack("<I", f.read(4))[0]
+f.seek(pe)
+assert f.read(4) == b"PE\0\0", "not a PE image"
+_mach, nsec, _ts, _st, _ns, optsz, _ch = struct.unpack("<HHIIIHH", f.read(20))
+opt = f.tell()
+magic = struct.unpack("<H", f.read(2))[0]           # 0x20b = PE32+, 0x10b = PE32
+ddoff = opt + (112 if magic == 0x20B else 96)       # start of the data directories
+f.seek(ddoff + 8)                                   # entry 1 = import directory
+imp_rva, _imp_sz = struct.unpack("<II", f.read(8))
+
+f.seek(opt + optsz)
+sections = []
+for _ in range(nsec):
+    raw = f.read(40)
+    vsz = struct.unpack("<I", raw[8:12])[0]
+    va = struct.unpack("<I", raw[12:16])[0]
+    rawsz, rawptr = struct.unpack("<II", raw[16:24])
+    sections.append((va, max(vsz, rawsz), rawptr))
+
+def off(rva):
+    for va, sz, ptr in sections:
+        if va <= rva < va + sz:
+            return ptr + (rva - va)
+    return None
+
+if not imp_rva:
+    sys.exit(0)                                     # no imports at all
+names = []
+p = off(imp_rva)
+while True:
+    f.seek(p)
+    d = f.read(20)
+    if len(d) < 20 or d == b"\0" * 20:
+        break
+    name_rva = struct.unpack("<I", d[12:16])[0]
+    if not name_rva:
+        break
+    f.seek(off(name_rva))
+    names.append(f.read(64).split(b"\0")[0].decode("ascii", "replace"))
+    p += 20
+print("\n".join(names))
+PY
+) || { echo "  FAIL: could not read the PE import table"; fail=1; imports=""; }
+    echo "${imports}" | tr "\n" " " | fold -w 100 | sed "s/^/  /"
+    if echo "${imports}" | grep -qi vulkan; then
+        echo "  FAIL: the import table names a Vulkan loader; the binary is no longer portable"
+        fail=1
+    else
+        echo "  ok: no vulkan-1.dll (or any vulkan DLL) in the import table"
+    fi
+elif command -v ldd >/dev/null 2>&1; then
+    ldd "${FF}" 2>&1 | sed "s/^/  /" | head -5
+    if ldd "${FF}" 2>&1 | grep -qi vulkan; then
+        echo "  FAIL: links a Vulkan loader"; fail=1
+    else
+        echo "  ok: no loader dependency"
+    fi
+else
+    echo "  FAIL: cannot inspect ${FF} for loader dependencies here"; fail=1
+fi
+
 [[ ${fail} -eq 0 ]] && echo PASS || { echo FAILED; exit 1; }
