@@ -30,6 +30,13 @@
  * this file, outside the fixed-level split: it is identical on every platform,
  * fixed-level darwin included, because both filters call it unconditionally.
  */
+/* Before every include: glibc only declares pipe2() under _GNU_SOURCE, and the
+ * Vulkan guard below needs it to create its probe pipe without an exec race.
+ * This file uses nothing else whose behaviour the macro changes. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "nm_ggml_cpu.h"
 
 /* ggml_backend_cpu_init(), ggml_backend_is_cpu() and
@@ -381,31 +388,44 @@ static int nm_device_is_software(ggml_backend_dev_t dev)
     return 0;
 }
 
-/* What a full enumeration found. Also the byte the child process sends back,
- * so the values are small and stable on purpose.
+/* What a probe found. The first three are also the byte the child sends back,
+ * so those values are small and stable on purpose.
  *
- * CRASHED and UNKNOWN are deliberately different answers and the difference is
- * load bearing. CRASHED means we PROVED Vulkan is dangerous here, which is the
- * only thing that justifies rewriting the process's loader configuration.
- * UNKNOWN means we could not find out - and "could not find out" must never
- * turn a healthy machine into one whose Vulkan we have switched off. */
-#define NM_VK_OK_GPU    0   /* survived; a hardware GPU is usable      */
-#define NM_VK_NO_GPU    1   /* survived; nothing usable, nothing scary */
-#define NM_VK_SOFTWARE  2   /* survived; a software device is present  */
-#define NM_VK_CRASHED   3   /* died or hung inside Vulkan: dangerous   */
-#define NM_VK_UNKNOWN   4   /* could not be tested: change nothing     */
+ * THE RULE THIS FILE IS BUILT ON: the guard may only ever act on evidence it
+ * actually obtained. Exactly one verdict is evidence of danger - NM_VK_CRASHED,
+ * the child died - and only that one may rewrite the process's loader
+ * configuration. Everything else that is not a clean answer means "we do not
+ * know", and "we do not know" must leave the environment exactly as found and
+ * report no GPU.
+ *
+ * NM_VK_TIMEOUT exists because it was once folded into NM_VK_CRASHED, and that
+ * single conflation put a healthy machine's Vulkan back in the bin: with
+ * NOMERCY_VK_GUARD_MS=1, on a container where nothing crashes at all, the guard
+ * announced "this machine's vulkan drivers crash a statically linked binary"
+ * and pinned both variables. It had observed no such thing. A deadline that
+ * expires is a statement about us, not about the driver.
+ *
+ * nm_vk_inconclusive() below is the single place that decides which verdicts
+ * are "we do not know", so a future verdict cannot quietly acquire the power to
+ * modify the process by being added in the wrong branch. */
+#define NM_VK_OK_GPU    0   /* survived; a hardware GPU is usable       */
+#define NM_VK_NO_GPU    1   /* survived; nothing usable, nothing scary  */
+#define NM_VK_SOFTWARE  2   /* survived; a software device is present   */
+#define NM_VK_CRASHED   3   /* the child DIED: proof that this is unsafe */
+#define NM_VK_TIMEOUT   4   /* deadline expired, child still alive      */
+#define NM_VK_UNKNOWN   5   /* could not even be tested                 */
 
-/* At most this many GPU/IGPU devices are tracked by index. Machines with more
- * than sixteen are not a case this project has; the seventeenth simply reports
- * as "no GPU at that index", which is the same honest answer an out-of-range
- * gpu_device already gets. */
-#define NM_MAX_GPUS 16
 
 /* Enumerate, and (when `verify` is set) open the first usable device. This is
  * the work that can crash, which is exactly why it is also what the child
  * process runs: the check and the thing being checked are the same code.
- * `out`/`out_n` receive the GPU/IGPU devices IN ENUMERATION ORDER, which is
- * whisper.cpp's own gpu_device ordering; the child passes NULL for both.
+ * `out_n` receives the NUMBER of GPU/IGPU devices, in enumeration order, which
+ * is whisper.cpp's own gpu_device ordering; the child passes NULL. Only the
+ * count is kept, not a snapshot of the list: an earlier version cached the
+ * first sixteen devices and then answered "this machine has 16 GPU device(s)"
+ * on a machine with more, while whisper.cpp - which has no such cap - happily
+ * ran on device 20. A count plus a walk when asked has no cap to be wrong
+ * about.
  *
  * `verify` exists because opening a Vulkan device is the expensive part of all
  * this (ggml_vk_init builds pipelines). The child always verifies - that is
@@ -415,7 +435,7 @@ static int nm_device_is_software(ggml_backend_dev_t dev)
  * index-independent, and opening every device on a multi-GPU box to prove a
  * point would cost half a second each. An index whose device turns out not to
  * open still falls back to the CPU, in nm_ggml_backend_init(). */
-static int nm_vk_scan(ggml_backend_dev_t *out, int *out_n, int verify)
+static int nm_vk_scan(int *out_n, int verify)
 {
     ggml_backend_dev_t first = NULL;
     int found = 0;
@@ -474,10 +494,7 @@ static int nm_vk_scan(ggml_backend_dev_t *out, int *out_n, int verify)
             }
         }
 
-        if (out && found < NM_MAX_GPUS)
-            out[found] = dev;
-        if (found < NM_MAX_GPUS)
-            found++;
+        found++;
     }
 
     if (out_n)
@@ -491,6 +508,16 @@ static int nm_vk_scan(ggml_backend_dev_t *out, int *out_n, int verify)
 static char nm_vk_notice[512];
 
 #ifdef NM_VK_ICD_GUARD
+
+/* Did this verdict tell us anything? Everything that is not a clean survival
+ * and not an observed crash is "no". Every decision site asks THIS, rather than
+ * testing verdicts individually, so a verdict added later cannot quietly
+ * acquire the power to modify the process by being written into the wrong
+ * branch. Lives inside the guard because nothing outside it probes. */
+static int nm_vk_inconclusive(int verdict)
+{
+    return verdict == NM_VK_TIMEOUT || verdict == NM_VK_UNKNOWN;
+}
 
 static void nm_vk_say(const char *fmt, ...)
 {
@@ -546,6 +573,23 @@ static long nm_now_ms(void)
     return (long) time(NULL) * 1000;
 }
 
+/* pipe() with O_CLOEXEC set atomically. pipe2() is Linux and FreeBSD; glibc
+ * hides it behind _GNU_SOURCE, which this file defines at the very top for
+ * exactly this. The fallback is only for a platform that has neither, where the
+ * non-atomic version is still better than no pipe at all. */
+static int nm_vk_pipe_cloexec(int fds[2])
+{
+#if defined(__linux__) || defined(__FreeBSD__)
+    return pipe2(fds, O_CLOEXEC);
+#else
+    if (pipe(fds) != 0)
+        return -1;
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    return 0;
+#endif
+}
+
 /*
  * Find out whether Vulkan can be touched at all, by touching it somewhere the
  * answer cannot hurt: a forked child.
@@ -569,15 +613,17 @@ static long nm_now_ms(void)
  * `icd` restricts the child to one manifest (the bisect below), or is NULL to
  * test the loader's own search path unchanged.
  *
- * Returns NM_VK_CRASHED when the child died or hung - proof that Vulkan is
- * dangerous here - and NM_VK_UNKNOWN when we could not even run the test.
+ * Returns NM_VK_CRASHED only when the child actually died, NM_VK_TIMEOUT when
+ * the deadline expired with it still alive, and NM_VK_UNKNOWN when the test
+ * could not be run at all. The last two are "we do not know" and are treated
+ * as such everywhere; see nm_vk_inconclusive().
  */
 static int nm_vk_probe(const char *icd, long deadline_ms)
 {
     int fds[2];
     pid_t pid;
     unsigned char verdict = 0;
-    int got = 0;
+    int got = 0, timed_out = 0, io_failed = 0;
     long budget = deadline_ms - nm_now_ms();
     long cap = nm_vk_env_ms("NOMERCY_VK_PROBE_MS", NM_VK_PROBE_MS_DEFAULT);
 
@@ -586,14 +632,18 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
     if (budget < cap)
         cap = budget;
 
-    /* pipe() + FD_CLOEXEC rather than pipe2(): pipe2 needs _GNU_SOURCE, which
-     * this file is not compiled with on every platform, and the race the
-     * atomic version closes (another thread exec-ing between the two calls)
-     * does not exist here - nothing in FFmpeg execs. */
-    if (pipe(fds) != 0)
+    /* pipe2(O_CLOEXEC), not pipe() followed by two fcntl()s.
+     *
+     * The earlier comment here claimed the exec race did not apply because
+     * "nothing in FFmpeg execs". True of FFmpeg, and irrelevant: this code
+     * lives in a library inside a long-lived .NET media server that does
+     * fork+exec. A thread that execs between the pipe() and the fcntl()s leaks
+     * the WRITE end into the spawned process, which then holds it open, so the
+     * parent never sees EOF and waits out the whole cap - a self-inflicted
+     * timeout, in the one code path whose job is to decide whether this machine
+     * is healthy. Setting the flag atomically removes the window. */
+    if (nm_vk_pipe_cloexec(fds) != 0)
         return NM_VK_UNKNOWN;
-    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
 
     pid = fork();
     if (pid < 0) {
@@ -637,7 +687,7 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
             setenv("VK_DRIVER_FILES", icd, 1);
         }
 
-        verdict = (unsigned char) nm_vk_scan(NULL, NULL, 1);
+        verdict = (unsigned char) nm_vk_scan(NULL, 1);
         /* The byte is the whole result. Write it before _exit so that no
          * atexit handler of the parent's, and no exit-status policy of the
          * host's, can come between the answer and the reader. */
@@ -658,13 +708,17 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
     {
         long probe_deadline = nm_now_ms() + cap;
 
+        /* Four ways out, and they are not the same answer. Exactly one of them
+         * is evidence about the driver. */
         for (;;) {
             struct pollfd pfd;
             long left = probe_deadline - nm_now_ms();
             int r;
 
-            if (left <= 0)
+            if (left <= 0) {
+                timed_out = 1;              /* we ran out of time: no evidence */
                 break;
+            }
             pfd.fd = fds[0];
             pfd.events = POLLIN;
             pfd.revents = 0;
@@ -672,37 +726,53 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
             if (r < 0) {
                 if (errno == EINTR)
                     continue;
+                io_failed = 1;              /* our poll broke: no evidence */
                 break;
             }
             if (r == 0)
                 continue;
             r = (int) read(fds[0], &verdict, 1);
             if (r == 1) {
-                got = 1;
+                got = 1;                    /* the child answered */
                 break;
             }
-            /* read() == 0 is EOF: the child closed the pipe without writing,
-             * i.e. it died before it could answer. */
             if (r == 0)
-                break;
+                break;                      /* EOF: the child died. Evidence. */
             if (errno == EINTR)
                 continue;
+            io_failed = 1;                  /* our read broke: no evidence */
             break;
         }
     }
 
     close(fds[0]);
 
-    /* Reap, and do not care what it says. On a host that ignores SIGCHLD there
-     * may be nothing left to reap at all; that is fine, the answer is already
-     * in hand. */
-    kill(pid, SIGKILL);
+    /* Only signal a child that has not answered. Once the byte is in hand the
+     * child has already reached its _exit(), and on a host that auto-reaps
+     * (SIGCHLD = SIG_IGN, the very host this guard was rewritten for) its pid
+     * can be free and recycled by the time a signal would land - so an
+     * unconditional kill here is a kill aimed at whatever now owns that pid.
+     * Reap either way, and do not care what waitpid says: on an auto-reaping
+     * host there may be nothing left to reap, which is fine, because the answer
+     * never came from waitpid in the first place. */
+    if (!got)
+        kill(pid, SIGKILL);
     while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
         ;
 
-    if (!got)
-        return NM_VK_CRASHED;
-    return verdict <= NM_VK_SOFTWARE ? (int) verdict : NM_VK_CRASHED;
+    if (got)
+        return verdict <= NM_VK_SOFTWARE ? (int) verdict : NM_VK_CRASHED;
+    /* No byte. EOF - and only EOF - means the child closed the pipe without
+     * answering, i.e. it died, and that is evidence. Running out of time is
+     * not: the child may still be mid-enumeration behind a slow driver, a cold
+     * shader cache or a loaded machine, and we have learned nothing about
+     * whether Vulkan is safe here. Neither is our own poll() or read() failing:
+     * that is a statement about this process, not about the driver. */
+    if (timed_out)
+        return NM_VK_TIMEOUT;
+    if (io_failed)
+        return NM_VK_UNKNOWN;
+    return NM_VK_CRASHED;
 }
 
 /* The loader's own search path.
@@ -720,6 +790,52 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
 static int nm_vk_cmp_str(const void *a, const void *b)
 {
     return strcmp(*(const char *const *) a, *(const char *const *) b);
+}
+
+/* Adds one manifest path, resolved and de-duplicated.
+ *
+ * The de-duplication is not tidiness. The loader's documented default for
+ * XDG_DATA_DIRS is "/usr/local/share:/usr/share", and the explicit system list
+ * below names those same two prefixes, so without this every system manifest
+ * on an ordinary Linux box became TWO candidates: three manifests measured as
+ * seven probes, 7100 ms where 4000 ms was expected. That doubles the forks,
+ * halves the effective NM_VK_MAX_ICDS, burns the wall-clock budget twice as
+ * fast - which is what turns a slow machine into a half-examined one - and
+ * would have listed each survivor twice in the pinned value.
+ *
+ * realpath() rather than a string compare, so a distribution that symlinks one
+ * prefix at another (/usr/local/share -> /usr/share, and the Nix and Flatpak
+ * layouts generally) collapses too. It also hands the loader a path with no
+ * symlinks left in it, which is strictly easier to read in a log. Falls back to
+ * the literal path when realpath fails, which is the right direction: a
+ * candidate we cannot resolve is still a candidate. */
+static void nm_vk_push_unique(char **list, int *n, const char *path)
+{
+    /* realpath(path, NULL), which allocates, rather than the two-argument form:
+     * that one demands a PATH_MAX buffer and silently overflows anything
+     * smaller, which is not a trade worth making to save one malloc that
+     * happens a few dozen times per process. */
+    char *resolved;
+    const char *key;
+    char *dup;
+    int i;
+
+    if (*n >= NM_VK_MAX_ICDS || !path || !*path)
+        return;
+
+    resolved = realpath(path, NULL);
+    key = resolved ? resolved : path;
+
+    for (i = 0; i < *n; i++)
+        if (!strcmp(list[i], key)) {
+            free(resolved);
+            return;
+        }
+
+    dup = strdup(key);
+    if (dup)
+        list[(*n)++] = dup;
+    free(resolved);
 }
 
 /* Appends one candidate manifest path; a directory contributes its *.json. */
@@ -742,7 +858,6 @@ static void nm_vk_add_candidate(char **list, int *n, const char *path)
         while ((e = readdir(d))) {
             size_t len = strlen(e->d_name);
             char full[1024];
-            char *dup;
 
             if (len < 6 || strcmp(e->d_name + len - 5, ".json"))
                 continue;
@@ -754,9 +869,7 @@ static void nm_vk_add_candidate(char **list, int *n, const char *path)
             }
             if (snprintf(full, sizeof(full), "%s/%s", path, e->d_name) >= (int) sizeof(full))
                 continue;
-            dup = strdup(full);
-            if (dup)
-                list[(*n)++] = dup;
+            nm_vk_push_unique(list, n, full);
         }
         closedir(d);
         /* readdir order is filesystem-dependent; sort so the loader sees the
@@ -766,12 +879,7 @@ static void nm_vk_add_candidate(char **list, int *n, const char *path)
         return;
     }
 
-    {
-        char *dup = strdup(path);
-
-        if (dup)
-            list[(*n)++] = dup;
-    }
+    nm_vk_push_unique(list, n, path);
 }
 
 /* Every "<prefix>/vulkan/icd.d" named by a colon-separated variable, or by
@@ -896,7 +1004,7 @@ static void nm_vk_pin(const char *value)
 /* Set when the guard could not determine anything. The parent must then not
  * enumerate either: we have neither proof that it is safe nor a pin that would
  * make it safe. */
-static int nm_vk_inconclusive;
+static int nm_vk_gave_up;
 
 /*
  * Leave this process able to enumerate Vulkan without dying.
@@ -930,7 +1038,7 @@ static void nm_vk_make_safe(void)
     char *cand[NM_VK_MAX_ICDS];
     char joined[8192];
     size_t off = 0;
-    int nc, i, kept = 0, dropped = 0, truncated = 0;
+    int nc, i, kept = 0, dropped = 0, unexamined = 0;
     const char *guard = getenv("NOMERCY_VK_ICD_GUARD");
     long deadline = nm_now_ms() + nm_vk_env_ms("NOMERCY_VK_GUARD_MS", NM_VK_BUDGET_MS_DEFAULT);
     int verdict;
@@ -941,31 +1049,39 @@ static void nm_vk_make_safe(void)
         return;
 
     verdict = nm_vk_probe(NULL, deadline);
+
+    /* A clean answer: the loader's own configuration is fine as it stands. */
     if (verdict == NM_VK_OK_GPU || verdict == NM_VK_NO_GPU)
         return;
-    if (verdict == NM_VK_UNKNOWN) {
-        nm_vk_inconclusive = 1;
-        nm_vk_say("could not test the vulkan drivers (fork or pipe failed); "
-                  "running on the CPU and leaving the loader configuration alone");
+
+    /* No answer. Not "a bad answer" - no answer. Report no GPU, do not
+     * enumerate, and above all do not touch this process's loader
+     * configuration: we have observed nothing that would justify it. */
+    if (nm_vk_inconclusive(verdict)) {
+        nm_vk_gave_up = 1;
+        nm_vk_say(verdict == NM_VK_TIMEOUT
+                  ? "could not finish testing this machine's vulkan drivers in time; "
+                    "running on the CPU and leaving the loader configuration untouched"
+                  : "could not test this machine's vulkan drivers at all (fork or pipe failed); "
+                    "running on the CPU and leaving the loader configuration untouched");
         return;
     }
 
+    /* Past here the verdict is CRASHED or SOFTWARE - both things we actually
+     * observed - so there is something to act on. */
     nc = nm_vk_collect_icds(cand);
 
     joined[0] = 0;
     for (i = 0; i < nc; i++) {
         int pv = nm_vk_probe(cand[i], deadline);
 
-        if (pv == NM_VK_UNKNOWN) {
-            /* Out of budget, or we cannot fork any more. Either way the rest
-             * of the list is unexamined; say so rather than pretending those
-             * manifests were rejected on their merits. */
-            truncated = nc - i;
-            for (; i < nc; i++)
-                free(cand[i]);
-            break;
-        }
-        if (pv == NM_VK_OK_GPU) {
+        if (nm_vk_inconclusive(pv)) {
+            /* This one told us nothing. Count it, keep going - a later
+             * manifest may still be testable, and the budget check inside
+             * nm_vk_probe() makes the rest of the loop nearly free once the
+             * time is gone - but never treat it as rejected on its merits. */
+            unexamined++;
+        } else if (pv == NM_VK_OK_GPU) {
             size_t len = strlen(cand[i]);
 
             if (off + len + 2 < sizeof(joined)) {
@@ -976,7 +1092,9 @@ static void nm_vk_make_safe(void)
                 joined[off] = 0;
                 kept++;
             } else {
-                truncated++;
+                /* No room to carry it: we know it is good and cannot say so,
+                 * which is the same epistemic state as not having tested it. */
+                unexamined++;
             }
         } else {
             dropped++;
@@ -985,32 +1103,60 @@ static void nm_vk_make_safe(void)
     }
 
     if (kept) {
-        nm_vk_pin(joined);
-        /* Each survivor was proven on its own; the union was not. One more
-         * fork settles it, and only when there is more than one to combine. */
-        if (kept > 1 && nm_vk_probe(NULL, deadline) == NM_VK_CRASHED) {
-            nm_vk_pin("/nonexistent.json");
-            nm_vk_say("every combination of this machine's vulkan drivers "
-                      "crashes a static binary; vulkan disabled for this process");
+        /* Each survivor was proven on its own; the union was not, and the
+         * difference is not academic - the full set is what we just watched
+         * die. Confirm the union IN A CHILD, passing the candidate value
+         * through the probe's own VK_ICD_FILENAMES override, so this process
+         * is still untouched if the answer is bad or absent. The previous
+         * version pinned first and asked afterwards, which meant an
+         * inconclusive confirmation left a pin nobody had justified. */
+        int uv = kept > 1 ? nm_vk_probe(joined, deadline) : NM_VK_OK_GPU;
+
+        if (uv == NM_VK_OK_GPU || uv == NM_VK_NO_GPU) {
+            nm_vk_pin(joined);
+            nm_vk_say("%d of this machine's vulkan driver%s cannot be used from a "
+                      "statically linked binary and %s disabled for this process%s",
+                      dropped, dropped == 1 ? "" : "s",
+                      dropped == 1 ? "was" : "were",
+                      unexamined ? " (and some were never checked: the guard ran out of time)" : "");
             return;
         }
-        nm_vk_say("%d of %d vulkan driver%s could not be used safely and %s "
-                  "disabled for this process%s",
-                  dropped, dropped + kept, dropped == 1 ? "" : "s",
-                  dropped == 1 ? "was" : "were",
-                  truncated ? " (and some were not checked at all: the guard ran out of time)" : "");
+        if (uv == NM_VK_CRASHED) {
+            nm_vk_pin("/nonexistent.json");
+            nm_vk_say("every combination of this machine's vulkan drivers crashes a "
+                      "statically linked binary; vulkan disabled for this process");
+            return;
+        }
+        /* The union could not be confirmed. Fall through to "we do not know". */
+        nm_vk_gave_up = 1;
+        nm_vk_say("could not confirm a safe set of vulkan drivers in time; "
+                  "running on the CPU and leaving the loader configuration untouched");
+        return;
+    }
+
+    /* Nothing survived. Whether that is worth acting on depends entirely on
+     * whether we actually looked at everything. */
+    if (unexamined) {
+        nm_vk_gave_up = 1;
+        nm_vk_say("could not finish checking this machine's vulkan drivers "
+                  "(%d of %d were never tested); running on the CPU and leaving "
+                  "the loader configuration untouched", unexamined, dropped + unexamined);
         return;
     }
 
     if (verdict == NM_VK_CRASHED) {
+        /* Every manifest examined, every one of them fatal, and the whole set
+         * proven fatal too. This is the one case where switching Vulkan off
+         * for the process is a conclusion rather than a guess. */
         nm_vk_pin("/nonexistent.json");
         nm_vk_say("this machine's vulkan drivers crash a statically linked "
-                  "binary; vulkan disabled for this process%s",
-                  truncated ? " (the guard also ran out of time before checking them all)" : "");
+                  "binary; vulkan disabled for this process");
         return;
     }
 
-    /* Software only, and nothing crashed: leave the loader alone. */
+    /* Software only, and nothing crashed: leave the loader alone. ggml will
+     * not use the device (nm_vk_scan refuses it) and FFmpeg's own filters,
+     * which run perfectly well on llvmpipe, keep it. */
     nm_vk_say("the only vulkan device here is a software rasteriser; "
               "running on the CPU (the loader configuration is unchanged)");
 }
@@ -1020,18 +1166,50 @@ static void nm_vk_make_safe(void)
 /* Windows, darwin, and any build that says Vulkan is not linked. Windows'
  * loader did not reproduce the crash (Task 1, on this project's own RTX 3070
  * host) and has no manifest directory of this shape. */
-static int nm_vk_inconclusive;
+static int nm_vk_gave_up;
 static void nm_vk_make_safe(void) { }
 
 #endif /* NM_VK_ICD_GUARD */
 
-/* The GPU/IGPU devices, in ggml enumeration order, which is the order
- * whisper.cpp's gpu_device counts in. nm_gpu_n is 0 whenever the GPU path is
- * unusable for any reason, so every accessor below can key off it alone. */
-static ggml_backend_dev_t nm_gpu_devs[NM_MAX_GPUS];
-static const char *nm_gpu_descs[NM_MAX_GPUS];
+/* How many GPU/IGPU devices this machine has, in ggml enumeration order, which
+ * is the order whisper.cpp's gpu_device counts in. 0 whenever the GPU path is
+ * unusable for any reason, so every accessor below can key off it alone. The
+ * devices themselves are looked up on demand rather than cached, so there is no
+ * fixed-size list to disagree with whisper about. */
 static int nm_gpu_n;
 static char nm_gpu_backend_name[32];
+
+/* The gpu_device'th GPU/IGPU device, or NULL when that index has nothing behind
+ * it - which includes "the GPU path is off entirely", since nm_gpu_n stays 0
+ * then. Walked rather than cached, and walked the same way whisper.cpp walks
+ * it, so there is no cap and no snapshot that can disagree. Called at filter
+ * init only, over a registry that is already built: a handful of type queries.
+ *
+ * Safe to call only after nm_backend_discover() has set nm_gpu_n, which is the
+ * one place that knows enumerating is allowed at all. */
+static ggml_backend_dev_t nm_gpu_at(int gpu_device)
+{
+    size_t i, n;
+    int seen = 0;
+
+    if (gpu_device < 0 || gpu_device >= nm_gpu_n)
+        return NULL;
+
+    n = ggml_backend_dev_count();
+    for (i = 0; i < n; i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        enum ggml_backend_dev_type type;
+
+        if (!dev)
+            continue;
+        type = ggml_backend_dev_type(dev);
+        if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU)
+            continue;
+        if (seen++ == gpu_device)
+            return dev;
+    }
+    return NULL;
+}
 
 /* Runs exactly once, before anything else in this process touches ggml's
  * backend registry.
@@ -1050,11 +1228,11 @@ static char nm_gpu_backend_name[32];
  */
 static void nm_backend_discover(void)
 {
-    ggml_backend_dev_t devs[NM_MAX_GPUS];
+    ggml_backend_dev_t dev;
     ggml_backend_reg_t reg;
     const char *reg_name;
     int verified = 0;
-    int n = 0, i;
+    int n = 0;
 
     nm_vk_make_safe();
 
@@ -1074,7 +1252,7 @@ static void nm_backend_discover(void)
     /* The guard could not test anything, so it also could not make anything
      * safe. Enumerating now would be exactly the unguarded call it exists to
      * prevent. */
-    if (nm_vk_inconclusive)
+    if (nm_vk_gave_up)
         return;
 
 #ifdef NM_VK_ICD_GUARD
@@ -1085,10 +1263,17 @@ static void nm_backend_discover(void)
     if (getenv("NOMERCY_VK_ICD_GUARD") && !strcmp(getenv("NOMERCY_VK_ICD_GUARD"), "0"))
         verified = 0;
 
-    if (nm_vk_scan(devs, &n, !verified) != NM_VK_OK_GPU || n <= 0)
+    if (nm_vk_scan(&n, !verified) != NM_VK_OK_GPU || n <= 0)
         return;
 
-    reg = ggml_backend_dev_backend_reg(devs[0]);
+    nm_gpu_n = n;
+    dev = nm_gpu_at(0);
+    if (!dev) {
+        nm_gpu_n = 0;
+        return;
+    }
+
+    reg = ggml_backend_dev_backend_reg(dev);
     reg_name = reg ? ggml_backend_reg_name(reg) : NULL;
     /* ggml spells it "Vulkan" (GGML_VK_NAME in ggml-vulkan.h); this project's
      * metadata contract is lower case, so fold it rather than pass the
@@ -1103,23 +1288,6 @@ static void nm_backend_discover(void)
         snprintf(nm_gpu_backend_name, sizeof(nm_gpu_backend_name), "gpu");
     }
 
-    /* Stable for the process: ggml-vulkan's device contexts are heap allocated
-     * once by ggml_backend_vk_reg_get_device() and never freed, so caching the
-     * description pointers is sound. */
-    for (i = 0; i < n; i++) {
-        nm_gpu_devs[i] = devs[i];
-        nm_gpu_descs[i] = ggml_backend_dev_description(devs[i]);
-    }
-    nm_gpu_n = n;
-}
-
-/* One device by index, or NULL when that index has nothing usable behind it -
- * which includes "the GPU path is off entirely", since nm_gpu_n stays 0 then. */
-static ggml_backend_dev_t nm_gpu_at(int gpu_device)
-{
-    if (gpu_device < 0 || gpu_device >= nm_gpu_n)
-        return NULL;
-    return nm_gpu_devs[gpu_device];
 }
 
 #if defined(_WIN32)
@@ -1163,8 +1331,14 @@ const char *nm_ggml_backend_name(int gpu_device)
 const char *nm_ggml_backend_device(int gpu_device)
 {
     nm_backend_once();
-    return nm_gpu_at(gpu_device) ? nm_gpu_descs[gpu_device]
-                                 : nm_ggml_cpu_variant_name();
+    {
+        ggml_backend_dev_t dev = nm_gpu_at(gpu_device);
+
+        /* Read live from the device. ggml-vulkan's device contexts are heap
+         * allocated once by ggml_backend_vk_reg_get_device() and never freed,
+         * so the string stays valid for the life of the process. */
+        return dev ? ggml_backend_dev_description(dev) : nm_ggml_cpu_variant_name();
+    }
 }
 
 const char *nm_ggml_backend_notice(void)
