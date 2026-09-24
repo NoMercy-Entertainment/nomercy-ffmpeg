@@ -46,8 +46,30 @@ end=$(get tail_long.wav recommended_end "safety_margin=30")
 printf -v rounded_end '%.1f' "${end:?empty extraction}"
 check "clamped recommended_end"   "$rounded_end"                           "11.0"
 
-# Review Focus 4: linear noise behaves like the equivalent dB value.
-check "linear noise"              "$(get tail_long.wav detected "noise=0.00316227766")" "1"
+# Review Focus 4, and whole-branch review I1: the noise threshold and the
+# duration gate must actually be read by the filter.
+#
+# The single check these three replace passed noise=0.00316227766 -- which is
+# the filter's OWN DEFAULT. It therefore asserted nothing beyond the bare
+# "tail_long detected" run at the top of this file, and the whole suite stayed
+# green when the option was disconnected from scan_frame entirely. Each check
+# below flips the answer away from the default, so a build that ignores the
+# option it names fails here:
+#
+#   noise=-50dB  the default expressed in the dB notation the README and the
+#                spec both advertise, and which nothing tested before -> 1
+#   noise=-10dB  above the fixture tone's -18.1 dBFS peak, so the whole stream
+#                reads as silent and the "entirely silent file" guard gives 0
+#   duration=6   longer than the fixture's 5 s tail -> 0
+#
+# Same ${var:?} guard as everywhere else in this file: an empty extraction is
+# an aborted run, never a check that passes because "" compared equal.
+noise_db_default=$(get tail_long.wav detected "noise=-50dB")
+check "dB noise parses"           "${noise_db_default:?empty extraction}"  "1"
+noise_db_high=$(get tail_long.wav detected "noise=-10dB")
+check "dB noise honoured"         "${noise_db_high:?empty extraction}"     "0"
+duration_longer_than_tail=$(get tail_long.wav detected "duration=6")
+check "duration honoured"         "${duration_longer_than_tail:?empty extraction}" "0"
 
 # Review Focus 3: timestamps must not come from pts. Strip them entirely with
 # setpts and the answer must be unchanged -- if a later edit reaches for
