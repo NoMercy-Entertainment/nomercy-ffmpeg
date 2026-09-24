@@ -312,6 +312,15 @@ ffmpeg -i in.mka -to <recommended_end> -c copy out.mka
 | `destination` | string | *(empty)* | Path to write the JSON report; empty disables the report (the frame metadata is still emitted) |
 | `format` | string | `json` | Report format. Only `json` is currently supported |
 
+**A report you asked for either arrives or the run refuses to start.**
+`destination` is opened and `format` is checked while the filter graph is
+built, before a single frame is decoded. An unwritable path or an unsupported
+format is therefore an error line and a non-zero exit, not a successful run
+with no file at the other end -- a caller cannot be left unable to tell
+"scanned, found nothing" from "never ran". Nothing is transcoded and then
+thrown away either: the failure happens before any work starts, so fixing the
+path and re-running costs nothing.
+
 **Metadata keys** — all six are attached to the final frame on **every run**,
 including when nothing is found, as `lavfi.trailingsilence.<key>`:
 

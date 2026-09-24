@@ -39,6 +39,7 @@ typedef struct TrailingSilenceContext {
     char    *format;
 
     /* state */
+    AVIOContext *report;            /* open report file, NULL when disabled */
     AVFrame *held;                  /* the one delayed frame */
     int64_t  nb_samples;            /* samples seen, the fallback clock */
     int      sample_rate;
@@ -70,6 +71,42 @@ static const AVOption trailingsilence_options[] = {
 };
 
 AVFILTER_DEFINE_CLASS(trailingsilence);
+
+/* Both the report format and the report path are caller configuration, and
+ * both used to fail at end of stream: one log line, no file written, and
+ * ffmpeg still exiting 0. A media server that asked for a report then could
+ * not tell "scanned, found nothing" from "the filter never ran" -- the exact
+ * ambiguity this filter exists to remove, and the same reason every metadata
+ * key is emitted even when detected=0.
+ *
+ * Validating here moves both failures to filter-graph setup, before a single
+ * frame is decoded. A bad report path therefore now refuses to start the run
+ * rather than wasting it: failing before any work is done is a different
+ * thing from throwing completed work away, and it is the loud failure the
+ * caller needs. */
+static av_cold int init(AVFilterContext *ctx)
+{
+    TrailingSilenceContext *s = ctx->priv;
+    int ret;
+
+    if (av_strcasecmp(s->format, "json")) {
+        av_log(ctx, AV_LOG_ERROR,
+               "trailingsilence: unknown format '%s'; only 'json' is supported.\n",
+               s->format);
+        return AVERROR(EINVAL);
+    }
+
+    if (s->destination && *s->destination) {
+        ret = avio_open(&s->report, s->destination, AVIO_FLAG_WRITE);
+        if (ret < 0) {
+            av_log(ctx, AV_LOG_ERROR, "trailingsilence: could not open %s: %s\n",
+                   s->destination, av_err2str(ret));
+            return ret;
+        }
+    }
+
+    return 0;
+}
 
 static int config_input(AVFilterLink *inlink)
 {
@@ -113,26 +150,12 @@ static void write_report(AVFilterContext *ctx, int detected,
                          double margin)
 {
     TrailingSilenceContext *s = ctx->priv;
-    AVIOContext *out = NULL;
     char buf[512];
-    int ret;
 
-    if (!s->destination || !*s->destination)
+    /* init() already validated the format and opened the file, so the only
+     * question left here is whether a report was asked for at all. */
+    if (!s->report)
         return;
-
-    if (av_strcasecmp(s->format, "json")) {
-        av_log(ctx, AV_LOG_ERROR,
-               "trailingsilence: unknown format '%s'; only 'json' is supported.\n",
-               s->format);
-        return;
-    }
-
-    ret = avio_open(&out, s->destination, AVIO_FLAG_WRITE);
-    if (ret < 0) {
-        av_log(ctx, AV_LOG_ERROR, "trailingsilence: could not open %s: %s\n",
-               s->destination, av_err2str(ret));
-        return;
-    }
 
     snprintf(buf, sizeof(buf),
              "{\n"
@@ -146,8 +169,7 @@ static void write_report(AVFilterContext *ctx, int detected,
              detected, silence_start, silence_duration,
              stream_duration, recommended_end, margin);
 
-    avio_write(out, (const unsigned char *)buf, strlen(buf));
-    avio_closep(&out);
+    avio_write(s->report, (const unsigned char *)buf, strlen(buf));
 }
 
 static void set_report(AVFilterContext *ctx, AVFrame *frame)
@@ -247,6 +269,7 @@ static av_cold void uninit(AVFilterContext *ctx)
 {
     TrailingSilenceContext *s = ctx->priv;
     av_frame_free(&s->held);
+    avio_closep(&s->report);
 }
 
 static const AVFilterPad trailingsilence_inputs[] = {
@@ -263,6 +286,7 @@ const FFFilter ff_af_trailingsilence = {
     .p.priv_class  = &trailingsilence_class,
     .p.flags       = AVFILTER_FLAG_METADATA_ONLY,
     .priv_size     = sizeof(TrailingSilenceContext),
+    .init          = init,
     .uninit        = uninit,
     .activate      = activate,
     FILTER_INPUTS(trailingsilence_inputs),
