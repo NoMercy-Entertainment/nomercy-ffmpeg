@@ -23,6 +23,22 @@ touch /ffmpeg_build.log
 git clone --branch v0.3.34 https://github.com/OpenMathLib/OpenBLAS /build/OpenBLAS
 cd /build/OpenBLAS
 
+# NUM_THREADS and BUFFERSIZE are memory settings, not speed settings.
+#
+# OpenBLAS starts one worker thread per logical processor from a linker
+# constructor, before main(), and every worker commits a BUFFER_SIZE block as
+# its first statement -- before it is given any work, in every process that
+# links this library, whether or not it ever calls BLAS. The defaults here
+# were NUM_THREADS=64 with BUFFERSIZE unset, which is 128 MiB per thread: a
+# plain transcode on a 56-thread server committed 7078 MiB it never touched,
+# and ffmpeg died with "Memory allocation still failed after 10 retries" once
+# the host's commit limit was reached (178 stemsplit runs, see issue #70).
+#
+# 16 threads x 32 MiB caps that at 487 MiB measured, on both a 16-thread
+# desktop and the 56-thread server, and costs no measurable whisper time
+# (60 s of speech through ggml-base.en: 18.7/18.9 s before, 18.5/16.7 s
+# after). Nothing we run comes near the ~30000x30000 matrices where a 32 MiB
+# buffer is documented as a constraint; whisper's own matmuls are far smaller.
 mkdir build && cd build
 cmake -S .. -B . \
     ${CMAKE_COMMON_ARG} \
@@ -36,7 +52,8 @@ cmake -S .. -B . \
     -DCROSS=ON \
     -DDYNAMIC_ARCH=ON \
     -DHOSTCC=gcc \
-    -DNUM_THREADS=64 \
+    -DNUM_THREADS=16 \
+    -DBUFFERSIZE=20 \
     -DTARGET=NEHALEM \
     -DUTEST_CHECK=OFF \
     -DVERBOSE=ON 2>&1 | log

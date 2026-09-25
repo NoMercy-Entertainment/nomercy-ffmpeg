@@ -12,6 +12,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/lib/capabilities.sh"
 # shellcheck source=lib/report.sh
 source "${HERE}/lib/report.sh"
+# shellcheck source=lib/cpu-variant.sh
+source "${HERE}/lib/cpu-variant.sh"
 
 Workspace="$1"
 shift 2>/dev/null || true
@@ -54,6 +56,7 @@ PASSED_TESTS=0
 SKIPPED_TESTS=0
 FAILED_TESTS=0
 
+FFMPEG="${Workspace}/ffmpeg"
 TestRoot="${Workspace}/sample_files"
 SampleVideo="${TestRoot}/sample.mp4"
 SampleAudio="${TestRoot}/sample.wav"
@@ -67,7 +70,7 @@ mkdir -p "${TestRoot}"
 # Counts the call sites at the bottom of this file so the progress counter can
 # read "[3/25]". Anchored at line start so the definitions above never count.
 get_test_runs_count() {
-	grep -cE '^(run_test|run_hw_test|run_platform_test) "' "${BASH_SOURCE[0]}"
+	grep -cE '^(run_test|run_hw_test|run_platform_test|run_custom_test) "' "${BASH_SOURCE[0]}"
 }
 
 TOTAL_RUNS=$(get_test_runs_count)
@@ -274,6 +277,55 @@ run_platform_test() {
 	report_add "${name}" skipped 0 "${reason}"
 }
 
+# Same contract as run_test, but the test body is a shell function rather than
+# a single ffmpeg command line: run_test evals "${Workspace}/ffmpeg $command",
+# so it can only ever run ffmpeg once with a fixed argument list, which cannot
+# express a test that needs several ffmpeg invocations compared against each
+# other (see lib/cpu-variant.sh). The function communicates its result purely
+# through its exit code, the same three-way split every run_* helper in this
+# file already uses: 0 is a pass, 2 is a skip (with the reason on a line
+# starting "SKIP: ", recorded exactly like run_hw_test/run_platform_test do --
+# never a silent pass), anything else is a failure with the full output shown.
+run_custom_test() {
+	local name=$1
+	local func=$2
+	local test_output
+	local exit_code
+	local duration
+	local reason
+
+	TOTAL_TESTS=$((TOTAL_TESTS + 1))
+	name=$(echo $name | tr '[:lower:]' '[:upper:]')
+
+	text_with_padding "🧪 Testing ${name}" "[${TOTAL_TESTS}/${TOTAL_RUNS}]" 1
+	Start_Time=$(date +%s)
+
+	test_output=$("$func" 2>&1)
+	exit_code=$?
+	End_Time=$(date +%s)
+	duration=$((End_Time - Start_Time))
+
+	if [[ $exit_code -eq 2 ]]; then
+		reason=$(echo "$test_output" | grep -m1 '^SKIP: ' | sed 's/^SKIP: //')
+		[[ -z "$reason" ]] && reason="skipped"
+		text_with_padding "➖ ${name} was skipped" "[${duration}s]" 1
+		echo "   ${reason}"
+		SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+		report_add "${name}" skipped "${duration}" "${reason}"
+	elif [[ $exit_code -eq 0 ]]; then
+		text_with_padding "✅ ${name} test passed" "[${duration}s]" 1
+		PASSED_TESTS=$((PASSED_TESTS + 1))
+		report_add "${name}" passed "${duration}"
+	else
+		text_with_padding "❌ ${name} test failed" "[${duration}s]" 1
+		FAILED_TESTS=$((FAILED_TESTS + 1))
+		echo "   exit=${exit_code}"
+		echo "$test_output" | tail -12 | sed 's/^/   | /'
+		report_add "${name}" failed "${duration}" \
+			"exit ${exit_code}; $(echo "$test_output" | tail -3 | tr '\n' ' ')"
+	fi
+}
+
 # Main execution
 printf "%${TOTAL_WIDTH_TEXT}s\n" | tr ' ' '-' # Print a horizontal line
 printf "%s\n" "        _   _       __  __                      "
@@ -328,6 +380,12 @@ run_test "librav1e" "-hide_banner -encoders" "rav1e"
 
 # Stemsplit filter
 run_test "stemsplit" "-hide_banner -filters | grep stemsplit" "stemsplit"
+
+# ggml CPU variant dispatcher: the baseline/nonsense override guarantee always
+# runs; the full variant-selection check runs only when a stemsplit model is
+# available (see lib/cpu-variant.sh) -- real CI has no model, so it SKIPs
+# with a reason there rather than faking a pass.
+run_custom_test "cpu_variant" "test_cpu_variant"
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

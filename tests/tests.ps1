@@ -12,6 +12,7 @@ param (
 $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/capabilities.ps1"
 . "$HERE/lib/report.ps1"
+. "$HERE/lib/cpu-variant.ps1"
 
 Report-Init -Platform $Platform
 
@@ -37,7 +38,7 @@ New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out
 # read "[3/26]". Anchored at line start so the definitions above never count.
 function get_test_runs_count {
     $lines = Get-Content -Path $PSCommandPath
-    return @($lines | Where-Object { $_ -match '^(run_test|run_hw_test|run_platform_test) "' }).Count
+    return @($lines | Where-Object { $_ -match '^(run_test|run_hw_test|run_platform_test|run_custom_test) "' }).Count
 }
 
 $TOTAL_RUNS = get_test_runs_count
@@ -226,6 +227,50 @@ function run_platform_test {
     Report-Add -Name $name -Status skipped -DurationSeconds 0 -Reason $reason
 }
 
+# Same contract as run_test, but the test body is a scriptblock rather than a
+# single ffmpeg command line: run_test's Invoke-Expression can only ever run
+# ffmpeg.exe once with a fixed argument list, which cannot express a test that
+# needs several ffmpeg invocations compared against each other (see
+# lib/cpu-variant.ps1). The scriptblock returns a hashtable
+# @{ Status = 'Pass'|'Fail'|'Skip'; Reason = <string>; Output = <string> } --
+# a skip always carries its reason, recorded exactly like run_hw_test /
+# run_platform_test do, never a silent pass.
+function run_custom_test {
+    param (
+        $name,
+        [scriptblock]$testBlock
+    )
+
+    $script:TOTAL_TESTS++
+    $displayName = $name.ToUpper()
+    text_with_padding "🧪 Testing ${displayName}" "[$script:TOTAL_TESTS/$TOTAL_RUNS]"
+    $Start_Time = Get-Date
+    $result = & $testBlock
+    $duration = [int](New-TimeSpan -Start $Start_Time -End (Get-Date)).TotalSeconds
+
+    switch ($result.Status) {
+        'Skip' {
+            text_with_padding "➖ ${displayName} was skipped" "[ ${duration}s ]" 1
+            Write-Host "   $($result.Reason)"
+            $script:SKIPPED_TESTS++
+            Report-Add -Name $displayName -Status skipped -DurationSeconds $duration -Reason $result.Reason
+        }
+        'Pass' {
+            text_with_padding "✅ ${displayName} test passed" "[ ${duration}s ]" 1
+            $script:PASSED_TESTS++
+            Report-Add -Name $displayName -Status passed -DurationSeconds $duration
+        }
+        default {
+            text_with_padding "❌ ${displayName} test failed" "[ ${duration}s ]" 1
+            $script:FAILED_TESTS++
+            Write-Host "   $($result.Reason)"
+            $tail = ($result.Output -split "`r?`n" | Where-Object { $_ } | Select-Object -Last 12)
+            $tail | ForEach-Object { Write-Host "   | $_" }
+            Report-Add -Name $displayName -Status failed -DurationSeconds $duration -Reason $result.Reason
+        }
+    }
+}
+
 # Main execution
 Write-Host ([string]::new('-', $TOTAL_WIDTH_TEXT))
 Write-Host '  NoMercy FFmpeg Test Suite'
@@ -270,6 +315,12 @@ run_test "librav1e" "-hide_banner -encoders" "rav1e"
 
 # Stemsplit filter
 run_test "stemsplit" "-hide_banner -filters | findstr stemsplit" "stemsplit"
+
+# ggml CPU variant dispatcher: the baseline/nonsense override guarantee always
+# runs; the full variant-selection check runs only when a stemsplit model is
+# available (see lib/cpu-variant.ps1) -- real CI has no model, so it SKIPs
+# with a reason there rather than faking a pass.
+run_custom_test "cpu_variant" { Test-CpuVariant -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

@@ -120,6 +120,7 @@ RUN echo "------------------------------------------------------" \
     gettext \
     git \
     glslang-tools \
+    glslc \
     gperf \
     groff \
     libc6 \
@@ -134,6 +135,7 @@ RUN echo "------------------------------------------------------" \
     python3-pip \
     python3-dev \
     python3-venv \
+    spirv-headers \
     subversion \
     texinfo \
     wget \
