@@ -121,7 +121,10 @@ if [[ ${NM_VULKAN} == 1 ]]; then
     # still wins the probe, and any target whose ${PREFIX}/bin holds no runnable
     # "glslc" simply falls through to /usr/bin/glslc, which is where its shaders
     # were already being compiled. /usr/bin/glslc is the apt glslc that
-    # ffmpeg-base.dockerfile installs.
+    # ffmpeg-base.dockerfile installs - the fallback, not the first choice,
+    # deliberately: hardcoding it would drag linux-x86_64 off the shaderc
+    # 45-vulkan.sh just built for it and onto apt's 2023.8 on every platform,
+    # to fix the one platform that could not run its own.
     nm_glslc=""
     for nm_glslc_cand in "$(command -v glslc 2>/dev/null)" /usr/bin/glslc; do
         [[ -n ${nm_glslc_cand} && -x ${nm_glslc_cand} ]] || continue
@@ -459,6 +462,19 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
             ${NM_NM} "$1" "${nm_vk_archive}" 2>/dev/null | awk '{print $NF}' |
                 grep -E '_(data|len)$' | sort -u
         }
+        # An empty DEFINED set means nm told us nothing, not that the archive is
+        # clean: with a broken or mis-set NM_NM both sets come back empty, the
+        # set difference is empty, and this guard would report success on any
+        # archive at all. That is the same fail-open shape as the glslc bug
+        # above - a check that asserts the tool was called rather than that it
+        # worked - so establish that nm produced a symbol table first (a good
+        # ggml-vulkan archive defines ~5000 of these) before trusting the
+        # comparison.
+        nm_vk_defined=$(nm_vk_blobs --defined-only | wc -l)
+        if [[ ${nm_vk_defined} -eq 0 ]]; then
+            log "Error: ${NM_NM} listed no defined shader blob symbols in ${nm_vk_archive}; the shader completeness check cannot run (is NM_NM=${NM_NM} a working nm?)"
+            exit 1
+        fi
         nm_vk_missing=$(comm -23 <(nm_vk_blobs --undefined-only) <(nm_vk_blobs --defined-only) | wc -l)
         if [[ ${nm_vk_missing} -ne 0 ]]; then
             log "Error: ${nm_vk_archive} references ${nm_vk_missing} shader blob symbols it does not define; the Vulkan shader compilation (glslc ${nm_glslc}) did not produce them"
