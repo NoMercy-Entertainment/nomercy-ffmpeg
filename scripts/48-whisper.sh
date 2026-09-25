@@ -102,8 +102,39 @@ if [[ ${NM_VULKAN} == 1 ]]; then
     ar rcs ${nm_vk_dir}/libvulkan-stub.a ${nm_vk_dir}/empty.o \
         || { log "Error: vulkan stub archive build failed"; exit 1; }
 
-    nm_glslc=$(command -v glslc) \
-        || { log "Error: NM_VULKAN=1 but glslc was not found on PATH"; exit 1; }
+    # glslc is a BUILD-HOST tool: ggml's vulkan-shaders-gen executes it once per
+    # shader at build time. So the question is not "is there a glslc on PATH"
+    # but "is there a glslc this machine can run", and on a cross target those
+    # are different questions. ${PREFIX}/bin comes first on PATH (see the
+    # platform dockerfiles) and 45-vulkan.sh installs shaderc's own glslc
+    # there, cross compiled for the TARGET: on linux-aarch64 that is an ARM
+    # binary and every invocation of it on the x86_64 builder fails with
+    # "Exec format error". vulkan-shaders-gen does not stop on that - it logs
+    # and carries on - so ggml-vulkan compiles and installs with most of its
+    # shader blob symbols never defined, and the first thing that notices is
+    # ffmpeg's configure link test an hour later, which reports only
+    # "whisper >= 1.7.5 not found using pkg-config".
+    #
+    # Probing with --version leaves every platform that already worked on the
+    # binary it was already using and only moves the one that could not run its
+    # own: linux-x86_64's ${PREFIX}/bin/glslc is a native x86_64 build, so it
+    # still wins the probe, and any target whose ${PREFIX}/bin holds no runnable
+    # "glslc" simply falls through to /usr/bin/glslc, which is where its shaders
+    # were already being compiled. /usr/bin/glslc is the apt glslc that
+    # ffmpeg-base.dockerfile installs - the fallback, not the first choice,
+    # deliberately: hardcoding it would drag linux-x86_64 off the shaderc
+    # 45-vulkan.sh just built for it and onto apt's 2023.8 on every platform,
+    # to fix the one platform that could not run its own.
+    nm_glslc=""
+    for nm_glslc_cand in "$(command -v glslc 2>/dev/null)" /usr/bin/glslc; do
+        [[ -n ${nm_glslc_cand} && -x ${nm_glslc_cand} ]] || continue
+        "${nm_glslc_cand}" --version >/dev/null 2>&1 || continue
+        nm_glslc=${nm_glslc_cand}
+        break
+    done
+    [[ -n ${nm_glslc} ]] \
+        || { log "Error: NM_VULKAN=1 but no glslc that runs on this build host was found (checked PATH and /usr/bin/glslc)"; exit 1; }
+    log "Using glslc: ${nm_glslc}"
 
     # SPIR-V headers, staged into ${PREFIX}/include.
     #
@@ -415,6 +446,40 @@ if [[ ${NM_SKIP_VARIANTS} != "1" ]]; then
         if [ ${PIPESTATUS[0]} -ne 0 ]; then log "Error: vulkan shim build failed"; exit 1; fi
         nm_vk_archive=$(find ${PREFIX}/lib -name 'libggml-vulkan.a' -o -name 'ggml-vulkan.a' | head -1)
         if [[ -z ${nm_vk_archive} ]]; then log "Error: GGML_VULKAN=ON but no ggml-vulkan archive was produced"; exit 1; fi
+        # ...and that it is a COMPLETE one. ggml-vulkan's compiled shaders are
+        # emitted by vulkan-shaders-gen, which shells out to glslc once per
+        # shader and only logs the failures, so a glslc that cannot run on this
+        # host (see the glslc probe at the top of this script) still produces an
+        # archive that builds, installs and passes every existing check here -
+        # it is just missing the <shader>_data / <shader>_len blobs its own
+        # objects reference. Nothing downstream of this script can attribute
+        # that: it surfaces as ffmpeg's configure reporting "whisper >= 1.7.5
+        # not found using pkg-config" an hour later, with the thousands of
+        # undefined references only in ffbuild/config.log. Every blob referenced
+        # inside this archive must be defined inside it (measured: 0 missing on
+        # a good build, 3710 missing on the broken linux-aarch64 one).
+        nm_vk_blobs() {
+            ${NM_NM} "$1" "${nm_vk_archive}" 2>/dev/null | awk '{print $NF}' |
+                grep -E '_(data|len)$' | sort -u
+        }
+        # An empty DEFINED set means nm told us nothing, not that the archive is
+        # clean: with a broken or mis-set NM_NM both sets come back empty, the
+        # set difference is empty, and this guard would report success on any
+        # archive at all. That is the same fail-open shape as the glslc bug
+        # above - a check that asserts the tool was called rather than that it
+        # worked - so establish that nm produced a symbol table first (a good
+        # ggml-vulkan archive defines ~5000 of these) before trusting the
+        # comparison.
+        nm_vk_defined=$(nm_vk_blobs --defined-only | wc -l)
+        if [[ ${nm_vk_defined} -eq 0 ]]; then
+            log "Error: ${NM_NM} listed no defined shader blob symbols in ${nm_vk_archive}; the shader completeness check cannot run (is NM_NM=${NM_NM} a working nm?)"
+            exit 1
+        fi
+        nm_vk_missing=$(comm -23 <(nm_vk_blobs --undefined-only) <(nm_vk_blobs --defined-only) | wc -l)
+        if [[ ${nm_vk_missing} -ne 0 ]]; then
+            log "Error: ${nm_vk_archive} references ${nm_vk_missing} shader blob symbols it does not define; the Vulkan shader compilation (glslc ${nm_glslc}) did not produce them"
+            exit 1
+        fi
         nm_vk_shim_obj=${nm_variant_dir}/vk_loader_shim.o
     fi
 
