@@ -179,6 +179,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 | **`keydetect`** | Audio filter | Musical key and chord detection |
 | **`beatdetect`** | Audio filter | Tempo, beat grid and confidence as `lavfi.beatdetect.*` frame metadata; octave decided from the onsets, not from a preferred range |
 | **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems (Spleeter 2stems on ggml) |
+| **`trailingsilence`** | Audio filter | Reports where a stream's audible content ends as `lavfi.trailingsilence.*` frame metadata (and an optional JSON report); never cuts anything itself |
 | **OCR subtitle encoder** | Codec | Converts bitmap subtitles (DVD/Blu-ray) to WebVTT text using Tesseract OCR |
 | **Sprite-sheet muxer** | Muxer | Generates thumbnail sprite sheets with a WebVTT timeline for player scrubbing |
 | **Chapter VTT muxer** | Muxer | Exports chapter metadata as WebVTT |
@@ -477,6 +478,94 @@ and macOS, which have none.
 The GPU path adds no runtime dependency on any of them: the binaries stay
 fully static, and there is no Vulkan loader in the import table or the dynamic
 section anywhere.
+
+#### 🔇 **`trailingsilence` — Trailing-Silence Detection**
+
+Reports where a stream's audible content ends, so a media server can store
+the point and a player can stop there. **It never cuts anything.** Trimming
+is the caller's job, with a second, ordinary `ffmpeg -to` pass:
+
+```bash
+# Step 1: measure. destination writes the JSON report; the metadata is also
+# on the final frame either way, so a bare -af trailingsilence works too.
+ffmpeg -i in.mka -af trailingsilence=destination=report.json -f null -
+
+# Step 2: cut, using the value from step 1. Often needs no re-encode.
+ffmpeg -i in.mka -to <recommended_end> -c copy out.mka
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `noise` (`n`) | double | `-50dB` | Silence threshold. Accepts a dB value (e.g. `-50dB`) or a linear amplitude (e.g. `0.00316227766`, the same threshold) |
+| `duration` (`d`) | duration | `2` | Minimum length a trailing quiet run must reach before it counts as the silence |
+| `min_stream_duration` | duration | `10` | Streams shorter than this are skipped entirely — nothing is reported as detected |
+| `safety_margin` | duration | `0.25` | How far past the measured silence start the recommended cut point sits |
+| `destination` | string | *(empty)* | Path to write the JSON report; empty disables the report (the frame metadata is still emitted) |
+| `format` | string | `json` | Report format. Only `json` is currently supported |
+
+**How the report is written.** Four properties a server can rely on:
+
+- **A bad report configuration fails before any work.** `destination` and
+  `format` are checked while the filter graph is built, before a single frame
+  is decoded, so an unwritable path or an unsupported format is an error line
+  and a non-zero exit -- never a successful run with no file at the other end.
+  Nothing is transcoded and then thrown away; fix the path and re-run.
+- **`destination` never exists half-written.** The content is written to
+  `<destination>.part` and renamed into place at end of stream, so the file
+  appears exactly once, complete. A consumer polling the path may treat
+  "present" as "finished".
+- **An unfinished probe cannot destroy a finished one.** A run that never
+  reaches end of stream -- killed, or a graph torn down early by `-frames:a`
+  or an output limit -- publishes nothing and leaves any previous report
+  exactly as it was. A stray `<destination>.part` is the signature of such a
+  run; it is never mistaken for the report.
+- **`destination` must be a plain filesystem path.** A protocol URL will open
+  but cannot be renamed into place; that is reported, and the completed report
+  is left at the temporary path rather than lost.
+
+**Metadata keys** — all six are attached to the final frame on **every run**,
+including when nothing is found, as `lavfi.trailingsilence.<key>`:
+
+| Key | What it is |
+|---|---|
+| `detected` | `1` if a qualifying trailing silence was found, else `0` |
+| `silence_start` | **Measured.** Seconds from stream start to where the trailing quiet run begins |
+| `silence_duration` | **Measured.** Length of that quiet run |
+| `stream_duration` | **Measured.** Total stream duration |
+| `recommended_end` | **Advice.** `min(silence_start + safety_margin, stream_duration)` |
+| `safety_margin` | The margin actually applied (echoes the option, for a caller that only sees the report) |
+
+**Measurement versus advice is the distinction that matters here.**
+`silence_start` is where the signal crossed below `noise` and stayed there —
+a measurement. `recommended_end` is advice: the measurement plus a small
+safety margin, because a very quiet outro (a fading tail, room tone, a soft
+sustained note) can sit below the threshold while still being audible.
+Reporting both lets a server pick the exact measured point, the padded
+recommendation, or its own policy in between — and always know which of the
+two numbers it is looking at.
+
+**Safe to consume blind.** When `detected=0` — the stream was too short,
+entirely silent, only had silence in the middle, or simply had no
+qualifying trailing run — every key is still emitted, and `recommended_end`
+is set to `stream_duration`. A caller can read `recommended_end` and pass it
+straight to `-to` without first checking `detected`; on a stream with
+nothing to trim, that command trims nothing.
+
+**The one exception.** If the filter saw no audio at all -- a seek past the end
+of the stream, an empty or undecodable track -- the report is still written, so
+a caller who asked for one is never left unable to tell "scanned, saw nothing"
+from "never ran". But every field in it is `0`, `recommended_end` included:
+there was no audio to measure, so there is no honest end point to recommend.
+`stream_duration == 0` identifies this case, and it is the one case a caller
+consuming `recommended_end` blindly must check for.
+
+**Skipped by design, not by bug:**
+- Streams shorter than `min_stream_duration` (default 10 s).
+- Entirely silent streams — there is no audible content to preserve, so no
+  honest cut point to recommend.
+- Silence that sits in the middle of the stream but does not reach the end.
+- Live input: the report is produced at end-of-stream, which live input
+  never reaches.
 
 #### 🤖 **AI & Analysis**
 - **OpenAI Whisper Integration**: Built-in speech-to-text via whisper.cpp (`--enable-whisper`)

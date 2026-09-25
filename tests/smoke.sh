@@ -233,4 +233,18 @@ assert_version "${ffprobe_bin}" "ffprobe version"
 # cross-exec early-return.
 assert_cpu_variant_startup "${ffmpeg_bin}" "${PLATFORM}"
 assert_vulkan_startup "${ffmpeg_bin}" "${PLATFORM}"
+
+# trailingsilence: assert it reports a real value on a generated fixture, not
+# just that the command exited 0. 6s of tone padded with 5s of silence,
+# trimmed to 11s, must detect the tail at the filter's own default duration=2
+# threshold. -nostats (not -v error): ametadata's mode=print writes at
+# AV_LOG_INFO, which -v error would silence along with everything else.
+ts_out=$("${ffmpeg_bin}" -hide_banner -nostats -f lavfi -i "sine=frequency=440:duration=6" \
+    -af "apad=pad_dur=5,atrim=end=11,trailingsilence,ametadata=mode=print" -f null - 2>&1 \
+  | sed -n 's/^.*lavfi\.trailingsilence\.detected=//p' | tail -1)
+# Guard the extraction itself: an empty string must fail loudly here, not
+# compare quietly false against "1" a few lines down.
+[[ -n "${ts_out}" ]] || fail "trailingsilence: empty metadata extraction"
+[[ "${ts_out}" == "1" ]] || fail "trailingsilence did not detect the tail (got '${ts_out}')"
+ok "trailingsilence detected the padded tail (detected=${ts_out})"
 ok "Smoke test passed."

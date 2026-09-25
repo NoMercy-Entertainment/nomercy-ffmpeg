@@ -213,5 +213,32 @@ Assert-Version $ffprobe 'ffprobe version'
 # cross-exec early-return.
 Assert-CpuVariantStartup $ffmpeg $Platform
 Assert-VulkanStartup $ffmpeg $Platform
+
+# trailingsilence: assert it reports a real value on a generated fixture, not
+# just that the command exited 0. 6s of tone padded with 5s of silence,
+# trimmed to 11s, must detect the tail at the filter's own default duration=2
+# threshold. -nostats (not -v error): ametadata's mode=print writes at
+# AV_LOG_INFO, which -v error would silence along with everything else.
+#
+# $ErrorActionPreference = 'Stop' is set at the top of this script, and on
+# Windows PowerShell 5.1 (not pwsh 7) a native command's stderr, once merged
+# with 2>&1, is delivered as terminating ErrorRecords under that preference —
+# the very first stderr line (ffmpeg logs its stream mapping there) aborts
+# the script before the output can be captured. Scope the preference down to
+# 'Continue' for just this call so the merged stream is plain text instead.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$tsRaw = & $ffmpeg -hide_banner -nostats -f lavfi -i "sine=frequency=440:duration=6" `
+    -af "apad=pad_dur=5,atrim=end=11,trailingsilence,ametadata=mode=print" -f null - 2>&1 | Out-String
+$ErrorActionPreference = $prevEap
+
+$tsMatches = [regex]::Matches($tsRaw, 'lavfi\.trailingsilence\.detected=(\S+)')
+$tsOut = ''
+if ($tsMatches.Count -gt 0) { $tsOut = $tsMatches[$tsMatches.Count - 1].Groups[1].Value }
+# Guard the extraction itself: an empty string must fail loudly here, not
+# compare quietly false against '1' a few lines down.
+if ([string]::IsNullOrEmpty($tsOut)) { Fail 'trailingsilence: empty metadata extraction' }
+if ($tsOut -ne '1') { Fail "trailingsilence did not detect the tail (got '$tsOut')" }
+Write-Host "✅ trailingsilence detected the padded tail (detected=$tsOut)"
 Write-Host '✅ Smoke test passed.'
 exit 0
