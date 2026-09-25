@@ -55,7 +55,20 @@ on:
 
 jobs:
   docker-build:
-    runs-on: ${{ inputs.labels }}
+    # `inputs.labels` alone does not constrain the operating system, and callers
+    # pass a bare label (`beast-unit`), so `runs-on` became a single-label match
+    # that any machine carrying it satisfied — Linux, Windows or macOS. On
+    # 2026-09-25 that put `build-platforms (linux-x86_64)` on
+    # github-macos-x64-1, where the job died on `free: command not found` and
+    # then `docker: command not found`.
+    #
+    # This workflow builds Docker images and nothing else, so it always needs a
+    # Linux x64 machine. Pinning that here rather than at the call site means a
+    # caller cannot get it wrong: `inputs.labels` now selects *which* Linux
+    # runner pool, not which operating system. `Linux` and `X64` are assigned
+    # automatically by the runner software. Related: #74, which reported the
+    # same hazard in the `export-artifacts` job.
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.labels }}"]
     strategy:
       fail-fast: false  # Don't cancel other builds if one fails
     steps:
