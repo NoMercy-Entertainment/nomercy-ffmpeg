@@ -217,7 +217,7 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --extra-cflags="-arch ${ARCH} -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}" \
     --extra-ldflags="-arch ${ARCH} -mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET}" \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
-    || (cat "/ffmpeg_build.log" ; cat "ffbuild/config.log" ; echo "❌ FFmpeg build failed" ; false) \
+    || (cat "/ffmpeg_build.log" ; echo "--- last 200 lines of ffbuild/config.log (compiler and linker errors) ---" ; tail -200 "/build/ffmpeg/ffbuild/config.log" 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
     && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \

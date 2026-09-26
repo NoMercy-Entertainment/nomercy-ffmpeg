@@ -97,6 +97,17 @@ jobs:
   # build, the image is local and `docker create` is instant; when it ran
   # elsewhere, `docker create` auto-pulls — `docker login` covers the
   # private-registry case.
+  #
+  # `Linux` and `X64` are part of the constraint on purpose, not decoration.
+  # The `beast-unit` label also sits on the Windows and macOS runners, so
+  # `[self-hosted, beast-unit]` alone lets this job land on either of them —
+  # where it cannot work: the steps below use `docker/login-action`,
+  # `set -euo pipefail` and `declare -A`, and Windows defaults to PowerShell
+  # while macOS ships bash 3.2 with no associative arrays. Reported as #74
+  # after the same scheduling hazard broke a deploy in another repository.
+  # `Linux` and `X64` are assigned automatically by the runner software, so
+  # they are a safer constraint here than this repo's own `linux-x86_64`
+  # label, which belongs to the separate `ffmpeg-verify` pool.
   export-artifacts:
     needs: [detect-changes, build-platforms]
     if: |
@@ -104,7 +115,7 @@ jobs:
       && needs.build-platforms.result == 'success'
       && (github.event_name != 'pull_request'
           || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, beast-unit]
+    runs-on: [self-hosted, Linux, X64, beast-unit]
     steps:
       - name: Log in to DockerHub
         uses: docker/login-action@v3

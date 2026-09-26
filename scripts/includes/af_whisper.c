@@ -21,8 +21,10 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>   // strstr, for reading whisper.cpp back-end report out of its log
 
 #include <whisper.h>
+#include "nm_ggml_cpu.h"
 
 #include "libavutil/avutil.h"
 #include "libavutil/opt.h"
@@ -46,6 +48,11 @@ typedef struct WhisperContext {
     bool translate;
     bool use_gpu;
     int gpu_device;
+    /* What we actually handed whisper.cpp: use_gpu AND'ed with our own
+     * judgement of whether a GPU is usable at all. The log line and the
+     * lavfi.whisper.backend metadata report this, never the request - a run
+     * that asked for a GPU and quietly got the CPU must not claim otherwise. */
+    int gpu_active;
     char *vad_model_path;
     float vad_threshold;
     int64_t vad_min_speech_duration;
@@ -76,10 +83,46 @@ typedef struct WhisperContext {
     float language_confidence;
 } WhisperContext;
 
+// Whether whisper.cpp said it did not get a GPU. A FILE-STATIC flag, not a
+// field of the filter context, and that is the whole point.
+//
+// whisper_log_set() stores ONE global callback and one user pointer, so with
+// two whisper filters in a graph the last to initialise owns it - and a write
+// through `ctx->priv` from this callback would then land in the other
+// instance's state, telling a filter it had lost a GPU because its neighbour
+// did. af_stemsplit.c's uninit already carries the hard-won version of this
+// lesson (it restores ggml's default sink precisely so a stale ctx pointer
+// cannot be written through); this is the same hazard reached through
+// whisper_log_set instead of ggml_log_set.
+//
+// A process-wide flag cannot be attributed to the wrong instance because it is
+// not attributed to any instance: init() clears it immediately before its own
+// whisper_init_from_file_with_params() and reads it immediately after, so the
+// window belongs to that call. The worst a concurrent init can do is make us
+// report "cpu" for a run that did get a GPU - a conservative misreport, not a
+// write into another filter's memory.
+static int nm_whisper_saw_no_gpu;
+
+// Which context currently owns the global log callback. Compared on teardown so
+// that a filter being destroyed only resets the sink if it is still the owner:
+// otherwise tearing down the FIRST of two whisper filters would unregister the
+// SECOND one's callback, and that survivor's ggml messages would go straight to
+// stderr, around FFmpeg's -loglevel. Read and written only from filter init and
+// uninit, which FFmpeg runs on one thread per graph.
+static const AVFilterContext *nm_whisper_log_owner;
+
 static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
 {
     AVFilterContext *ctx = user_data;
     int av_log_level = AV_LOG_DEBUG;
+
+    // whisper.cpp's own account of which backend it took. See the snapshot in
+    // init() for why this is read out of a log line rather than an API, and
+    // why only the negative direction is acted on.
+    if (text && (strstr(text, "whisper_backend_init_gpu: no GPU found") ||
+                 strstr(text, "whisper_backend_init_gpu: failed to initialize")))
+        nm_whisper_saw_no_gpu = 1;
+
     switch (level) {
     case GGML_LOG_LEVEL_ERROR:
         av_log_level = AV_LOG_ERROR;
@@ -96,9 +139,41 @@ static int init(AVFilterContext *ctx)
     WhisperContext *wctx = ctx->priv;
 
     static AVOnce init_static_once = AV_ONCE_INIT;
+
+    // Ask FIRST, before ggml_backend_load_all() or anything else can reach
+    // ggml's backend registry. nm_ggml_gpu_usable()'s first call is what makes
+    // this process safe to enumerate Vulkan in, and on a Linux box with Mesa
+    // installed the loader segfaults inside its own driver probe - i.e. inside
+    // the registry's constructor, which ggml_backend_load_all() triggers.
+    //
+    // On its OWN LINE, not as the right-hand side of `use_gpu && ...`. That is
+    // what this was, and C short-circuits: with use_gpu=0 the guard never ran
+    // and the very next line killed the process. Reproduced at exit 139 - on
+    // the one option a user reaches for when a GPU is causing trouble.
+    const int gpu_usable = nm_ggml_gpu_usable();
+
+    wctx->gpu_active = wctx->use_gpu && gpu_usable;
+
+    // An index past the last GPU is not an error: whisper.cpp counts GPU/IGPU
+    // devices the same way and simply falls back to the CPU. Catching it here
+    // means the log and the metadata say "cpu" instead of naming a device that
+    // is not the one anything ran on.
+    if (wctx->gpu_active && wctx->gpu_device >= nm_ggml_gpu_count()) {
+        av_log(ctx, AV_LOG_WARNING,
+               "whisper: gpu_device=%d but this machine has %d GPU device(s); "
+               "running on the CPU.\n", wctx->gpu_device, nm_ggml_gpu_count());
+        wctx->gpu_active = 0;
+    }
+
     ff_thread_once(&init_static_once, ggml_backend_load_all);
 
+    // Only ever non-NULL when the guard had to do something a user would want
+    // to know about, such as disabling a driver.
+    if (nm_ggml_backend_notice())
+        av_log(ctx, AV_LOG_INFO, "whisper: %s.\n", nm_ggml_backend_notice());
+
     whisper_log_set(cb_log, ctx);
+    nm_whisper_log_owner = ctx;
 
     // Init whisper context
     if (!wctx->model_path) {
@@ -107,14 +182,53 @@ static int init(AVFilterContext *ctx)
     }
 
     struct whisper_context_params params = whisper_context_default_params();
-    params.use_gpu = wctx->use_gpu;
+    // whisper.cpp picks its own backend from this flag - it is never handed
+    // one - so the decision has to be made here. nm_ggml_gpu_usable() refuses
+    // software rasterisers, which whisper.cpp would otherwise happily select
+    // (whisper_backend_init_gpu() takes the Nth GPU/IGPU device with no check
+    // of its own) and which crash inside a static binary.
+    params.use_gpu = wctx->gpu_active;
     params.gpu_device = wctx->gpu_device;
 
+    // Cleared here, read immediately after the call below: that pair is what
+    // makes the process-wide flag above safe to attribute to this filter.
+    nm_whisper_saw_no_gpu = 0;
     wctx->ctx_wsp = whisper_init_from_file_with_params(wctx->model_path, params);
     if (wctx->ctx_wsp == NULL) {
         av_log(ctx, AV_LOG_ERROR, "Failed to initialize whisper context from model: %s\n", wctx->model_path);
         return AVERROR(EIO);
     }
+
+    // What whisper.cpp ACTUALLY got, which is not always what it was asked
+    // for: whisper_backend_init_gpu() calls ggml_backend_dev_init() itself and
+    // simply returns nullptr on failure, after which the whole context runs on
+    // the CPU without telling its caller. There is no public accessor for the
+    // chosen backend in whisper.h (checked, v1.9.1), so the only signal is the
+    // log line it emits on that path, which cb_log above has already seen by
+    // now - whisper_init_from_file_with_params() has returned.
+    //
+    // Deliberately one-directional: an observed failure clears the flag, and
+    // the absence of any message leaves it alone. A string that upstream
+    // renames therefore costs us a downgrade we failed to notice, never a
+    // downgrade we invented. Snapshotted HERE, before the VAD context below
+    // initialises, because whisper forces use_gpu=false for VAD and would emit
+    // the same "no GPU found" line for a run that has nothing to do with this.
+    if (wctx->gpu_active && nm_whisper_saw_no_gpu) {
+        av_log(ctx, AV_LOG_WARNING,
+               "whisper: whisper.cpp did not take the GPU after all; running on the CPU.\n");
+        wctx->gpu_active = 0;
+    }
+
+    // ggml_backend_cpu_init() inside whisper.cpp resolves to the
+    // instruction-set variant ggml_cpu_dispatch.c selected for this
+    // machine; report it once so the media server can tell what actually
+    // ran without scraping logs.
+    av_log(ctx, AV_LOG_INFO, "whisper: ggml cpu variant '%s'.\n",
+           nm_ggml_cpu_variant_name());
+    av_log(ctx, AV_LOG_INFO, "whisper: ggml backend '%s' (%s).\n",
+           wctx->gpu_active ? nm_ggml_backend_name(wctx->gpu_device) : "cpu",
+           wctx->gpu_active ? nm_ggml_backend_device(wctx->gpu_device)
+                            : nm_ggml_cpu_variant_name());
 
     // Init buffer
     wctx->audio_buffer_queue_size = av_rescale(wctx->queue, WHISPER_SAMPLE_RATE, AV_TIME_BASE);
@@ -199,6 +313,29 @@ static void uninit(AVFilterContext *ctx)
 
     if (wctx->avio_context)
         avio_closep(&wctx->avio_context);
+
+    // whisper_log_set() is process-global, not per-context: init() registered
+    // cb_log with THIS ctx as its user_data. Leaving that registration in place
+    // means any whisper call anywhere in the process after this AVFilterContext
+    // is freed - including from another whisper or stemsplit instance still
+    // running in the same filtergraph, which this media server routinely does -
+    // invokes cb_log with a dangling AVFilterContext* and writes through it via
+    // av_log(): a use-after-free. af_stemsplit.c's uninit does exactly this for
+    // ggml_log_set and says why at length; this is the same hazard, and this
+    // filter was missing the same guard. Restore whisper's default sink: if
+    // another instance is still live its messages fall back to whisper's own
+    // logging rather than being routed through freed memory, and degraded
+    // logging beats a crash. Do not remove this.
+    //
+    // Only when we are still the owner, though: with two whisper filters in a
+    // graph the second one's init took the registration over, and resetting it
+    // from the first one's teardown would push that live filter's messages to
+    // stderr, around -loglevel, for no benefit. The dangling pointer we are
+    // avoiding is only ours to avoid while the callback still points at us.
+    if (nm_whisper_log_owner == ctx) {
+        whisper_log_set(NULL, NULL);
+        nm_whisper_log_owner = NULL;
+    }
 }
 
 // Resolve the spoken language once, on the first transcription window that
@@ -359,6 +496,13 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
         av_dict_set(metadata, "lavfi.whisper.text", segments_text, 0);
         char *duration_text = av_asprintf("%f", duration);
         av_dict_set(metadata, "lavfi.whisper.duration", duration_text, AV_DICT_DONT_STRDUP_VAL);
+        av_dict_set(metadata, "lavfi.whisper.cpu_variant",
+                    nm_ggml_cpu_variant_name(), 0);
+        // Deliberately outside the language branch below, and keyed off
+        // gpu_active rather than use_gpu: this reports what ran, not what was
+        // asked for.
+        av_dict_set(metadata, "lavfi.whisper.backend",
+                    wctx->gpu_active ? nm_ggml_backend_name(wctx->gpu_device) : "cpu", 0);
         if (wctx->detected_language) {
             av_dict_set(metadata, "lavfi.whisper.language", wctx->detected_language, 0);
             char *confidence_text = av_asprintf("%f", wctx->language_confidence);

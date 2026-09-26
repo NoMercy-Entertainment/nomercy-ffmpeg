@@ -179,6 +179,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 | **`keydetect`** | Audio filter | Musical key and chord detection |
 | **`beatdetect`** | Audio filter | Tempo, beat grid and confidence as `lavfi.beatdetect.*` frame metadata; octave decided from the onsets, not from a preferred range |
 | **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems (Spleeter 2stems on ggml) |
+| **`trailingsilence`** | Audio filter | Reports where a stream's audible content ends as `lavfi.trailingsilence.*` frame metadata (and an optional JSON report); never cuts anything itself |
 | **OCR subtitle encoder** | Codec | Converts bitmap subtitles (DVD/Blu-ray) to WebVTT text using Tesseract OCR |
 | **Sprite-sheet muxer** | Muxer | Generates thumbnail sprite sheets with a WebVTT timeline for player scrubbing |
 | **Chapter VTT muxer** | Muxer | Exports chapter metadata as WebVTT |
@@ -220,7 +221,7 @@ such as FLAC's 65,535 samples. No rechunking filter is needed.
 | `bleed` | float | `0` | Smallest share of the mixture every stem keeps in any bin. Fills the deepest spectral holes; it is **not** a cure for ducking |
 | `smooth` | int | `0` | Smooth the masks over this many frequency bins either side |
 | `overlap` | duration | `0` | Crossfade between segments (e.g. `5`, `1.5`, `00:00:05.000`); `0` matches reference Spleeter's un-overlapped chunking |
-| `threads` | int | `0` | ggml CPU threads; `0` uses the filter's default |
+| `threads` | int | `0` | ggml CPU threads. `0` uses one thread per physical core the process may run on, capped by `-filter_threads` when that is set below 16. Hyperthreads and oversubscription slow it down: 8 threads on an 8-core/16-thread CPU is 24% faster than 16 |
 
 **Why `extend` is the default.** `passthrough` was, until it was measured. It
 loses nothing, but it hands *all* the unmodelled energy to one stem
@@ -286,6 +287,285 @@ cite:
 As with any source-separation tool, **you must hold the rights to any
 copyrighted material you process** — this carries forward Spleeter's own
 upstream advisory.
+
+#### ⚙️ **CPU instruction sets — `whisper` and `stemsplit`**
+
+Both filters run on **ggml**, and ggml is compiled once per instruction-set
+level. Cross-compiling a single build for the oldest supported CPU would cost
+everyone with a newer one 8-14x of speed on `whisper` and 2.4x on `stemsplit`
+for nothing, so most platform binaries carry several instruction-set levels
+of the ggml CPU backend and pick one automatically the first time either
+filter runs — an old machine keeps working, a modern one runs several times
+faster, and nobody has to choose a build.
+
+The choice is logged once at `-v info`:
+
+```
+stemsplit: ggml cpu variant 'haswell'.
+```
+
+and published as frame metadata, so a media server can record what actually
+ran without scraping logs: `lavfi.stemsplit.cpu_variant`,
+`lavfi.whisper.cpu_variant`.
+
+`NOMERCY_GGML_CPU=<name>` forces a specific level — useful for support cases
+and for A/B timing on one machine. A name that's unknown, or one the CPU
+doesn't actually support, is silently ignored and the automatic choice is
+kept; it can never stop ffmpeg from starting.
+
+| platform | levels carried | selection |
+|---|---|---|
+| linux / windows / freebsd, x86_64 | `x64`, `sse42`, `ivybridge` (AVX+F16C), `haswell` (AVX2+FMA) | automatic |
+| linux-aarch64 | `armv8.0`, `armv8.2+dotprod+fp16`, `armv8.2+dotprod+fp16+i8mm` | automatic |
+| windows-aarch64 | `armv8.0`, `armv8.2+dotprod+fp16` | automatic |
+| darwin-x86_64 | `ivybridge` (AVX+F16C) only | fixed at build time |
+| darwin-arm64 | `armv8.4+dotprod+fp16` only | fixed at build time |
+
+windows-aarch64 never carries the `i8mm` level: Windows has no feature flag
+for it, and the only fallback — inferring it from the SVE flag — is wrong on
+Qualcomm's Oryon cores. Rather than guess and risk crashing on an
+unsupported instruction, that platform stops one level short.
+
+The two darwin builds don't dispatch at all — `NOMERCY_GGML_CPU` has nothing
+to switch on either of them. Apple controls exactly which machines run
+macOS 10.15+, so the hardware floor is known precisely instead of guessed:
+darwin-x86_64 is compiled once for Ivy Bridge (the oldest Mac still able to
+run Catalina), darwin-arm64 once for the instructions every Apple Silicon
+chip has.
+
+**Measured — `stemsplit`.** 30 s of the same audio, automatic selection
+against the same binary forced back to its baseline level:
+
+| platform | automatic | forced baseline | speedup |
+|---|---|---|---|
+| linux-x86_64 | 1927 ms | 5723 ms | 2.97x |
+| windows-x86_64 | 2.047 s | 5.877 s | 2.87x |
+
+No ARM hardware has been measured yet.
+
+**Measured — `whisper`.** Same model, same audio, 8 threads, total run time
+per instruction level:
+
+| variant | vs `x64` baseline |
+|---|---|
+| `x64` | — |
+| `sse42` | 1.3x |
+| `ivybridge` (AVX + F16C) | 8x |
+| `haswell` (AVX2 + FMA) | 9x |
+
+The big jump is at F16C, not AVX2: whisper's models are stored as 16-bit
+floats, and without F16C every weight has to be converted to 32-bit in
+scalar code before it can be used at all. `sse42` alone buys almost nothing
+— which is why a "safe", conservative fixed instruction level would not have
+been a good answer for whisper either.
+
+**Output is no longer bit-identical across machines.** Enabling FMA changes
+how additions round. On a 30 s `stemsplit` run, 123 of 2,646,000 output
+samples differ between instruction levels — at most 1 LSB at 16-bit, about
+103 dB below the signal, inaudible. But it means two machines with different
+CPUs no longer produce byte-for-byte identical output for the same input.
+If you hash `stemsplit` or `whisper` output for caching or deduplication,
+hash with a tolerance, or don't rely on the hash matching across machines —
+a plain `md5` comparison across CPUs can fail even though the audio itself
+is the same.
+
+#### 🎮 **GPU acceleration — `whisper` and `stemsplit`**
+
+The same two filters can also run on a **GPU, through Vulkan**, compiled into
+the same static binary. There is nothing to install: no driver package, no
+SDK, no extra DLL or `.so`. If the machine has a working Vulkan driver the
+binary finds it at runtime; if it does not, both filters run on the CPU
+exactly as they did before, and nothing about the command line changes.
+
+**Should you turn it on?** Short answer:
+
+| filter | default | why |
+|---|---|---|
+| `whisper` | **GPU on** (`use_gpu=1`) | Faster, and the transcript is unchanged — see below. |
+| `stemsplit` | **CPU** (`use_gpu=0`) | Opt in with `use_gpu=1`. It is faster, but the audio is not the same. |
+
+**Measured — `stemsplit` on a GPU.** 30 s of audio, twenty runs each on one
+RTX 3070, whole-process wall time including model load, so the filter itself
+is faster than this: **830 ms** mean with `use_gpu=1` against **2198 ms** on
+the CPU (2.6x). No other GPU has been measured.
+
+**`whisper` is on by default because the output does not change.** GPU and CPU
+transcripts were compared on an RTX 3070 across three inputs — clean speech,
+90 s of speech, and 60 s of music where the model is at its least certain and
+hallucinates. All three are **byte-identical**, same segments in the same
+order. So the GPU is a speed change and nothing else.
+
+**`stemsplit` is off by default because the output does change.** ggml's
+Vulkan backend accumulates convolutions in 16-bit float on any GPU with
+cooperative-matrix support. Against the CPU reference that is **-58.8 dB** —
+well below the threshold of audibility, but not bit-identical, and far larger
+than the ~-103 dB that separates the CPU instruction levels above. The default
+is off because it would silently change the output every existing `stemsplit`
+command line produces, not because you would hear it. `GGML_VK_DISABLE_COOPMAT=1` takes it to -98.7 dB at
+the same speed, but that variable is process-global and costs `whisper` 3.5x,
+so the two filters cannot both have what they want in one process. Until that
+is settled, `stemsplit` will not move anyone's audio without being asked:
+
+```bash
+ffmpeg -i in.mp3 -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=vocals:use_gpu=1" out.wav
+```
+
+**Options.** `use_gpu=0|1` on both filters, and `gpu_device=<n>` to pick a GPU
+on a machine with more than one. An out-of-range index does not silently use
+the wrong GPU — it says so and falls back to the CPU:
+
+```
+stemsplit: gpu_device=99 but this machine has 1 GPU device(s); running on the CPU.
+```
+
+What actually ran is logged once at `-v info` and published as frame metadata,
+so a media server can record it without scraping logs —
+`lavfi.whisper.backend`, `lavfi.stemsplit.backend`, alongside the
+`cpu_variant` keys above:
+
+```
+whisper: ggml backend 'vulkan' (NVIDIA GeForce RTX 3070).
+```
+
+**If you have no GPU, nothing changes.** That is the rule this feature was
+built under, and most of the work went into it rather than into speed. A
+machine with no driver, a machine with a driver the binary cannot use, and a
+machine with only a software rasteriser all fall back to the CPU and carry on.
+Software rasterisers (llvmpipe, lavapipe) are deliberately **refused** even
+when they work: they are slower than the CPU backend they would replace.
+
+On Linux and other non-Windows, non-Apple platforms, some Vulkan drivers
+cannot be loaded into a statically linked binary at all and take the process
+down when enumerated. Rather than let that happen, the binary tests the
+drivers in a throwaway child process before touching them, and switches Vulkan
+off for itself if they are unsafe. It tells you which of three things it
+found, and the three are deliberately worded differently:
+
+```
+… drivers crash a statically linked binary; vulkan disabled for this process
+… could not verify … as a precaution. This is not a report that anything is broken …
+… the only vulkan device here is a software rasteriser; running on the CPU …
+```
+
+The middle one is not a fault report — it means the check ran out of time, not
+that your machine is broken.
+
+**Escape hatches**, if the check ever gets it wrong on your machine:
+
+| variable | effect |
+|---|---|
+| `NOMERCY_VK_ICD_GUARD=0` | Skip the driver check entirely and use Vulkan as-is. |
+| `NOMERCY_GGML_GPU=0` | Turn the GPU off for both filters, whatever they are asked for. |
+
+`NOMERCY_VK_GUARD_MS=<ms>` raises the check's time budget, which is the right
+knob if you see the "could not verify" message on a machine you know is fine.
+`NOMERCY_GGML_GPU=0` works on **every** platform — it is read by the backend
+selector, not by the driver check. `NOMERCY_VK_ICD_GUARD` and
+`NOMERCY_VK_GUARD_MS` belong to the driver check, so they do nothing on Windows
+and macOS, which have none.
+
+**Platforms.**
+
+| platform | Vulkan | notes |
+|---|---|---|
+| linux-x86_64 | ✅ | Verified **without** a GPU: no-driver, hostile-driver and software-rasteriser machines all fall back to the CPU cleanly. GPU *selection* has only been measured on Windows — no Linux box with a real GPU has been tested. |
+| windows-x86_64 | ✅ | Verified with a GPU, on an RTX 3070. The only row where GPU selection itself was measured. |
+| linux-aarch64 | ✅ | Built and verified under emulation; no ARM GPU has been measured. |
+| windows-aarch64 | ✅ | Built and statically verified; not yet executed on Windows-on-ARM hardware. |
+| freebsd-x86_64 | ❌ | These binaries link statically, and FreeBSD's static `dlopen` always fails, so a loader could never be opened. |
+| darwin-x86_64 / darwin-arm64 | ❌ | Metal, not Vulkan, is the right backend on macOS; a later phase. |
+
+The GPU path adds no runtime dependency on any of them: the binaries stay
+fully static, and there is no Vulkan loader in the import table or the dynamic
+section anywhere.
+
+#### 🔇 **`trailingsilence` — Trailing-Silence Detection**
+
+Reports where a stream's audible content ends, so a media server can store
+the point and a player can stop there. **It never cuts anything.** Trimming
+is the caller's job, with a second, ordinary `ffmpeg -to` pass:
+
+```bash
+# Step 1: measure. destination writes the JSON report; the metadata is also
+# on the final frame either way, so a bare -af trailingsilence works too.
+ffmpeg -i in.mka -af trailingsilence=destination=report.json -f null -
+
+# Step 2: cut, using the value from step 1. Often needs no re-encode.
+ffmpeg -i in.mka -to <recommended_end> -c copy out.mka
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `noise` (`n`) | double | `-50dB` | Silence threshold. Accepts a dB value (e.g. `-50dB`) or a linear amplitude (e.g. `0.00316227766`, the same threshold) |
+| `duration` (`d`) | duration | `2` | Minimum length a trailing quiet run must reach before it counts as the silence |
+| `min_stream_duration` | duration | `10` | Streams shorter than this are skipped entirely — nothing is reported as detected |
+| `safety_margin` | duration | `0.25` | How far past the measured silence start the recommended cut point sits |
+| `destination` | string | *(empty)* | Path to write the JSON report; empty disables the report (the frame metadata is still emitted) |
+| `format` | string | `json` | Report format. Only `json` is currently supported |
+
+**How the report is written.** Four properties a server can rely on:
+
+- **A bad report configuration fails before any work.** `destination` and
+  `format` are checked while the filter graph is built, before a single frame
+  is decoded, so an unwritable path or an unsupported format is an error line
+  and a non-zero exit -- never a successful run with no file at the other end.
+  Nothing is transcoded and then thrown away; fix the path and re-run.
+- **`destination` never exists half-written.** The content is written to
+  `<destination>.part` and renamed into place at end of stream, so the file
+  appears exactly once, complete. A consumer polling the path may treat
+  "present" as "finished".
+- **An unfinished probe cannot destroy a finished one.** A run that never
+  reaches end of stream -- killed, or a graph torn down early by `-frames:a`
+  or an output limit -- publishes nothing and leaves any previous report
+  exactly as it was. A stray `<destination>.part` is the signature of such a
+  run; it is never mistaken for the report.
+- **`destination` must be a plain filesystem path.** A protocol URL will open
+  but cannot be renamed into place; that is reported, and the completed report
+  is left at the temporary path rather than lost.
+
+**Metadata keys** — all six are attached to the final frame on **every run**,
+including when nothing is found, as `lavfi.trailingsilence.<key>`:
+
+| Key | What it is |
+|---|---|
+| `detected` | `1` if a qualifying trailing silence was found, else `0` |
+| `silence_start` | **Measured.** Seconds from stream start to where the trailing quiet run begins |
+| `silence_duration` | **Measured.** Length of that quiet run |
+| `stream_duration` | **Measured.** Total stream duration |
+| `recommended_end` | **Advice.** `min(silence_start + safety_margin, stream_duration)` |
+| `safety_margin` | The margin actually applied (echoes the option, for a caller that only sees the report) |
+
+**Measurement versus advice is the distinction that matters here.**
+`silence_start` is where the signal crossed below `noise` and stayed there —
+a measurement. `recommended_end` is advice: the measurement plus a small
+safety margin, because a very quiet outro (a fading tail, room tone, a soft
+sustained note) can sit below the threshold while still being audible.
+Reporting both lets a server pick the exact measured point, the padded
+recommendation, or its own policy in between — and always know which of the
+two numbers it is looking at.
+
+**Safe to consume blind.** When `detected=0` — the stream was too short,
+entirely silent, only had silence in the middle, or simply had no
+qualifying trailing run — every key is still emitted, and `recommended_end`
+is set to `stream_duration`. A caller can read `recommended_end` and pass it
+straight to `-to` without first checking `detected`; on a stream with
+nothing to trim, that command trims nothing.
+
+**The one exception.** If the filter saw no audio at all -- a seek past the end
+of the stream, an empty or undecodable track -- the report is still written, so
+a caller who asked for one is never left unable to tell "scanned, saw nothing"
+from "never ran". But every field in it is `0`, `recommended_end` included:
+there was no audio to measure, so there is no honest end point to recommend.
+`stream_duration == 0` identifies this case, and it is the one case a caller
+consuming `recommended_end` blindly must check for.
+
+**Skipped by design, not by bug:**
+- Streams shorter than `min_stream_duration` (default 10 s).
+- Entirely silent streams — there is no audible content to preserve, so no
+  honest cut point to recommend.
+- Silence that sits in the middle of the stream but does not reach the end.
+- Live input: the report is produced at end-of-stream, which live input
+  never reaches.
 
 #### 🤖 **AI & Analysis**
 - **OpenAI Whisper Integration**: Built-in speech-to-text via whisper.cpp (`--enable-whisper`)

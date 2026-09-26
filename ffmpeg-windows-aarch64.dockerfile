@@ -242,9 +242,12 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --extra-cflags="-static -static-libgcc -static-libstdc++" \
     --extra-ldflags="-static -static-libgcc -static-libstdc++" \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
-    || (cat "/ffmpeg_build.log" ; echo "--- ffbuild/config.log (tail) ---" ; tail -80 ffbuild/config.log 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
+    || (cat "/ffmpeg_build.log" ; echo "--- last 200 lines of ffbuild/config.log (compiler and linker errors) ---" ; tail -200 "/build/ffmpeg/ffbuild/config.log" 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
-    && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; exit 1) && make install >/dev/null 2>&1 \
+    && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; echo "❌ FFmpeg build failed" ; exit 1) \
+    && echo "🔎 Verifying ggml CPU variants survived the link" \
+    && bash /scripts/includes/verify_ggml_cpu_link.sh \
+    && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \
     && echo "------------------------------------------------------" \
     && echo "✅ FFmpeg was built successfully" \
