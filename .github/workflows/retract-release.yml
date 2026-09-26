@@ -65,7 +65,17 @@ jobs:
       - name: Resolve package and verify both versions exist
         id: pkg
         run: |
-          NAME=$(node -p "require('./package.json').name")
+          # The package lives in clients/npm, not the repository root. Reading
+          # ./package.json here failed with "Cannot find module" the first time
+          # this workflow was ever run for real (2026-09-26, retracting 1.0.43),
+          # after the token check had already passed -- so the failure looked
+          # like a missing secret and was not. Keep the path explicit.
+          MANIFEST=clients/npm/package.json
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::error::$MANIFEST not found — has the npm client moved? This workflow reads the package name from there."
+            exit 1
+          fi
+          NAME=$(node -p "require('./${MANIFEST}').name")
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           for v in "$VERSION" "$ROLLBACK_TO"; do
             if ! npm view "${NAME}@${v}" version >/dev/null 2>&1; then
