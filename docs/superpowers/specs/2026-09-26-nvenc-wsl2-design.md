@@ -148,14 +148,33 @@ measurement, not a copy of this.
 
 Windows, macOS and FreeBSD are untouched.
 
+## The gate: nothing that works today may stop working
+
+The owner set three conditions on 2026-09-26, and the first and third are a
+**gate, not a wish**:
+
+1. no feature may go missing or break because of this change;
+2. no second artifact;
+3. nothing may be switched off to make it work.
+
+So "we disabled X to get the floor down" is not an acceptable outcome, and
+neither is "X builds but nobody ran it". If any feature below cannot be made to
+work without disabling something, **the implementation stops there and comes
+back to the owner** rather than shipping a quieter ffmpeg.
+
+`-no-pie` is worth noting as the opposite of a sacrifice: it is in the design
+*because* libdavs2's hand-written asm cannot go into a PIE, so it keeps a
+component working rather than dropping one.
+
 ## Testing
 
 The research verified startup, codec enumeration, and a full `h264_nvenc` encode
 that re-probes as real H.264 — from **one binary**, both inside WSL2 (Ubuntu
 24.04, RTX 3070) and in `debian:bookworm-slim`.
 
-The plan must additionally smoke-test the surfaces that were **not** exercised,
-each of which touches a shimmed symbol or a newly-static library:
+The plan must additionally exercise — actually run, not merely link — the
+surfaces that were **not** covered, each of which touches a shimmed symbol or a
+newly-static library. These are the gate above, made concrete:
 
 | surface | why it is at risk |
 |---|---|
