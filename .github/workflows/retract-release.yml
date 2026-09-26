@@ -57,6 +57,16 @@ jobs:
             echo "::error::NPM_TOKEN is not set. Publishing uses OIDC, which cannot deprecate or move a dist-tag — add NPM_TOKEN before this workflow can retract anything."
             exit 1
           fi
+          # A non-empty token is not a working token. On 2026-09-26 this step
+          # passed on an expired one and the run died three steps later with
+          # `npm error code E401`, after the dry run had reported everything
+          # green -- a dry run only echoes the npm commands, so it proves
+          # nothing about whether npm would accept them. Ask npm who we are.
+          if ! whoami_out=$(npm whoami 2>&1); then
+            echo "::error::NPM_TOKEN is set but npm rejected it (${whoami_out}). Rotate the token; nothing has been changed."
+            exit 1
+          fi
+          echo "npm authenticated as ${whoami_out}"
           if [ "$VERSION" = "$ROLLBACK_TO" ]; then
             echo "::error::rollback_to must differ from version"
             exit 1
