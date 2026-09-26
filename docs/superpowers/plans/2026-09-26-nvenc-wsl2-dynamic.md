@@ -19,7 +19,7 @@
 - The glibc floor must be **exactly `GLIBC_2.34`** — not lower, not higher. Higher loses the EL9 family and Amazon Linux 2023, which sit exactly on 2.34; lower is impossible on this toolchain (`__libc_start_main` from `crt1.o`, `pthread_*` from `libstdc++.a`).
 - `NEEDED` may contain only: `libc.so.6`, `libm.so.6`, `libmvec.so.1`, `libdl.so.2`, `libpthread.so.0`, `librt.so.1`, `ld-linux-x86-64.so.2`.
 - No x86 SIMD/asm may be disabled. `-no-pie` exists to *keep* libdavs2, not to drop anything.
-- linux-x86_64 only. Do not touch `ffmpeg-linux-aarch64.dockerfile` or any other platform.
+- linux-x86_64 only. Do not touch `ffmpeg-linux-aarch64.dockerfile` or any other platform — **with one deliberate exception, Task 2's omnidrive change**, which necessarily crosses that boundary. See the note in Task 2 for why it is safe.
 - Conventional Commits. **Never** add self-attribution, `Co-Authored-By` or "Generated with" lines — absolute rule of this repository's owner.
 
 ## Review Focus
@@ -182,9 +182,18 @@ git commit -m "feat(linux): compat object for the glibc symbols above the 2.34 f
 
 In a dynamic link the linker prefers a system `.so` over a static archive whenever both are visible. Four appear; a fifth, `libmvec.so.1`, is part of glibc and stays.
 
+**This task crosses the linux-x86_64 boundary and that is deliberate.** `scripts/56-omnidrive.sh` runs on every platform except darwin (it exits 255 there) — so linux x2, windows x2 and freebsd. Changing it changes all five.
+
+That is safe, and both halves of "safe" were checked rather than assumed:
+
+- **Nothing links the `.so` today.** Every platform still passes `-static`, and a static link only considers `.a` files. The stray `.so` has been sitting in the prefix unused; it becomes reachable only where the link turns dynamic, which is this plan's one platform.
+- **Nothing ships it.** `scripts/init/package.sh` copies only the three binaries and any `.jar` files into the artifact. No `.so` has ever left the build.
+
+So removing it cannot change another platform's output. It also removes a latent trap: the moment any other platform goes dynamic, that `.so` would silently reappear as a runtime dependency. The seven-platform CI run is what confirms the other four still build.
+
 - [ ] **Step 1: Stop installing `libomnidrive.so`**
 
-`scripts/56-omnidrive.sh` installs both `libomnidrive.a` and `libomnidrive.so` into `${PREFIX}/lib`; `-lomnidrive` picks the `.so`. Stop installing the `.so`, or delete it after install. Leave the `.a`.
+`scripts/56-omnidrive.sh` installs both `libomnidrive.a` and `libomnidrive.so` into `${PREFIX}/lib` via `cmake --install`; `-lomnidrive` picks the `.so` in a dynamic link. Stop installing the `.so`, or delete it after install. Leave the `.a`.
 
 - [ ] **Step 2: Stage `libgomp.a`, `libXau.a`, `libXdmcp.a` into `${PREFIX}/lib`**
 
