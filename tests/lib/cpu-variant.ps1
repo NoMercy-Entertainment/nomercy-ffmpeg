@@ -410,3 +410,61 @@ function Test-VulkanStartup {
     }
     return @{ Ok = $true; Output = ($notes -join "`n") }
 }
+
+# --------------------------------------------------------------------------
+# ggml Metal GPU backend (2026-09-27-metal-backend plan, Task 3)
+# --------------------------------------------------------------------------
+# Mirrors the Metal half of tests/lib/cpu-variant.sh exactly -- see that file
+# for the full rationale and the measured counts behind each marker. No
+# platform this file's caller ever runs on (windows-x86_64, windows-aarch64)
+# is darwin-arm64, so Test-MetalPlatformHasBackend is always false in
+# practice here; it is still written out in full, the same way
+# Test-VulkanPlatformHasGuard above is, because the value of a predicate like
+# this is asserting an ABSENCE correctly, not just being true somewhere.
+
+# Kept separate from Test-VulkanPlatformHasBackend rather than adding a
+# darwin-arm64 arm to it: that function answers "does this platform carry
+# ggml's VULKAN backend", and darwin-arm64's answer stays no. Metal is
+# darwin-arm64 only -- darwin-x86_64 stays off (10.13 deployment floor vs
+# ggml's unguarded 10.15 APIs, and Intel/AMD GPUs report neither Apple7 nor
+# Metal3, so they'd take ggml's slow paths on the oldest Macs supported).
+function Test-MetalPlatformHasBackend {
+    param([string]$Platform)
+    return ($Platform -match 'darwin-arm64')
+}
+
+# True if ggml's Metal backend is really linked in. Two markers, both
+# required: "kernel void kernel_mul_mm" is MSL shader source text that exists
+# only inside the embedded shader blob (GGML_METAL_EMBED_LIBRARY=ON), and
+# "using embedded metal library" is the log line ggml prints only on that
+# same embed path. Measured on Task 1's real darwin-arm64 build: 4 and 1
+# occurrences in libggml-metal.a, 0 and 0 across every other library the same
+# build produces (libggml.a, libggml-base.a, libggml-blas.a, libggml-cpu.a,
+# libwhisper.a, libparakeet.a).
+function Test-MetalBackendPresent {
+    param([string]$Bin)
+    foreach ($needle in @('kernel void kernel_mul_mm', 'using embedded metal library')) {
+        if (-not (Test-BinaryContainsString -Bin $Bin -Needle $needle)) { return $false }
+    }
+    return $true
+}
+
+# The metadata value is `mtl`, NOT `metal` -- GGML_METAL_NAME is the literal
+# string "MTL", and nm_backend_discover() lower-cases whatever
+# ggml_backend_reg_name() returns generically, for every backend, with no
+# Metal-specific spelling anywhere in this project's own code.
+#
+# DO NOT test this with a case-insensitive or lowercase "metal" match.
+# Measured on the same Metal-less concatenation used above: the substring
+# "metal" appears TWICE even with no Metal backend linked at all --
+# ggml-backend-reg.cpp compiles a table listing every backend name it knows
+# how to try ("...cann cuda hip metal rpc sycl vulkan...") on every platform,
+# plus an extern reference to _ggml_backend_metal_reg that survives even when
+# the function itself never links. That match would report PASS on a CPU
+# fallback, which is exactly the failure this exists to catch. "MTL"
+# (case-sensitive) does not appear anywhere in the same Metal-less build, and
+# appears twice in the real Metal one.
+function Test-MetalMetadataIsMtl {
+    param([string]$Bin)
+    return Test-BinaryContainsString -Bin $Bin -Needle 'MTL'
+}
