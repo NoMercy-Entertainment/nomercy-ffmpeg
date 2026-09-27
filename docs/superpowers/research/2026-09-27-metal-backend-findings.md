@@ -435,17 +435,27 @@ But "once per process" lands *earlier than `use_gpu` is consulted*:
    compile, including with `use_gpu=0`** — and the owner runs `stemsplit` with
    `use_gpu=0` today.
 2. `NOMERCY_GGML_GPU=0` is checked *inside* `nm_backend_discover()`, after
-   `nm_vk_make_safe()` — but the registry is constructed by the scan that follows, so the
-   off switch does not buy the time back either.
+   `nm_vk_make_safe()`. **Correction, 2026-09-28: the claim that followed here was
+   wrong.** It said the off switch "does not buy the time back either", but the
+   `getenv` block `return`s *before* `nm_vk_scan()`, so our own code does not construct
+   the registry on that path at all. For **stemsplit** the switch does buy the time back,
+   because `ggml_backend_cpu_init()` never reaches `get_reg()` either (verified in
+   `.superpowers/sdd/2026-09-27-metal-backend/registry-construction-findings.md`). For
+   **whisper** it does not, but for a different reason than this paragraph gave:
+   `whisper_backend_init()` walks `ggml_backend_dev_count()` itself at `whisper.cpp:1339`,
+   ungated by `params.use_gpu`.
 3. On darwin, `nm_vk_scan(&n, !verified)` also runs with `verified = 0` (the
    `NM_VK_ICD_GUARD` block that sets it to 1 is compiled out under `__APPLE__`), so
    discovery additionally calls `ggml_backend_dev_init()` to prove device 0 opens. Cheap
    next to the compile — the library is already cached by then — but it is a second Metal
    object graph per process.
 
-If "macOS users who do not want the GPU must not pay for it" is a requirement, the only
-levers that exist without patching ggml are *don't link Metal at all* or *accept the
-cost*. Phase 3 should say which, and the number that decides it is one subtraction on the
+If "macOS users who do not want the GPU must not pay for it" is a requirement, the
+levers that exist without patching ggml are *don't link Metal at all*, *accept the cost*,
+or — found later, and not known when this was written — ggml's own
+`GGML_METAL_DEVICES=0`, which is process-wide and latches on first use
+(`ggml-metal.cpp:914-916`). **The owner's decision on 2026-09-28 was to accept the cost**
+and to measure it before considering anything else. Phase 3 should say which, and the number that decides it is one subtraction on the
 owner's Mac: `ffmpeg -version` (never builds a filtergraph, so never touches the registry)
 against a one-second `stemsplit` run with `use_gpu=0`.
 

@@ -64,12 +64,34 @@ hostile third-party drivers, and no crash to prevent — the guard is compiled o
 for non-Windows, non-Apple targets. So on darwin the unconditional call buys
 nothing and costs seconds.
 
-**Decision: defer registry construction on darwin until `use_gpu` is known.**
-`use_gpu=0` and `NOMERCY_GGML_GPU=0` must both avoid the shader compilation
-entirely. The change is darwin-only and must not touch the Linux and Windows
-path, where the unconditional call is load-bearing. A comment must say why the
-two platforms differ, or someone will "harmonise" them and reintroduce the
-crash.
+**Decision, superseded 2026-09-28: build macOS with Metal and accept the
+compile.** This section originally decided to "defer registry construction on
+darwin until `use_gpu` is known", and required that `use_gpu=0` and
+`NOMERCY_GGML_GPU=0` both avoid the shader compilation entirely. That decision was
+withdrawn by the owner, for the plainest possible reason: **the cost it optimises
+away has never been measured.** Every statement about it in this document and in
+the research is reasoned, not timed. An optimisation for an unmeasured cost is not
+a requirement.
+
+It was also partly unachievable as written. Verified against the pinned sources
+and recorded in
+`.superpowers/sdd/2026-09-27-metal-backend/registry-construction-findings.md`:
+`ggml_backend_cpu_init()` does not construct the registry, so a CPU-only stemsplit
+run could avoid the compile — but `whisper_backend_init()` walks
+`ggml_backend_dev_count()` ungated by `params.use_gpu` (`whisper.cpp:1339`), so for
+the whisper filter no change of ours avoids it. The only lever that would is
+ggml's own process-wide `GGML_METAL_DEVICES=0`, which latches on first use and
+could take the GPU from a second filter in the same filtergraph.
+
+**What this means for the build: nothing.** Metal is on for darwin-arm64 either
+way. The one-off compile is accepted, documented in the README, and **timed** by
+the Task 4 verification script on Apple hardware. If that number turns out to
+matter, this decision gets revisited with the number in hand.
+
+The warning that produced the original decision still stands for anyone editing
+the other platforms: the unconditional call on Linux and Windows is a crash fix,
+it used to sit behind `use_gpu &&`, and short-circuiting the ICD guard away killed
+the process in `ggml_backend_load_all()`. Do not unify darwin with them.
 
 ## Scope: darwin-arm64 only
 
@@ -122,9 +144,14 @@ it is 767 KB" is a green light for the spec, not for a release:
 ## Testing
 
 Everything the Vulkan work asserted, adapted: the backend is linked, the filters
-report `mtl`, a machine without Metal falls back cleanly, and `use_gpu=0` forces
-CPU **and skips shader compilation** — that last one is the decision above, so it
-needs a test that can fail.
+report `mtl`, and a machine without Metal falls back cleanly. The assertions must
+be written against **`MTL`**, not `metal`: ggml compiles in a table of every
+backend name, so a case-insensitive search for `metal` matches twice even in a
+build with Metal off — measured, and it would have made the check useless.
+
+**No test asserts that `use_gpu=0` skips shader compilation**, because no such
+behaviour exists — see the withdrawn decision above. What replaces it is a
+measurement, not an assertion: Task 4 gate 2 times the compile on the owner's Mac.
 
 ## Out of scope
 

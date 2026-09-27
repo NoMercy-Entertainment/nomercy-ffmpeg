@@ -27,8 +27,8 @@ Five failure modes the spec implies that no happy path exercises. Each has its t
 
 1. **The residency `sed` silently matching nothing** after a whisper.cpp bump, so the build breaks in a way that looks like a compiler problem. → Task 1, by failing the build when the pattern is absent.
 2. **An empty or truncated embedded shader blob** shipping — the binary links, and Metal fails only on a user's machine. → Task 1, via the blob-size guard.
-3. **The darwin deferral leaking into Linux or Windows**, reinstating the crash that the unconditional call fixed. → Task 2, asserted per platform.
-4. **`use_gpu=0` still paying for shader compilation**, which is the entire point of Task 2 and would otherwise pass unnoticed because the result is merely *slow*, not wrong. → Task 2.
+3. ~~The darwin deferral leaking into Linux or Windows~~ — moot: Task 2 is dropped and no deferral exists. The Linux and Windows path is unchanged by this feature.
+4. ~~`use_gpu=0` still paying for shader compilation~~ — this is now accepted behaviour, documented in the README, and measured by Task 4 gate 2 rather than fixed.
 5. **Metal asserted by nothing.** `vulkan_platform_has_backend()` returns false for darwin (`tests/lib/cpu-variant.sh:226-231`), so today no check would notice Metal disappearing. → Task 3.
 
 ---
@@ -122,62 +122,64 @@ git commit -m "feat(darwin): build ggml's Metal backend for arm64 with the shade
 
 ---
 
-### Task 2: Do not pay for shaders nobody asked for
+### Task 2: DROPPED — an optimisation for a cost nobody has measured
 
-**Files:**
-- Modify: `scripts/includes/ggml_cpu_dispatch.c`
-- Possibly modify: `scripts/includes/af_whisper.c`
+**Status: not implemented, and deliberately so. Do not pick this up without a number.**
 
-**Interfaces:**
-- Consumes: Task 1's build.
-- Produces: on darwin, `use_gpu=0` and `NOMERCY_GGML_GPU=0` avoid registry construction entirely. Task 3 asserts it.
+This task asked for registry construction to be deferred on darwin so that a run
+which wants no GPU would not pay ggml's one-off Metal shader compilation. Three
+things were wrong with it.
 
-**This is the decision the spec exists to make, so read its rationale before changing anything.** ggml compiles its shaders when the backend registry is constructed. This codebase reaches that through `nm_ggml_gpu_usable()`, which `af_whisper.c:153` calls **unconditionally, on its own line, before `use_gpu` is read**. With Metal on, every macOS run pays first-use shader compilation — `use_gpu=0` included.
+**1. It named the wrong code.** The task pointed at `nm_ggml_gpu_usable()` and
+`af_whisper.c:153`. The calls that actually drag ggml's registry in are
+`nm_backend_once()` at the top of `nm_ggml_backend_init()` (before `use_gpu` is
+read, which is the stemsplit path) and, for whisper, whisper.cpp itself. Section
+5.5 of the research says these files need no change at all, which contradicted
+this task outright; the contradiction was in the documents before any code was
+written.
 
-That unconditional call is a crash fix, not an oversight: on Linux it used to sit behind `use_gpu &&`, which short-circuited the ICD guard away on exactly the option a user reaches for when a GPU misbehaves, and the process then died inside `ggml_backend_load_all()`. **On darwin there is no ICD guard, no hostile third-party drivers and no crash to prevent** — the guard is compiled out for non-Windows, non-Apple targets.
+**2. Half of it is not achievable in our code.** Verified against the pinned
+sources (whisper.cpp `v1.9.1` / ggml 0.15.1), recorded in
+`.superpowers/sdd/2026-09-27-metal-backend/registry-construction-findings.md`:
 
-- [ ] **Step 1: Write the failing check first**
+- `ggml_backend_cpu_init()` does **not** construct the global registry: it
+  dispatches straight through `ggml_backend_cpu_reg()`, a function-local static,
+  and never reaches `get_reg()`. So a CPU-only stemsplit run genuinely can avoid
+  the compile.
+- `whisper_backend_init()` **does**, unavoidably: `whisper.cpp:1339` loops over
+  `ggml_backend_dev_count()` for ACCEL backends and that loop is *not* gated by
+  `params.use_gpu` (only `whisper_backend_init_gpu()`'s own loop is). So for the
+  whisper filter no change of ours avoids it.
+- `ggml_backend_load_all()` only touches `get_reg()` when it finds a matching
+  dynamic backend library on disk. Every backend here is statically linked, so
+  that call is doing nothing for us either way.
+- The one real lever is ggml's own `GGML_METAL_DEVICES`, read at
+  `ggml-metal.cpp:914-916` as `g_devices = atoi(env)` and consumed by
+  `for (int i = 0; i < g_devices; ++i)`. Setting it to `0` skips device and
+  library init entirely and registers cleanly with zero devices. But it is
+  process-wide and latches on first call, so one filter asking for no GPU could
+  silently take the GPU away from another filter in the same filtergraph.
+  **Note the opposite sense for Vulkan:** `GGML_VK_VISIBLE_DEVICES` is a list of
+  device *indices*, so `0` there means "use device 0". Do not carry this across.
 
-Before changing behaviour, add a check that a `use_gpu=0` darwin run does **not** construct the registry. ggml logs its Metal initialisation; capture that, or instrument `nm_backend_once()`. Run it against Task 1's build and watch it **fail** — it must fail now, or it is not measuring the thing.
+**3. Nothing establishes that there is a problem.** The cost is stated nowhere as
+a measured number — the spec and the research both reason about it. It could be
+three seconds or a third of a second. The owner's decision, 2026-09-28: build
+macOS with Metal and stop there; measure the compile on Apple hardware via Task
+4, and only revisit this if the number turns out to matter.
 
-- [ ] **Step 2: Defer on darwin only**
+**If it is ever revisited,** the achievable shape is: darwin-only C, no new
+environment variable of ours, deferring `nm_backend_once()` for the stemsplit CPU
+path; plus, only if the measured cost justifies the filtergraph hazard above,
+ggml's `GGML_METAL_DEVICES=0`. The comment below was written for the original
+plan and is kept because its warning still holds for anyone touching the Linux or
+Windows path:
 
-Make the deferral `#if defined(__APPLE__)` (or the existing darwin/fixed-mode conditional, whichever the file already uses — match it rather than adding a second style). Linux and Windows keep the unconditional call.
-
-Write the comment that stops someone harmonising the two later:
-
-```c
-/* darwin defers this; Linux and Windows must not.
- *
- * The unconditional call on the other platforms is a crash fix: it used to be
- * the right-hand side of an && with the filter's use_gpu option, which
- * short-circuited the ICD guard away on exactly the option a user reaches for
- * when a GPU is causing trouble, and the process then died in
- * ggml_backend_load_all(). Here there is no ICD guard and no hostile driver to
- * survive -- what registry construction costs on darwin is Metal shader
- * compilation, seconds of it, on every run including use_gpu=0. So darwin
- * waits until it knows a GPU is actually wanted. Do not unify these.
- */
-```
-
-- [ ] **Step 3: `NOMERCY_GGML_GPU=0` must also skip it**
-
-The spec requires both escape hatches to avoid the cost, not just `use_gpu=0`. Check where that variable is read and make sure the darwin path honours it before construction.
-
-- [ ] **Step 4: Run the check from Step 1 and watch it pass**
-
-Then confirm the GPU path still works: `use_gpu=1` must construct the registry and report `mtl`.
-
-- [ ] **Step 5: Prove Linux is untouched (Review Focus 3)**
-
-Build linux-x86_64 and confirm `nm_ggml_gpu_usable()` is still reached unconditionally — the Mesa-container assertions from the Vulkan work are the existing evidence; re-run them rather than reasoning. A regression here reinstates a crash on machines with hostile drivers.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add scripts/includes/
-git commit -m "fix(darwin): defer backend discovery until a GPU is actually wanted"
-```
+> The unconditional call on the other platforms is a crash fix: it used to be the
+> right-hand side of an `&&` with the filter's `use_gpu` option, which
+> short-circuited the ICD guard away on exactly the option a user reaches for
+> when a GPU is causing trouble, and the process then died in
+> `ggml_backend_load_all()`. Do not unify darwin with them.
 
 ---
 
@@ -189,8 +191,8 @@ git commit -m "fix(darwin): defer backend discovery until a GPU is actually want
 - Modify: `README.md`
 
 **Interfaces:**
-- Consumes: Tasks 1 and 2.
-- Produces: assertions that fail if Metal disappears or if the deferral regresses.
+- Consumes: Task 1. (Task 2 is dropped; assert nothing about deferral.)
+- Produces: assertions that fail if Metal disappears.
 
 - [ ] **Step 1: Give darwin an arm in the backend helper**
 
@@ -234,7 +236,7 @@ git commit -m "test(darwin): assert the Metal backend and the mtl metadata value
 - Create: `tools/metal/verify-on-mac.sh`
 
 **Interfaces:**
-- Consumes: Tasks 1-3.
+- Consumes: Tasks 1 and 3.
 - Produces: a darwin-arm64 artifact and a script the owner runs to answer the four release gates.
 
 - [ ] **Step 1: Full darwin-arm64 build**
@@ -250,7 +252,12 @@ The Metal backend is linked, the blob is present and the right size, the binary 
 `tools/metal/verify-on-mac.sh`, to be run by the owner on Apple Silicon. It must answer the four gates and print each as a clear pass or fail:
 
 1. **The embedded MSL compiles at all.** Run whisper once with `use_gpu=1` and show ggml's Metal initialisation succeeding.
-2. **First-use compilation time.** Time the first run against a second run; report both. The spec expects a few seconds, negligible for a library transcode and not nothing for a one-shot.
+2. **First-use compilation time — this is now the number that settles a dropped decision, so it is the most important thing the script produces.** Report three timings, not one:
+   - `ffmpeg -version`, which never builds a filtergraph and so never touches ggml's registry — the baseline with no shader compile in it at all;
+   - a one-second `stemsplit` run with `use_gpu=0`, which is what the owner actually runs day to day and which *does* pay the compile today;
+   - the same run again in a fresh process, to show whether anything is cached between processes.
+
+   The interesting figure is the **subtraction**: second minus first is what a macOS user who wants no GPU pays for Metal being linked in. ggml logs `"using embedded metal library"` and `"loaded in %.3f sec"`, so print those lines verbatim too rather than only wall-clock. Task 2 was dropped because this number does not exist; if it comes back large, that decision gets reopened with the number in hand, and if it comes back small the question is closed for good. Say which, plainly, in the summary block.
 3. **A device is selected in a daemon/SSH context, not just an interactive login.** The media server runs as a service; test it that way, because this is the gate most likely to be missed and most likely to fail.
 4. **Output matches the CPU path**, to the standard the Vulkan work used, **and Metal actually beats the fixed-level NEON CPU build.** If it does not beat CPU, this phase is not worth shipping and the script should say so plainly.
 
