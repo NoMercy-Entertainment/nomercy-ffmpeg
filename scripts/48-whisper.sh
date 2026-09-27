@@ -258,6 +258,41 @@ else
         else
             WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_CPU_ARM_ARCH=armv8.4-a+dotprod+fp16"
             NM_GGML_CPU_FIXED_NAME="armv8.4+dotprod+fp16"
+
+            # Apple Silicon only: override the darwin default above and turn ggml's
+            # Metal backend on. darwin-x86_64 stays OFF -- that dockerfile's floor is
+            # 10.13 while ggml's Metal path uses unguarded 10.15 APIs, and Intel/AMD
+            # GPUs report neither Apple7 nor Metal3 anyway.
+            #
+            # EMBED_LIBRARY is passed explicitly rather than relied on as ggml's own
+            # default (it defaults to ${GGML_METAL}, ggml/CMakeLists.txt): without the
+            # embed path cmake shells out to `xcrun metal`, which osxcross has no
+            # answer for.
+            NM_METAL=1
+            WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON"
+
+            # osxcross's clang 18 can neither parse ggml's visionOS @available
+            # clauses nor link the __isPlatformVersionAtLeast they lower to (no
+            # libclang_rt.osx.a in this toolchain). Both sites exist purely to gate
+            # macOS-15 "residency sets" behind one #define that SDK macros alone
+            # already drive (ggml-metal-device.m); neutralise that #define and the
+            # build takes the pre-macOS-15 path upstream already ships and supports
+            # (GGML_METAL_NO_RESIDENCY exists as the same off switch on real macOS).
+            #
+            # A bare sed that matches nothing succeeds silently and this build then
+            # dies later with a compiler error nobody would connect to this line --
+            # so count the match first and fail by name if it is not exactly 1.
+            metal_src="ggml/src/ggml-metal/ggml-metal-device.m"
+            nm_metal_residency_before=$(grep -c '^#define GGML_METAL_HAS_RESIDENCY_SETS 1' "${metal_src}")
+            if [[ ${nm_metal_residency_before} -ne 1 ]]; then
+                log "Error: expected exactly one GGML_METAL_HAS_RESIDENCY_SETS define in ${metal_src}, found ${nm_metal_residency_before} -- has whisper.cpp changed?"
+                exit 1
+            fi
+            sed -i 's/^#define GGML_METAL_HAS_RESIDENCY_SETS 1$/#undef GGML_METAL_HAS_RESIDENCY_SETS/' "${metal_src}"
+            if ! grep -q '^#undef GGML_METAL_HAS_RESIDENCY_SETS' "${metal_src}"; then
+                log "Error: residency-sets patch did not apply to ${metal_src}"
+                exit 1
+            fi
         fi
     elif [[ ${TARGET_OS} == "freebsd" ]]; then
         # FreeBSD base ships libomp.so but no libomp.a, so clang's -fopenmp
@@ -289,6 +324,30 @@ else
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Error: Whisper install failed" >> /ffmpeg_build.log
         exit 1
+    fi
+
+    if [[ ${NM_METAL:-0} == 1 ]]; then
+        # GGML_METAL_EMBED_LIBRARY .incbin's the shader source into the
+        # __DATA,__ggml_metallib section of libggml-metal.a (measured 609,531 B on
+        # whisper.cpp v1.9.1 / ggml 0.15.1). The failure mode this guards against is
+        # a VALID build with an EMPTY blob: the residency-sets sed above touches a
+        # different file, but a whisper.cpp bump that changes ggml's own
+        # shader-merge step could still hand the assembler a zero-length file, and
+        # everything downstream -- .incbin, the archive, the link -- succeeds
+        # anyway. Metal only fails once a real Mac calls newLibraryWithSource: on an
+        # empty string. Read the section straight back out of the archive that
+        # actually ships (not a build-tree intermediate) and assert a floor, not an
+        # exact size, so an upstream shader change does not break this build but an
+        # empty or truncated one does.
+        nm_metal_archive="${PREFIX}/lib/libggml-metal.a"
+        nm_metal_blob_hex=$(${OTOOL:-otool} -l "${nm_metal_archive}" 2>/dev/null \
+            | grep -A4 'sectname __ggml_metallib' | awk '/^ *size /{print $2; exit}')
+        nm_metal_blob=0
+        [[ -n ${nm_metal_blob_hex} ]] && nm_metal_blob=$((nm_metal_blob_hex))
+        if [[ ${nm_metal_blob} -le 400000 ]]; then
+            log "Error: embedded Metal shader blob is ${nm_metal_blob} bytes, expected ~600 KB -- GGML_METAL_EMBED_LIBRARY did not take"
+            exit 1
+        fi
     fi
 fi
 
@@ -627,7 +686,16 @@ if [[ ${NM_VULKAN} == 1 ]]; then
     # guaranteed across every platform this line is used on. One more pass.
     nm_vk_trailer=" -lggml-base"
 fi
-lib_flags="Libs: -L\${libdir} -lggml -lggml-base -lwhisper -lggml -lggml-base ${nm_vk_lib}-l${nm_cpu_lib}${nm_vk_trailer}"
+# darwin-arm64's GPU backend, in the slot Vulkan occupies on other platforms:
+# same "before -l${nm_cpu_lib}, one more -lggml-base pass" shape, for the same
+# reason -- a static linker resolves left to right.
+nm_metal_lib=""
+nm_metal_trailer=""
+if [[ ${NM_METAL:-0} == 1 ]]; then
+    nm_metal_lib="-lggml-metal "
+    nm_metal_trailer=" -lggml-base"
+fi
+lib_flags="Libs: -L\${libdir} -lggml -lggml-base -lwhisper -lggml -lggml-base ${nm_vk_lib}${nm_metal_lib}-l${nm_cpu_lib}${nm_vk_trailer}${nm_metal_trailer}"
 # NM_SKIP_VARIANTS platforms link the stock -lggml-cpu above for the real
 # backend, plus this second, differently-built libggml-cpu-variants.a (see
 # the fixed-mode branch above) purely for its nm_ggml_cpu_variant_name()
@@ -648,6 +716,14 @@ lib_private_flags="Libs.private: -lstdc++"
     elif [[ ${TARGET_OS} == "darwin" ]]; then
         lib_flags+=" -lggml-blas"
         lib_private_flags+=" -lz"
+        # pkg-config passes -framework flags through a Libs: line unchanged and in
+        # order (verified against pkg-config 1.8.1, --libs and --libs --static both),
+        # so the frameworks Metal needs live here rather than in the dockerfile's
+        # ENV LDFLAGS: that keeps the whole Metal decision inside this one script
+        # instead of splitting it across a file this task does not otherwise touch.
+        # CoreFoundation is already in LDFLAGS but is not the same framework as
+        # Foundation -- ggml-metal.m needs NSString et al, which is Foundation.
+        [[ ${NM_METAL:-0} == 1 ]] && lib_flags+=" -framework Foundation -framework Metal -framework MetalKit"
     elif [[ ${TARGET_OS} == "freebsd" ]]; then
         lib_private_flags+=" -lm -pthread"
     elif [[ ${ARCH} == "aarch64" ]]; then
