@@ -328,24 +328,42 @@ else
 
     if [[ ${NM_METAL:-0} == 1 ]]; then
         # GGML_METAL_EMBED_LIBRARY .incbin's the shader source into the
-        # __DATA,__ggml_metallib section of libggml-metal.a (measured 609,531 B on
+        # __DATA,__ggml_metallib section of the ggml-metal-embed.s.o member of
+        # libggml-metal.a (measured 610,048 B object / 609,531 B section, on
         # whisper.cpp v1.9.1 / ggml 0.15.1). The failure mode this guards against is
-        # a VALID build with an EMPTY blob: the residency-sets sed above touches a
-        # different file, but a whisper.cpp bump that changes ggml's own
-        # shader-merge step could still hand the assembler a zero-length file, and
-        # everything downstream -- .incbin, the archive, the link -- succeeds
-        # anyway. Metal only fails once a real Mac calls newLibraryWithSource: on an
-        # empty string. Read the section straight back out of the archive that
-        # actually ships (not a build-tree intermediate) and assert a floor, not an
-        # exact size, so an upstream shader change does not break this build but an
-        # empty or truncated one does.
+        # a VALID-LOOKING build with a MISSING, EMPTY or TRUNCATED blob: the
+        # residency-sets sed above touches a different file, but a whisper.cpp bump
+        # that changes ggml's own shader-merge step could hand the assembler a
+        # short or zero-length file, and everything downstream -- .incbin, the
+        # archive, the link -- can still succeed. Metal only fails once a real Mac
+        # calls newLibraryWithSource: on incomplete source.
+        #
+        # A Mach-O section header's "size" field is the archive's own claim about
+        # itself, not proof the bytes are actually there: `otool -l` on this same
+        # archive truncated after the header still reports "size 0x94cfb" *and*
+        # "(past end of file)" right next to it, and a parse that reads only the
+        # size field -- discarding that annotation -- reports a healthy blob on a
+        # truncated one. So measure the bytes instead of trusting any header field:
+        # extract the member with `ar p` and count what actually comes out. On a
+        # good archive that is 610,048 bytes and `ar` exits 0; on a copy of this
+        # same archive truncated from 896,544 to 700,000 bytes with headers intact,
+        # `ar`'s own short read hands back only 413,504 bytes -- which is still
+        # above a byte-count-only floor, so `ar`'s own non-zero exit status is
+        # checked too (via `set -o pipefail` scoped to this one command
+        # substitution, since `x=$(cmd | wc -c)` runs the pipe in a subshell and
+        # leaves $? as wc's status, with PIPESTATUS not visible out here); on an
+        # empty or missing archive it is 0 bytes and `ar` also exits non-zero
+        # either way. Both signals are required: the exit status alone would miss
+        # a build that legitimately produces a zero-length member and exits 0
+        # (not a short read, but still not a usable blob), and the byte count
+        # alone is exactly what let the 700,000-byte truncation above pass before.
+        # Assert a floor, not an exact size, so an upstream shader change does not
+        # break this build but a missing, empty or truncated one does.
         nm_metal_archive="${PREFIX}/lib/libggml-metal.a"
-        nm_metal_blob_hex=$(${OTOOL:-otool} -l "${nm_metal_archive}" 2>/dev/null \
-            | grep -A4 'sectname __ggml_metallib' | awk '/^ *size /{print $2; exit}')
-        nm_metal_blob=0
-        [[ -n ${nm_metal_blob_hex} ]] && nm_metal_blob=$((nm_metal_blob_hex))
-        if [[ ${nm_metal_blob} -le 400000 ]]; then
-            log "Error: embedded Metal shader blob is ${nm_metal_blob} bytes, expected ~600 KB -- GGML_METAL_EMBED_LIBRARY did not take"
+        nm_metal_blob=$(set -o pipefail; ${AR:-ar} p "${nm_metal_archive}" ggml-metal-embed.s.o 2>/dev/null | wc -c)
+        nm_metal_ar_status=$?
+        if [[ ${nm_metal_ar_status} -ne 0 || ${nm_metal_blob:-0} -le 400000 ]]; then
+            log "Error: embedded Metal shader blob is ${nm_metal_blob:-0} bytes (ar exit ${nm_metal_ar_status}), expected ~600 KB -- GGML_METAL_EMBED_LIBRARY did not take, or ${nm_metal_archive} is missing, empty or truncated"
             exit 1
         fi
     fi
