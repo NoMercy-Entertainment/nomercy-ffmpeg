@@ -19,6 +19,18 @@
 #                  exports none of the shim symbols. Default: 0.
 #   RUN_TIMEOUT    seconds allowed for each self-test before it counts as a
 #                  hang. Default: 10.
+#
+# Always on, not gated behind an env var: a "capture" check that objdump -T
+# imports (UND) none of the shim symbols from the dynamic libc. This is the
+# ffplay defect (Task 3b / task-4-report.md) in miniature -- a symbol the
+# shim source forgets to define still links and still passes every
+# functional CHECK above, because it's silently satisfied by the *build
+# image's* glibc (2.39 here) instead of by nmcompat.o. That leak is invisible
+# to a correctness test and only shows up in objdump -T as an imported
+# `name@GLIBC_x.y` entry, exactly the shape the real dockerfile link guard
+# checks on the shipped binaries. Verified both directions on wcslcpy/wcslcat:
+# without the shim, `wcslcpy@GLIBC_2.38`/`wcslcat@GLIBC_2.38` show up as UND;
+# with it, neither symbol appears in the dynamic table at all.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -57,10 +69,18 @@ docker run --rm \
         g++ -O2 -static-libgcc -static-libstdc++ -pthread \
             -o "$OUT/selftest_cxx" tools/nvenc-wsl2/selftest_cxx.cpp "$OUT/nmcompat.o" -lm
 
+        echo "=== objdump -T selftest: asserting no shim symbol is imported (UND) from the dynamic libc ==="
+        if objdump -T "$OUT/selftest" | grep "UND" \
+            | grep -E "arc4random|_dl_find_object|\bstrlc(py|at)\b|\bwcslc(py|at)\b|__isoc23_|pidfd_spawnp|pidfd_getpid|_ZGVbN2"; then
+            echo "NOT CAPTURED - FAIL (a shim symbol is being satisfied by the build images own glibc, not nmcompat.o -- this is the ffplay defect in miniature, see task-4-report.md)"
+            exit 1
+        fi
+        echo "all shim symbols captured by nmcompat.o - ok"
+
         if [ "$CHECK_HIDDEN" = "1" ]; then
             echo "=== objdump -T selftest: asserting no shim symbol is a dynamic export ==="
             if objdump -T "$OUT/selftest" \
-                | grep -E "arc4random|_dl_find_object|strlc|__isoc23_|pidfd_spawnp|pidfd_getpid|_ZGVbN2"; then
+                | grep -E "arc4random|_dl_find_object|\bstrlc(py|at)\b|\bwcslc(py|at)\b|__isoc23_|pidfd_spawnp|pidfd_getpid|_ZGVbN2"; then
                 echo "EXPORTED - FAIL (shim symbols visible in .dynsym)"
                 exit 1
             fi

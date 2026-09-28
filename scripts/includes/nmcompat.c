@@ -52,6 +52,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
 
 #ifndef SYS_pidfd_open
 #define SYS_pidfd_open 434 /* x86_64; not declared on glibc < 5.3 headers */
@@ -165,6 +166,42 @@ size_t strlcat(char *dst, const char *src, size_t size)
         size_t n = srclen < room ? srclen : room;
         memcpy(dst + dstlen, src, n);
         dst[dstlen + n] = '\0';
+    }
+    return dstlen + srclen;
+}
+
+/* Wide-char analogues, GLIBC_2.38 additions — the same release that moved
+ * ffplay's floor above 2.34 (libXext references both). Same contract as
+ * strlcpy/strlcat above, just counted in wchar_t elements instead of
+ * bytes: always NUL-terminate when size > 0, and always return the length
+ * they *tried* to create (srclen, not the possibly-truncated copied
+ * length) so a caller can detect truncation by comparing the return value
+ * against size. Getting that return value right matters exactly the way
+ * it does for strlcat: a caller that trusts a wrong "how much did you
+ * write" answer walks past the end of its own buffer on the next call. */
+
+size_t wcslcpy(wchar_t *dst, const wchar_t *src, size_t size)
+{
+    size_t srclen = wcslen(src);
+    if (size != 0) {
+        size_t n = srclen < size - 1 ? srclen : size - 1;
+        wmemcpy(dst, src, n);
+        dst[n] = L'\0';
+    }
+    return srclen;
+}
+
+size_t wcslcat(wchar_t *dst, const wchar_t *src, size_t size)
+{
+    size_t dstlen = wcsnlen(dst, size);
+    size_t srclen = wcslen(src);
+    if (dstlen == size)
+        return size + srclen;
+    {
+        size_t room = size - dstlen - 1;
+        size_t n = srclen < room ? srclen : room;
+        wmemcpy(dst + dstlen, src, n);
+        dst[dstlen + n] = L'\0';
     }
     return dstlen + srclen;
 }

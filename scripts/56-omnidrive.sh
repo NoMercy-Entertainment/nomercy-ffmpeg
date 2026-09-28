@@ -28,12 +28,18 @@ cmake --install libomnidrive/build
 # nothing about what ships; it only removes a latent trap. Leave the .a.
 rm -f ${PREFIX}/lib/libomnidrive.so ${PREFIX}/lib/libomnidrive.so.*
 
-# Four libraries sit in the same trap: the base image ships both the archive
+# Five libraries sit in the same trap: the base image ships both the archive
 # and a visible system .so for each, and a dynamic link prefers the .so.
-# omnidrive is handled above; stage the other three archives into
+# omnidrive is handled above; stage the other four archives into
 # ${PREFIX}/lib, ahead of the system dirs in LDFLAGS' -L order, so
-# -lgomp/-lXau/-lXdmcp keep resolving to the .a once a link goes dynamic.
-# (A fifth, libmvec.so.1, is part of glibc itself and is meant to stay.)
+# -lgomp/-lXau/-lXdmcp/-lXext keep resolving to the .a once a link goes
+# dynamic. (A sixth, libmvec.so.1, is part of glibc itself and is meant to
+# stay.) libXext is here because ffplay (SDL2's X11 backend) links it and
+# the base image has the exact same shape as the other three: a real
+# libXext.a sitting right next to a visible libXext.so.6 -- this is what let
+# ffplay ship needing libXext.so.6 at runtime (issue #42 Task 3b / see
+# task-4-report.md), a shared dependency outside the allowed NEEDED set on
+# every target distro.
 #
 # Scoped to linux-x86_64 only, deliberately narrower than the .so removal
 # above: linux-aarch64 stays -static (where only .a is ever considered, so
@@ -41,7 +47,7 @@ rm -f ${PREFIX}/lib/libomnidrive.so ${PREFIX}/lib/libomnidrive.so.*
 # unrelated toolchains/sysroots where these host archive paths don't apply
 # and could even resolve to the wrong architecture's objects.
 if [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "linux" ]]; then
-	for lib in gomp Xau Xdmcp; do
+	for lib in gomp Xau Xdmcp Xext; do
 		src=$(find / -xdev -name "lib${lib}.a" 2>/dev/null | head -1)
 		if [ -z "${src}" ]; then
 			echo "56-omnidrive: lib${lib}.a not found in the image" >&2

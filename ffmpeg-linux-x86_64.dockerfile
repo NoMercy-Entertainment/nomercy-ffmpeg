@@ -172,16 +172,19 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     && echo "🔎 Verifying ggml CPU variants survived the link" \
     && bash /scripts/includes/verify_ggml_cpu_link.sh \
     && make install >/dev/null 2>&1 \
-    && echo "🔒 Verifying the dynamic-link guard (issue #42 / NVENC under WSL2)" \
-    && floor=$(objdump -T ${PREFIX}/bin/ffmpeg | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1) \
-    && echo "   glibc floor: ${floor}" \
-    && [ "${floor}" = "GLIBC_2.34" ] || (echo "❌ glibc floor moved to ${floor}, expected exactly GLIBC_2.34 -- something changed, stop" ; exit 1) \
-    && stray=$(objdump -p ${PREFIX}/bin/ffmpeg | awk '/NEEDED/{print $2}' \
-        | grep -vE '^(libc|libm|libmvec|libdl|libpthread|librt)\.so|^ld-linux' || true) \
-    && if [ -n "${stray}" ]; then echo "❌ unexpected shared dependency:" ; echo "${stray}" ; exit 1 ; fi \
-    && echo "   NEEDED: $(objdump -p ${PREFIX}/bin/ffmpeg | awk '/NEEDED/{print $2}' | tr '\n' ' ')" \
-    && timeout 10 ${PREFIX}/bin/ffmpeg -hide_banner -version >/dev/null \
-    && echo "✅ dynamic-link guard passed (floor pinned to GLIBC_2.34, NEEDED clean, runs within 10s)" \
+    && echo "🔒 Verifying the dynamic-link guard (issue #42 / NVENC under WSL2) -- ffmpeg, ffprobe AND ffplay" \
+    && for bin in ffmpeg ffprobe ffplay; do \
+        floor=$(objdump -T ${PREFIX}/bin/${bin} | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1) ; \
+        echo "   ${bin} glibc floor: ${floor}" ; \
+        [ "${floor}" = "GLIBC_2.34" ] || (echo "❌ ${bin}: glibc floor moved to ${floor}, expected exactly GLIBC_2.34 -- something changed, stop" ; exit 1) || exit 1 ; \
+        stray=$(objdump -p ${PREFIX}/bin/${bin} | awk '/NEEDED/{print $2}' \
+            | grep -vE '^(libc|libm|libmvec|libdl|libpthread|librt)\.so|^ld-linux' || true) ; \
+        if [ -n "${stray}" ]; then echo "❌ ${bin}: unexpected shared dependency:" ; echo "${stray}" ; exit 1 ; fi ; \
+        echo "   ${bin} NEEDED: $(objdump -p ${PREFIX}/bin/${bin} | awk '/NEEDED/{print $2}' | tr '\n' ' ')" ; \
+        timeout 10 ${PREFIX}/bin/${bin} -hide_banner -version >/dev/null || (echo "❌ ${bin}: -version did not run within 10s" ; exit 1) || exit 1 ; \
+        echo "   ${bin}: -version ran cleanly" ; \
+       done \
+    && echo "✅ dynamic-link guard passed for ffmpeg, ffprobe AND ffplay (floor pinned to GLIBC_2.34, NEEDED clean, all run within 10s)" \
     && rm -rf /build/ffmpeg \
     && echo "------------------------------------------------------" \
     && echo "✅ FFmpeg was built successfully" \

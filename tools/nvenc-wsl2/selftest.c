@@ -18,6 +18,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <wchar.h>
 
 int fails = 0;
 /* cond is evaluated exactly once into _ok: several checks call functions
@@ -35,6 +36,12 @@ int fails = 0;
 /* ---- BSD string (nmcompat.c) ---- */
 extern size_t strlcpy(char *dst, const char *src, size_t size);
 extern size_t strlcat(char *dst, const char *src, size_t size);
+
+/* ---- wide-char BSD string (nmcompat.c); GLIBC_2.38 additions, the exact
+ * gap that let ffplay ship needing a floor above 2.34 (libXext references
+ * both -- see the Task 3b report). ---- */
+extern size_t wcslcpy(wchar_t *dst, const wchar_t *src, size_t size);
+extern size_t wcslcat(wchar_t *dst, const wchar_t *src, size_t size);
 
 /* ---- randomness (nmcompat.c) ---- */
 extern unsigned int arc4random(void);
@@ -206,6 +213,30 @@ int main(void)
     /* BSD string */
     CHECK("strlcpy", strlcpy(buf, "abc", sizeof buf) == 3 && !strcmp(buf, "abc"));
     CHECK("strlcat", strlcat(buf, "de", sizeof buf) == 5 && !strcmp(buf, "abcde"));
+
+    /* wide-char BSD string. Exercises both the ordinary (fits) case and a
+     * truncating case, because the return-value contract -- always the
+     * length it TRIED to create, not the truncated copied length -- is
+     * exactly the kind of thing that is subtly wrong and still "looks
+     * like it links and runs". A caller trusting a wrong truncation
+     * signal walks past the end of its own buffer on the next call. */
+    {
+        wchar_t wbuf[8];
+        size_t r;
+
+        r = wcslcpy(wbuf, L"abc", 8);
+        CHECK("wcslcpy (fits)", r == 3 && wcscmp(wbuf, L"abc") == 0);
+
+        r = wcslcat(wbuf, L"de", 8);
+        CHECK("wcslcat (fits)", r == 5 && wcscmp(wbuf, L"abcde") == 0);
+
+        /* Source longer than the buffer: must truncate but still
+         * NUL-terminate, and report the untruncated source length (6),
+         * not the 3 characters that actually fit. */
+        r = wcslcpy(wbuf, L"abcdef", 4);
+        CHECK("wcslcpy (truncates)",
+              r == 6 && wbuf[3] == L'\0' && wcscmp(wbuf, L"abc") == 0);
+    }
 
     /* randomness */
     {
