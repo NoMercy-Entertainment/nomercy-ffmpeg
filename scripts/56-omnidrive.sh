@@ -17,6 +17,40 @@ fi
 cmake --build libomnidrive/build
 cmake --install libomnidrive/build
 
+# cmake --install above installs both libomnidrive.a and libomnidrive.so:
+# libomnidrive's CMakeLists.txt defines an explicit `omnidrive_shared` SHARED
+# target (OUTPUT_NAME omnidrive) regardless of BUILD_SHARED_LIBS, and installs
+# it alongside the static target. In a dynamic link the linker prefers a
+# visible .so over a .a for the same -l name, so leaving it in ${PREFIX}/lib
+# would make -lomnidrive pick the .so the moment any platform's link stops
+# being -static. Nothing links -lomnidrive today (every platform is -static,
+# and a static link only ever considers .a), so removing it here changes
+# nothing about what ships; it only removes a latent trap. Leave the .a.
+rm -f ${PREFIX}/lib/libomnidrive.so ${PREFIX}/lib/libomnidrive.so.*
+
+# Four libraries sit in the same trap: the base image ships both the archive
+# and a visible system .so for each, and a dynamic link prefers the .so.
+# omnidrive is handled above; stage the other three archives into
+# ${PREFIX}/lib, ahead of the system dirs in LDFLAGS' -L order, so
+# -lgomp/-lXau/-lXdmcp keep resolving to the .a once a link goes dynamic.
+# (A fifth, libmvec.so.1, is part of glibc itself and is meant to stay.)
+#
+# Scoped to linux-x86_64 only, deliberately narrower than the .so removal
+# above: linux-aarch64 stays -static (where only .a is ever considered, so
+# staging here would be inert) and windows/freebsd cross-compile against
+# unrelated toolchains/sysroots where these host archive paths don't apply
+# and could even resolve to the wrong architecture's objects.
+if [[ "${ARCH}" == "x86_64" && "${TARGET_OS}" == "linux" ]]; then
+	for lib in gomp Xau Xdmcp; do
+		src=$(find / -xdev -name "lib${lib}.a" 2>/dev/null | head -1)
+		if [ -z "${src}" ]; then
+			echo "56-omnidrive: lib${lib}.a not found in the image" >&2
+			exit 1
+		fi
+		cp "${src}" ${PREFIX}/lib/
+	done
+fi
+
 cp ./ffmpeg-integration/omnidrive.c /build/ffmpeg/libavformat/omnidrive.c
 
 # 3. Four edits
