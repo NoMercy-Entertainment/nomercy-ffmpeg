@@ -121,38 +121,6 @@ jobs:
             exit 1
           fi
 
-      - name: Why the static MTL grep failed here (one-off diagnostic)
-        # The smoke suite used to assert the `MTL` metadata string by splitting
-        # the binary on NUL and matching exactly. It passed on a Linux box
-        # against both real artifacts and failed here, on a build that reports
-        # `mtl` at run time. The assertion is gone now — but guessing at the
-        # cause twice already cost two red runs, so measure it once and write
-        # the answer down instead of theorising a third time.
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -uo pipefail
-          echo "tr:   $(command -v tr)"
-          echo "grep: $(command -v grep)"
-          grep --version 2>/dev/null | head -1 || echo "grep --version: not supported (BSD)"
-          echo
-          echo "--- a 15-byte control containing one NUL-delimited MTL ---"
-          printf 'AAA\000MTL\000BBB' > ctl.bin
-          echo "input bytes:        $(wc -c < ctl.bin | tr -d ' ')"
-          echo "bytes after tr:     $(LC_ALL=C tr '\000' '\n' < ctl.bin | wc -c | tr -d ' ')"
-          echo "exact MTL matches:  $(LC_ALL=C tr '\000' '\n' < ctl.bin | LC_ALL=C grep -cx MTL || true)"
-          echo
-          echo "--- the real 116 MB binary ---"
-          echo "input bytes:        $(wc -c < ./ffmpeg | tr -d ' ')"
-          echo "bytes after tr:     $(LC_ALL=C tr '\000' '\n' < ./ffmpeg | wc -c | tr -d ' ')"
-          echo "exact MTL matches:  $(LC_ALL=C tr '\000' '\n' < ./ffmpeg | LC_ALL=C grep -cx MTL || true)"
-          echo "via strings:        $(strings -a ./ffmpeg 2>/dev/null | LC_ALL=C grep -cx MTL || echo 'strings unavailable')"
-          echo
-          echo "If 'bytes after tr' is far below 'input bytes', tr stopped early"
-          echo "on this libc and the whole approach was unsound here, not just"
-          echo "mis-spelled."
-          rm -f ctl.bin
-
       - name: A real transcode, not just --version
         shell: bash
         run: |

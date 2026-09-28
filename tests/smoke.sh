@@ -215,22 +215,26 @@ assert_metal_backend_present() {  # bin, platform
 
   # There is deliberately no static assertion on the `MTL` metadata name here.
   #
-  # There was one, and it was wrong twice. First as a substring search, which
-  # passed on v1.0.42 — a build with no Metal at all — because that binary
+  # There was one, and it went wrong twice. First as a substring search, which
+  # PASSED on v1.0.42 — a build with no Metal at all — because that binary
   # carries an unrelated "UHD_MTL". Then as an exact NUL-delimited match, which
-  # failed on the Apple Silicon runner against a build that does carry Metal
-  # and that had reported lavfi.whisper.backend=mtl seconds earlier in the same
-  # job: splitting a 116 MB binary on NUL with `tr` does not behave on macOS
-  # the way it does with GNU coreutils, and LC_ALL=C plus the \000 spelling did
-  # not rescue it either.
+  # FAILED on the Apple Silicon runner against a build that does carry Metal
+  # and had reported lavfi.whisper.backend=mtl seconds earlier in the same job.
   #
-  # The name is a three-character string. Any grep for it is either too loose
-  # to mean anything or too exact to survive a second libc's tools, and both
-  # failure modes have now cost a red build. What it was trying to prove is
-  # proven properly elsewhere: the Metal gates run the binary and require the
-  # filter itself to report `mtl` (.github/workflows/mac-runner-check.yml, and
-  # tools/metal/verify-on-mac.sh gate 1). A filter saying what it actually ran
-  # on beats a string search for what it might have been compiled with.
+  # That second failure was not what it looked like. It was not macOS, not
+  # `tr`, not the locale: measured on the runner itself, `LC_ALL=C tr` passed
+  # all 122,674,224 bytes through and found the match. It was `grep -q` under
+  # the `set -uo pipefail` at the top of this file — grep exits on first match,
+  # `tr` dies of SIGPIPE with ~120 MB still to write, and pipefail reports the
+  # pipeline as failed. A match was returned as "not found". See the long note
+  # in lib/cpu-variant.sh where that function used to live.
+  #
+  # It stays removed, but because execution proves it better, not because it
+  # could not be written: the Metal gates run the binary and require the filter
+  # itself to report `mtl` (.github/workflows/mac-runner-check.yml, and
+  # tools/metal/verify-on-mac.sh gate 1), and darwin-arm64 is executed by a
+  # real runner on every CI run. A filter saying what it actually ran on beats
+  # a string search for what it might have been compiled with.
 }
 
 ffmpeg_bin="${WORKSPACE}/ffmpeg"

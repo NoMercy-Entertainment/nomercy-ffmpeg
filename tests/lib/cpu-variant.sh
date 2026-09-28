@@ -588,25 +588,45 @@ metal_backend_compiled_in() {
 # comment already warns about for "metal": a check that reports PASS on a
 # build it should fail.
 #
-# The obvious fix was whole-string equality instead of containment -- split the
+# The fix for that was whole-string equality instead of containment: split the
 # binary on NUL and require an exact line match, since `MTL` is its own
-# NUL-terminated string (it IS GGML_METAL_NAME). Verified on both real
-# artifacts from a Linux box: the Metal darwin-arm64 binary had exactly one
-# such string, v1.0.42 had none.
+# NUL-terminated string (it IS GGML_METAL_NAME).
 #
-# THAT FIX THEN FAILED ON THE APPLE SILICON RUNNER, against a build which does
+#     tr '\0' '\n' < "$1" | grep -qx "MTL"
+#
+# That line then failed on the Apple Silicon runner against a build which does
 # carry Metal and which had reported `lavfi.whisper.backend=mtl` seconds
-# earlier in the same job. Adding LC_ALL=C and the \000 spelling did not rescue
-# it: splitting a 116 MB binary on NUL with `tr` does not behave on macOS the
-# way it does with GNU coreutils.
+# earlier in the same job. It is worth knowing exactly why, because the two
+# obvious explanations are both wrong and both were tried:
 #
-# So there is no static MTL check here any more, and adding a third one would
-# be a mistake. The name is three characters: a search for it is either loose
-# enough to match unrelated bytes or exact enough to depend on which libc's
-# tools are installed, and both failure modes have now produced a wrong answer
-# on a real binary -- once a false pass, once a false fail. The claim is
-# instead proven where it can actually be proven: the Metal gates execute the
-# binary and require the filter to report `mtl` itself
-# (.github/workflows/mac-runner-check.yml; tools/metal/verify-on-mac.sh gate
-# 1). metal_backend_compiled_in() above remains the static half, and it is
-# sound because its markers are long and unambiguous.
+#   NOT the tools.  Measured on that runner: `LC_ALL=C tr '\000' '\n'` passed
+#   all 122,674,224 bytes through untouched and `grep -cx MTL` found its one
+#   match. BSD tr and BSD grep handle this fine.
+#
+#   NOT the locale or the escape spelling.  Adding LC_ALL=C and \000 changed
+#   nothing, because neither was broken.
+#
+#   IT WAS `grep -q` UNDER `pipefail`.  smoke.sh sets `set -uo pipefail`, and
+#   this file is sourced into it. `grep -q` exits the moment it matches, which
+#   closes the pipe; `tr` is then killed by SIGPIPE with status 141 while it
+#   still has ~120 MB to write, and pipefail faithfully reports the pipeline as
+#   failed. A successful match was thus returned as "not found". It is
+#   size-dependent, which is why it passed on Task 3's small concatenated-.a
+#   fixture and only failed on the real, fully linked binary -- on a small
+#   input `tr` finishes before `grep` can exit.
+#
+# The check was therefore sound and its plumbing was not. It is still gone,
+# but for a different reason than the one first written here: what it proves is
+# proven better by execution. The Metal gates run the binary and require the
+# filter to report `mtl` itself (.github/workflows/mac-runner-check.yml;
+# tools/metal/verify-on-mac.sh gate 1), and darwin-arm64 is executed by a real
+# runner on every CI run, so there is no coverage gap to fill with a grep.
+#
+# The general lesson outlives this check: `big_producer | grep -q` under
+# pipefail is a trap, and the rest of this suite was swept for it -- the
+# `tools/` harnesses do not set pipefail, capabilities.sh is only sourced by
+# tests.sh which does not either, and every other pipeline reachable from
+# smoke.sh feeds grep from a small `echo` that fits in the pipe buffer.
+#
+# metal_backend_compiled_in() above remains the static half, and it is sound:
+# its markers are long and unambiguous, and it does not pipe.
