@@ -268,11 +268,6 @@ check_ffplay() {
 }
 
 check_bluray_dvdread() {
-    local py; py=$(command -v python3 || command -v python)
-    if [[ -z "$py" ]]; then
-        skip "bluray/dvdread: no python3 on host to author the minimal fixtures"
-        return
-    fi
     local bd="${WORKSPACE}/.bd_root" ts="${WORKSPACE}/.plain_long.ts"
     rm -rf "$bd"; mkdir -p "$bd"
     SCRIPT_TS='
@@ -282,7 +277,13 @@ check_bluray_dvdread() {
     '
     dcp "$SCRIPT_TS" >/dev/null 2>&1
     if [[ -s "$ts" ]]; then
-        "$py" "${HERE}/make_bdmv.py" "$bd" "$ts" >/dev/null 2>&1
+        # make_bdmv.py is a pure-stdlib script, but the host's python3 is not
+        # a reliable interpreter on every machine this runs on (e.g. a
+        # Windows Store stub) -- author the fixture inside the same
+        # throwaway container used for every other check instead.
+        docker run --rm -v "${WORKSPACE}:/art" -v "${HERE}:/tools:ro" -w /art "${IMAGE}" bash -c \
+            'apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq python3 >/dev/null 2>&1; python3 /tools/make_bdmv.py /art/.bd_root /art/.plain_long.ts' \
+            >/dev/null 2>&1
     fi
     if [[ -f "$bd/BDMV/index.bdmv" ]]; then
         SCRIPT_BD='
