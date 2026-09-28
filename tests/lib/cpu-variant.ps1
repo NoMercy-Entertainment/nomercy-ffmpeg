@@ -46,6 +46,39 @@ function Test-BinaryContainsString {
     return $false
 }
 
+# Same chunked scan as Test-BinaryContainsString, but for a whole
+# NUL-terminated string, not a substring anywhere. A bare substring search is
+# wrong for a short symbol-like needle: "MTL" as a substring also matches
+# inside "UHD_MTL", an unrelated string this project found for real in the
+# released (Metal-less) v1.0.42 darwin-arm64 binary -- see
+# Test-MetalMetadataIsMtl below. Wrapping the needle in NUL bytes on both
+# sides turns "is this text anywhere in the file" into "is this exactly one
+# whole C string in the file", which is what a needle like ggml's
+# GGML_METAL_NAME constant actually is. A synthetic leading/trailing NUL is
+# folded into the very first/last chunk so a match starting at byte 0 or
+# ending at EOF (neither has a real NUL there) is not missed.
+function Test-BinaryContainsExactString {
+    param([string]$Bin, [string]$Needle)
+    $enc = [System.Text.Encoding]::GetEncoding(28591)
+    $chunk = 1MB
+    $overlap = 256
+    $buf = New-Object byte[] $chunk
+    $stream = [System.IO.File]::OpenRead($Bin)
+    $pattern = "`0${Needle}`0"
+    try {
+        $tail = "`0"
+        $lastText = $tail
+        while (($read = $stream.Read($buf, 0, $chunk)) -gt 0) {
+            $text = $tail + $enc.GetString($buf, 0, $read)
+            if ($text.Contains($pattern)) { return $true }
+            $lastText = $text
+            $tail = if ($text.Length -gt $overlap) { $text.Substring($text.Length - $overlap) } else { $text }
+        }
+        if (($lastText + "`0").Contains($pattern)) { return $true }
+    } finally { $stream.Dispose() }
+    return $false
+}
+
 # True if the platform tag carries no ggml cpu dispatcher at all (fixed
 # instruction level, Task 6) -- NOMERCY_GGML_CPU is a no-op there.
 function Test-CpuVariantIsDarwin {
@@ -461,10 +494,25 @@ function Test-MetalBackendPresent {
 # how to try ("...cann cuda hip metal rpc sycl vulkan...") on every platform,
 # plus an extern reference to _ggml_backend_metal_reg that survives even when
 # the function itself never links. That match would report PASS on a CPU
-# fallback, which is exactly the failure this exists to catch. "MTL"
-# (case-sensitive) does not appear anywhere in the same Metal-less build, and
-# appears twice in the real Metal one.
+# fallback, which is exactly the failure this exists to catch.
+#
+# DO NOT test this with a bare substring match on "MTL" either, for the same
+# reason: Task 4 checked the real, previously released Metal-less v1.0.42
+# darwin-arm64 binary (Task 3's own negative control here was a concatenation
+# of just the whisper/ggml .a files, too narrow to catch this) and found the
+# literal bytes "UHD_MTL" in it -- almost certainly an unrelated hardware/
+# codec capability-table entry (MTL is also Intel's "Meteor Lake" codename).
+# `Test-BinaryContainsString` would report that binary as carrying the Metal
+# metadata string when it carries no Metal backend at all. GGML_METAL_NAME is
+# its own NUL-terminated string, not a substring of a longer one, so this
+# uses Test-BinaryContainsExactString instead -- verified on both real
+# binaries: the real Metal darwin-arm64 build has exactly one whole "MTL"
+# string, sitting directly among other ggml-metal identifiers
+# (GGML_METAL_DEVICES, ggml_metal_buffer_is_shared,
+# ggml_backend_metal_device_init_backend, "%s: using embedded metal
+# library"), confirming it is ggml's own constant; the real v1.0.42 binary
+# has zero (down from a false "contains it" under the old substring check).
 function Test-MetalMetadataIsMtl {
     param([string]$Bin)
-    return Test-BinaryContainsString -Bin $Bin -Needle 'MTL'
+    return Test-BinaryContainsExactString -Bin $Bin -Needle 'MTL'
 }

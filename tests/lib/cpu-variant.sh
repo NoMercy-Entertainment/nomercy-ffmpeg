@@ -576,8 +576,32 @@ metal_backend_compiled_in() {
 #
 # An assertion against "metal" would therefore report PASS on a CPU fallback
 # that never touched Metal at all -- exactly the failure this exists to
-# catch. "MTL" (case-sensitive) is not there: 0 occurrences anywhere in the
-# same Metal-less build, 2 in the real Metal one.
+# catch. Case-sensitive "MTL" was 0 occurrences in Task 3's own Metal-less
+# test artifact (a concatenation of just the whisper/ggml .a files) -- but
+# that was too narrow a negative control. Task 4 built the real,
+# fully-linked darwin-arm64 ffmpeg and also checked the real, previously
+# released Metal-less v1.0.42 binary, and a bare substring search FAILS
+# there: v1.0.42 contains the literal bytes "UHD_MTL" (almost certainly an
+# unrelated hardware/codec capability-table entry -- MTL is also Intel's
+# "Meteor Lake" codename), which `grep -aq "MTL"` matches as a substring even
+# though that binary has no Metal backend at all. Same shape of bug this
+# comment already warns about for "metal": a check that reports PASS on a
+# build it should fail.
+#
+# The fix is whole-string equality, not containment: the binary holds `MTL`
+# as its own NUL-terminated string (it IS GGML_METAL_NAME), so split on NUL
+# and require an exact line match rather than a substring anywhere in the
+# file. Verified on both real artifacts: the real Metal darwin-arm64 binary
+# has exactly one NUL-delimited "MTL" string, sitting directly among other
+# ggml-metal identifiers (GGML_METAL_DEVICES, ggml_metal_buffer_is_shared,
+# ggml_backend_metal_device_init_backend, "%s: using embedded metal
+# library") -- confirming it really is ggml's own constant and not a
+# coincidence -- while the real v1.0.42 binary has zero (down from a false
+# "1 occurrence" under the old substring check). `tr` translates NUL bytes as
+# a plain byte substitution on every coreutils this project's tests run on
+# (GNU and BSD alike -- it is not a C-string-based tool the way `basename`,
+# `read` or an old `awk` can be); verified here against both real, 100+ MB
+# binaries, not assumed.
 metal_metadata_name_is_mtl() {
-	grep -aq "MTL" "$1"
+	tr '\0' '\n' < "$1" | grep -qx "MTL"
 }
