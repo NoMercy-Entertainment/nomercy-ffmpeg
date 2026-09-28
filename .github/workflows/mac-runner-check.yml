@@ -1,47 +1,48 @@
 name: Mac Runner Check
 
-# Prove the self-hosted Apple Silicon runner works, and that a darwin-arm64
-# ffmpeg really runs on it.
+# Run OUR darwin-arm64 build on the self-hosted Apple Silicon Mac mini and see
+# whether Metal actually engages.
 #
-# This exists because everything the pipeline knows about darwin-arm64 today is
-# either built in a Linux container or asserted statically over the artifact.
-# The Mac mini runner was idle and unused by any workflow; this is the smallest
-# thing that shows it picking up a job and executing our binary end to end.
+# Everything the pipeline knows about Metal today is static: the backend is
+# linked, the embedded shader blob is the right size, the metadata string is
+# present. None of that executes a line of Metal. The shaders ship as *source*
+# that the user's machine compiles at run time, so "it built" says nothing
+# about "it runs" — and the compile could fail on the first real device.
 #
-# It fetches a published release rather than building anything, so it costs
-# minutes instead of hours and needs no build to have run first.
-#
-# Measured on the first run: this runner reports `launchctl managername` =
-# Aqua, i.e. it runs inside a GUI session with a window server attached. So it
-# does NOT by itself reproduce the daemon context the media server runs in --
-# verify-on-mac.sh has to create that itself, which it does via launchctl
-# submit. Do not treat "it worked on the runner" as "it works as a service".
+# Measured on the first bring-up run of this workflow, on the runner itself:
+#   model Mac16,10 / Apple M4 / arm64 / macOS 26.5.2 / 10 cores
+#   bash 3.2.57      <- why tools/metal/verify-on-mac.sh is bash-3.2 only
+#   GPU  Apple M4
+#   launchctl managername = Aqua
+# That last line matters: the runner sits in a GUI session with a window
+# server attached, so it does NOT by itself reproduce the daemon context the
+# media server runs in. verify-on-mac.sh creates that itself with launchctl
+# submit. Never read "it worked on the runner" as "it works as a service".
 #
 # runs-on carries four labels deliberately. The fleet also holds an Intel Mac
 # and the Linux beast-unit, and #74 was exactly this mistake: one unqualified
 # label matched eight jobs onto whatever machine carried it. `macOS` alone
-# would reach the Intel Mac, where an arm64 binary cannot even start.
+# would reach the Intel Mac, where Metal is off by design and an arm64 binary
+# cannot even start.
 
 on:
   # TEMPORARY, REMOVE BEFORE MERGING.
-  # workflow_dispatch only works for workflows that exist on the default
-  # branch, so a brand-new workflow cannot be started by hand from a feature
-  # branch -- there is nothing on master to dispatch. This push trigger is
-  # scoped to this one branch purely to bring the runner up; once the file
-  # reaches master, workflow_dispatch below is the real entry point and this
-  # block must go.
+  # workflow_dispatch only works for workflows that already exist on the
+  # default branch, so a new workflow cannot be started by hand from a feature
+  # branch — there is nothing on master to dispatch. Scoped to this one branch
+  # purely to bring the runner up.
   push:
     branches: [feat/metal-backend]
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: 'Release tag to fetch the darwin-arm64 build from'
-        required: true
-        default: 'v1.0.42'
-      ffmpeg_version:
-        description: 'FFmpeg version in the archive name'
-        required: true
-        default: '9.0'
+      asset_id:
+        description: 'Release asset id to test (a draft release asset is fine)'
+        required: false
+        default: '594439780'
+      asset_sha256:
+        description: 'Expected sha256 of that asset'
+        required: false
+        default: '9b309a364ea14706c419e0c8a7ccc2e040f4b2146a1dafad3e0d0de6a61a9bb3'
 
 concurrency:
   group: mac-runner-check
@@ -63,120 +64,187 @@ jobs:
           echo "macOS:   $(sw_vers -productVersion 2>/dev/null || echo unknown)"
           echo "cores:   $(sysctl -n hw.ncpu 2>/dev/null || echo '?')"
           echo "bash:    ${BASH_VERSION}"
-          # Metal is the whole reason this runner matters, so say up front
-          # whether the OS can see a GPU at all.
           echo "GPU:     $(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Chipset Model/{print $2; exit}' || echo 'not reported')"
-          # A login session has a window server attached; the runner daemon
-          # normally does not. Gate 3 of the Metal work turns on this
-          # difference, so record which one we are in.
           echo "session: $(launchctl managername 2>/dev/null || echo unknown)"
 
-      - name: Fetch the published darwin-arm64 build
+      - name: Fetch the build under test
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `inputs` is empty on a push event and the declared defaults do NOT
+          # apply — measured: the first run built ".../download//ffmpeg--darwin
+          # -arm64-.tar.gz" and 404'd. Hence the explicit fallbacks.
+          ASSET_ID: ${{ inputs.asset_id || '594439780' }}
+          WANT_SHA: ${{ inputs.asset_sha256 || '9b309a364ea14706c419e0c8a7ccc2e040f4b2146a1dafad3e0d0de6a61a9bb3' }}
         run: |
           set -uo pipefail
-          # `inputs` is only populated for workflow_dispatch; on the push
-          # trigger above it is empty and the declared defaults do NOT apply.
-          # Measured, not guessed: the first run built the URL
-          # ".../releases/download//ffmpeg--darwin-arm64-.tar.gz" and 404'd.
-          tag="${{ inputs.release_tag || 'v1.0.42' }}"
-          ver="${{ inputs.ffmpeg_version || '9.0' }}"
-          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
-          archive="ffmpeg-${ver}-darwin-arm64-${tag}.tar.gz"
+          # Fetched by asset id through the API rather than by browser URL: the
+          # asset lives on a DRAFT release, whose download URL needs auth. This
+          # also avoids needing gh or jq on the runner.
+          curl -fL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o build.tar.gz \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}" || {
+              echo "::error::could not download release asset ${ASSET_ID}"; exit 1; }
 
-          echo "fetching ${base}/${archive}"
-          curl -fsSL --retry 3 -o "${archive}" "${base}/${archive}" || {
-            echo "::error::could not download ${archive} from ${tag}"; exit 1; }
-          curl -fsSL --retry 3 -o "${archive}.sha256" "${base}/${archive}.sha256" || {
-            echo "::error::no .sha256 sidecar for ${archive}"; exit 1; }
-
-          # Every release ships a digest sidecar; checking it is the difference
-          # between testing our build and testing whatever arrived.
-          want="$(tr -d ' \n\r' < "${archive}.sha256" | cut -c1-64)"
-          got="$(shasum -a 256 "${archive}" | cut -d' ' -f1)"
-          if [ "${want}" != "${got}" ]; then
-            echo "::error::digest mismatch: sidecar ${want}, downloaded ${got}"
+          got="$(shasum -a 256 build.tar.gz | cut -d' ' -f1)"
+          if [ "${got}" != "${WANT_SHA}" ]; then
+            echo "::error::digest mismatch: expected ${WANT_SHA}, got ${got}"
             exit 1
           fi
-          echo "digest ok: ${got}"
+          echo "digest ok: ${got}  ($(wc -c < build.tar.gz) bytes)"
 
-          tar -xzf "${archive}"
+          tar -xzf build.tar.gz
           chmod +x ./ffmpeg ./ffprobe
+          # This runner keeps state between jobs. An ffmpeg left behind by an
+          # earlier run would answer everything below while proving nothing.
           if ! file ./ffmpeg | grep -q 'arm64'; then
             echo "::error::not an arm64 binary: $(file ./ffmpeg)"
             exit 1
           fi
           file ./ffmpeg
 
-      - name: Run it — version, and what it was built with
+      - name: Is Metal actually in this binary
         shell: bash
         run: |
-          ./ffmpeg -hide_banner -version | head -3
+          set -uo pipefail
+          ./ffmpeg -hide_banner -version | head -2
           echo "---"
-          echo "Metal linked into THIS binary: $(otool -L ./ffmpeg | grep -c 'Metal.framework') framework reference(s)"
-          echo "embedded Metal shader section: $(otool -l ./ffmpeg | grep -c '__ggml_metallib') section(s)"
-          echo "(v1.0.42 predates the Metal work, so both are expected to be 0 —"
-          echo " they become 1 once a build carrying Metal is tested here.)"
+          fw="$(otool -L ./ffmpeg | grep -c 'Metal.framework')"
+          sec="$(otool -l ./ffmpeg | grep -c '__ggml_metallib')"
+          echo "Metal.framework references: ${fw}"
+          echo "__ggml_metallib sections:   ${sec}"
+          otool -l ./ffmpeg | grep -A3 '__ggml_metallib' | sed 's/^/  /'
+          if [ "${fw}" -lt 1 ] || [ "${sec}" -lt 1 ]; then
+            echo "::error::this build does not carry Metal — wrong artifact under test"
+            exit 1
+          fi
 
       - name: A real transcode, not just --version
         shell: bash
         run: |
           set -uo pipefail
-          # Encode, decode, and measure: a binary that merely prints its
-          # version has proved almost nothing about whether it runs.
           ./ffmpeg -hide_banner -loglevel error -y \
             -f lavfi -i "sine=frequency=440:duration=5" \
             -c:a libmp3lame -b:a 128k probe.mp3
           [ -s probe.mp3 ] || { echo "::error::no mp3 produced"; exit 1; }
           echo "encoded probe.mp3: $(wc -c < probe.mp3) bytes"
-
           ./ffprobe -hide_banner -v error -show_entries format=duration,bit_rate \
             -of default=noprint_wrappers=1 probe.mp3
 
-          # Decode it back and have ffmpeg measure the result itself, so the
-          # check fails if the audio is silence rather than a 440 Hz tone.
+          # astats prints "Overall" and "RMS level dB:" on SEPARATE lines; the
+          # first bring-up run asked for both on one line, found nothing, and
+          # reported silence for audio that was fine. Take the last RMS line,
+          # which is the Overall section's.
           rms="$(./ffmpeg -hide_banner -v error -i probe.mp3 -af astats=metadata=1 \
-                 -f null - 2>&1 | awk -F': ' '/Overall.*RMS level dB/{print $2; exit}')"
+                 -f null - 2>&1 | awk -F': ' '/RMS level dB/{v=$2} END{print v}')"
           echo "decoded RMS level: ${rms:-unknown} dBFS"
           case "${rms:-}" in
             ""|*inf*) echo "::error::decoded audio is silent or unmeasurable"; exit 1 ;;
           esac
 
-      - name: The project's own smoke suite (Metal assertion expected to FAIL on a pre-Metal release)
-        # continue-on-error, with a reason rather than to paper over a problem.
-        # smoke.sh now asserts the Metal backend for darwin-arm64, and any
-        # release before the Metal work genuinely does not carry it. On
-        # v1.0.42 that assertion SHOULD fail, and seeing it fail here is a
-        # live negative control on real Apple Silicon: it proves the check can
-        # say no. Point this workflow at a tag that does carry Metal and the
-        # same step must go green -- if it stays red then, that is a real
-        # finding.
-        continue-on-error: true
+      - name: Fetch the whisper model and sample
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Both public and pinned by digest. Downloading a model without
+          # checking what came back is how a green run measures something else.
+          CACHE="${HOME}/nm-ci-assets"
+          mkdir -p "${CACHE}"
+          fetch() {  # fetch <url> <name> <sha256>
+            local url="$1" out="${CACHE}/$2" want="$3" got
+            if [ -f "${out}" ]; then
+              got="$(shasum -a 256 "${out}" | cut -d' ' -f1)"
+              if [ "${got}" = "${want}" ]; then echo "cached:  $2"; return 0; fi
+              echo "::warning::cached $2 digest ${got} != ${want} — refetching"
+            fi
+            curl -fsSL --retry 3 -o "${out}.part" "${url}" || {
+              echo "::error::download failed: ${url}"; return 1; }
+            got="$(shasum -a 256 "${out}.part" | cut -d' ' -f1)"
+            if [ "${got}" != "${want}" ]; then
+              echo "::error::$2: expected ${want}, got ${got}"; rm -f "${out}.part"; return 1
+            fi
+            mv "${out}.part" "${out}"; echo "fetched: $2"
+          }
+          fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" \
+                "ggml-base.en.bin" \
+                "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002" || exit 1
+          fetch "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav" \
+                "jfk.wav" \
+                "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e" || exit 1
+          cp "${CACHE}/ggml-base.en.bin" "${CACHE}/jfk.wav" ./
+
+      - name: THE question — does Metal engage on this M4
+        shell: bash
+        run: |
+          set -uo pipefail
+          # This is the first time a line of Metal has ever executed in this
+          # project. ggml compiles the embedded shader SOURCE here, on this
+          # machine, with newLibraryWithSource:. If that fails, the whole
+          # feature is worthless however clean the build looked.
+          ./ffmpeg -hide_banner -v verbose -y -i jfk.wav \
+            -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=ggml-base.en.bin:language=en:queue=3:use_gpu=1,ametadata=mode=print" \
+            -f null - > whisper-gpu.log 2>&1 || true
+
+          echo "--- ggml / Metal lines ---"
+          grep -iE "metal|ggml_backend|backend '|using embedded|loaded in" whisper-gpu.log | head -25 || true
+          echo "--- what backend did the filter report ---"
+          grep -E "lavfi\.whisper\.(backend|backend_device)" whisper-gpu.log | head -5 || true
+          echo "--- transcript ---"
+          grep -iE "ask not|country" whisper-gpu.log | head -3 || true
+
+          backend="$(grep -oE "lavfi\.whisper\.backend=[a-z0-9]+" whisper-gpu.log | head -1 | cut -d= -f2)"
+          echo
+          echo "reported backend: ${backend:-none}"
+          if [ "${backend:-}" != "mtl" ]; then
+            echo "::error::whisper ran on '${backend:-nothing}', not Metal — the GPU path did not engage"
+            echo "::error::full log follows"
+            tail -60 whisper-gpu.log
+            exit 1
+          fi
+          echo "Metal engaged: the embedded shaders compiled and ran on this M4."
+
+      - name: The project's own smoke suite
         shell: bash
         run: |
           chmod +x tests/smoke.sh
-          tests/smoke.sh "${GITHUB_WORKSPACE}" "${{ inputs.ffmpeg_version }}" darwin-arm64
+          tests/smoke.sh "${GITHUB_WORKSPACE}" 9.0 darwin-arm64
 
-      - name: Say plainly what the smoke result means for this tag
+      - name: Summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## Mac runner check — ${{ inputs.release_tag }}"
+            echo "## Our Metal build on real Apple Silicon"
             echo
-            echo "- machine: $(sysctl -n hw.model 2>/dev/null || echo unknown) / $(uname -m) / macOS $(sw_vers -productVersion 2>/dev/null || echo '?')"
-            echo "- the binary ran, encoded and decoded audio on this machine"
-            echo "- smoke suite: the Metal assertion fails on any tag before the"
-            echo "  Metal work, which is correct and is the point of running it here"
+            echo "- machine: $(sysctl -n hw.model 2>/dev/null) / $(sysctl -n machdep.cpu.brand_string 2>/dev/null) / macOS $(sw_vers -productVersion 2>/dev/null)"
+            echo "- session: $(launchctl managername 2>/dev/null) (GUI, not a daemon — gate 3 still needs launchctl submit)"
+            if [ -f whisper-gpu.log ]; then
+              echo
+              echo '```'
+              grep -iE "metal|backend '|loaded in|lavfi\.whisper\.backend" whisper-gpu.log | head -20
+              echo '```'
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the whisper log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-gpu-log
+          path: whisper-gpu.log
+          if-no-files-found: warn
 
       - name: Clean up after ourselves
         if: always()
         shell: bash
         run: |
-          # The runner is persistent, so leaving 500 MB of binaries behind each
-          # run is not acceptable.
-          rm -f ./ffmpeg ./ffprobe ./ffplay ./probe.mp3 ./*.tar.gz ./*.tar.gz.sha256 ./*.jar
+          # Persistent runner: leaving half a gigabyte behind every run is not
+          # acceptable. The pinned models under ~/nm-ci-assets are kept on
+          # purpose; everything copied into the workspace is not.
+          rm -f ./ffmpeg ./ffprobe ./ffplay ./probe.mp3 ./build.tar.gz \
+                ./ggml-base.en.bin ./jfk.wav ./whisper-gpu.log ./*.jar
           echo "workspace after cleanup:"
-          ls -la | head -20
+          ls -la | head -15
           df -h . | tail -1
