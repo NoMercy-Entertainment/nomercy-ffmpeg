@@ -117,11 +117,30 @@ RUN chmod +x /test/init/dev.sh \
     && /test/init/dev.sh \
     || (echo "❌ FFmpeg build failed" ; exit 1)
 
+# nmcompat.o (issue #42 / NVENC under WSL2): compiled once here and appended,
+# as a .o rather than a .a, to ffmpeg's --extra-libs below, so it contributes
+# every definition unconditionally and link order cannot matter FOR WHAT IT
+# DEFINES (__isoc23_*, strlcpy/strlcat, arc4random*, _dl_find_object,
+# pidfd_*, hypot/fmod) -- those stay resolvable by anything linked before or
+# after it, once ld has processed this object.
+#
+# Ordering that DOES still matter, and is deliberate below: nmcompat.o's own
+# body calls libm (log2/atan2 for the libmvec forwards, and the versioned
+# hypot/hypotf/fmod/fmodf .symver forwards), so it must be placed BEFORE
+# -lm/-lpthread in FFMPEG_EXTRA_LIBFLAGS -- ld only resolves an object's
+# undefined references against a library that appears LATER on the command
+# line; a library already passed is not revisited. Measured: with nmcompat.o
+# last (after -lm), the configure smoke test fails with "undefined reference
+# to `log2'" / "`hypot@GLIBC_2.2.5'"; with it first, both link cleanly.
+RUN gcc -O2 -fPIC -fvisibility=hidden -fno-builtin -c \
+    /scripts/includes/nmcompat.c -o /build/nmcompat.o \
+    && echo "✅ nmcompat.o built"
+
 # ffmpeg
 RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     && CFLAGS="${CFLAGS} $(cat /build/cflags.txt)" export CFLAGS \
     && LDFLAGS="${LDFLAGS} $(cat /build/ldflags.txt)" export LDFLAGS \
-    && FFMPEG_EXTRA_LIBFLAGS="-lpthread -lm $(cat /build/extra_libflags.txt)" export FFMPEG_EXTRA_LIBFLAGS \
+    && FFMPEG_EXTRA_LIBFLAGS="/build/nmcompat.o -lpthread -lm $(cat /build/extra_libflags.txt)" export FFMPEG_EXTRA_LIBFLAGS \
     && echo "------------------------------------------------------" \
     && echo "🚧 Start building FFmpeg" \
     && echo "------------------------------------------------------" \
@@ -144,8 +163,8 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --enable-filter=all \
     --enable-runtime-cpudetect \
     --extra-version="NoMercy-MediaServer" \
-    --extra-cflags="-static -static-libgcc -static-libstdc++" \
-    --extra-ldflags="-static -static-libgcc -static-libstdc++" \
+    --extra-cflags="-static-libgcc -static-libstdc++" \
+    --extra-ldflags="-no-pie -static-libgcc -static-libstdc++" \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
     || (cat "/ffmpeg_build.log" ; echo "--- last 200 lines of ffbuild/config.log (compiler and linker errors) ---" ; tail -200 "/build/ffmpeg/ffbuild/config.log" 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
@@ -153,10 +172,20 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     && echo "🔎 Verifying ggml CPU variants survived the link" \
     && bash /scripts/includes/verify_ggml_cpu_link.sh \
     && make install >/dev/null 2>&1 \
+    && echo "🔒 Verifying the dynamic-link guard (issue #42 / NVENC under WSL2)" \
+    && floor=$(objdump -T ${PREFIX}/bin/ffmpeg | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1) \
+    && echo "   glibc floor: ${floor}" \
+    && [ "${floor}" = "GLIBC_2.34" ] || (echo "❌ glibc floor moved to ${floor}, expected exactly GLIBC_2.34 -- something changed, stop" ; exit 1) \
+    && stray=$(objdump -p ${PREFIX}/bin/ffmpeg | awk '/NEEDED/{print $2}' \
+        | grep -vE '^(libc|libm|libmvec|libdl|libpthread|librt)\.so|^ld-linux' || true) \
+    && if [ -n "${stray}" ]; then echo "❌ unexpected shared dependency:" ; echo "${stray}" ; exit 1 ; fi \
+    && echo "   NEEDED: $(objdump -p ${PREFIX}/bin/ffmpeg | awk '/NEEDED/{print $2}' | tr '\n' ' ')" \
+    && timeout 10 ${PREFIX}/bin/ffmpeg -hide_banner -version >/dev/null \
+    && echo "✅ dynamic-link guard passed (floor pinned to GLIBC_2.34, NEEDED clean, runs within 10s)" \
     && rm -rf /build/ffmpeg \
     && echo "------------------------------------------------------" \
     && echo "✅ FFmpeg was built successfully" \
-    && echo "------------------------------------------------------" 
+    && echo "------------------------------------------------------"
 
 RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
