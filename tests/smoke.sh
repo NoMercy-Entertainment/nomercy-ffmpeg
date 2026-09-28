@@ -190,6 +190,36 @@ assert_vulkan_startup() {  # bin, platform
   esac
 }
 
+# ggml Metal GPU backend (2026-09-27-metal-backend plan, Task 3): darwin-arm64
+# only, and unlike Vulkan there is no startup check to add here. Global
+# Constraint of that plan is that nothing in this repo's own CI proves Metal
+# actually runs -- only the owner's Apple Silicon Mac can, via
+# tools/metal/verify-on-mac.sh -- so both checks below are pure greps over the
+# artifact, same reasoning as the Vulkan presence check above: they need no
+# execution, so they run for every platform this runner cannot execute at
+# all, which today is every platform metal_platform_has_backend does not
+# already exclude.
+assert_metal_backend_present() {  # bin, platform
+  local bin="$1" platform="$2"
+
+  if ! metal_platform_has_backend "${platform}"; then
+    note "metal: skipped on ${platform} — Metal is darwin-arm64 only (darwin-x86_64 stays off on purpose; freebsd and linux/windows never had a Metal question at all)"
+    return 0
+  fi
+
+  if metal_backend_compiled_in "${bin}"; then
+    ok "metal: ggml Metal backend is linked in (embedded shader library present)"
+  else
+    fail "metal: ${bin} does not carry the ggml Metal backend (or its embedded shader library)"
+  fi
+
+  if metal_metadata_name_is_mtl "${bin}"; then
+    ok "metal: backend metadata name 'MTL' is present"
+  else
+    fail "metal: ${bin} does not carry the 'MTL' backend metadata string"
+  fi
+}
+
 ffmpeg_bin="${WORKSPACE}/ffmpeg"
 ffprobe_bin="${WORKSPACE}/ffprobe"
 
@@ -204,6 +234,7 @@ chmod +x "${ffmpeg_bin}" "${ffprobe_bin}" 2>/dev/null || true
 # to come before the cross-exec early-return, not after it.
 assert_cpu_variant_dispatcher_present "${ffmpeg_bin}" "${PLATFORM}"
 assert_vulkan_backend_present "${ffmpeg_bin}" "${PLATFORM}"
+assert_metal_backend_present "${ffmpeg_bin}" "${PLATFORM}"
 
 # Cross-exec platforms: never execute — validate ELF headers and stop here.
 if spec="$(cross_exec_spec "${PLATFORM}")"; then
