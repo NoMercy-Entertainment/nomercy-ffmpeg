@@ -588,26 +588,25 @@ metal_backend_compiled_in() {
 # comment already warns about for "metal": a check that reports PASS on a
 # build it should fail.
 #
-# The fix is whole-string equality, not containment: the binary holds `MTL`
-# as its own NUL-terminated string (it IS GGML_METAL_NAME), so split on NUL
-# and require an exact line match rather than a substring anywhere in the
-# file. Verified on both real artifacts: the real Metal darwin-arm64 binary
-# has exactly one NUL-delimited "MTL" string, sitting directly among other
-# ggml-metal identifiers (GGML_METAL_DEVICES, ggml_metal_buffer_is_shared,
-# ggml_backend_metal_device_init_backend, "%s: using embedded metal
-# library") -- confirming it really is ggml's own constant and not a
-# coincidence -- while the real v1.0.42 binary has zero (down from a false
-# "1 occurrence" under the old substring check).
+# The obvious fix was whole-string equality instead of containment -- split the
+# binary on NUL and require an exact line match, since `MTL` is its own
+# NUL-terminated string (it IS GGML_METAL_NAME). Verified on both real
+# artifacts from a Linux box: the Metal darwin-arm64 binary had exactly one
+# such string, v1.0.42 had none.
 #
-# `LC_ALL=C` and the OCTAL escape are both load-bearing, and both were paid for
-# on real hardware. An earlier version of this line said `tr` behaved the same
-# "on GNU and BSD alike"; that was asserted from a GNU box and it is wrong. On
-# the Apple Silicon runner this check FAILED against a darwin-arm64 build that
-# does carry Metal and that reported `mtl` at run time seconds earlier in the
-# same job. BSD `tr` wants the \000 spelling, and `grep` over binary input in a
-# UTF-8 locale abandons the line on an invalid multibyte sequence instead of
-# matching it. These tests run on macOS, so the GNU spelling quietly answered
-# "no Metal here" on the one machine that had just finished running Metal.
-metal_metadata_name_is_mtl() {
-	LC_ALL=C tr '\000' '\n' < "$1" | LC_ALL=C grep -qx "MTL"
-}
+# THAT FIX THEN FAILED ON THE APPLE SILICON RUNNER, against a build which does
+# carry Metal and which had reported `lavfi.whisper.backend=mtl` seconds
+# earlier in the same job. Adding LC_ALL=C and the \000 spelling did not rescue
+# it: splitting a 116 MB binary on NUL with `tr` does not behave on macOS the
+# way it does with GNU coreutils.
+#
+# So there is no static MTL check here any more, and adding a third one would
+# be a mistake. The name is three characters: a search for it is either loose
+# enough to match unrelated bytes or exact enough to depend on which libc's
+# tools are installed, and both failure modes have now produced a wrong answer
+# on a real binary -- once a false pass, once a false fail. The claim is
+# instead proven where it can actually be proven: the Metal gates execute the
+# binary and require the filter to report `mtl` itself
+# (.github/workflows/mac-runner-check.yml; tools/metal/verify-on-mac.sh gate
+# 1). metal_backend_compiled_in() above remains the static half, and it is
+# sound because its markers are long and unambiguous.

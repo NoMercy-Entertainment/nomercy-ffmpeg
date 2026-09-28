@@ -195,8 +195,8 @@ assert_vulkan_startup() {  # bin, platform
 # Constraint of that plan is that nothing in this repo's own CI proves Metal
 # actually runs -- only the owner's Apple Silicon Mac can, via
 # tools/metal/verify-on-mac.sh -- so both checks below are pure greps over the
-# artifact, same reasoning as the Vulkan presence check above: they need no
-# execution, so they run for every platform this runner cannot execute at
+# artifact, same reasoning as the Vulkan presence check above: it needs no
+# execution, so it runs for every platform this runner cannot execute at
 # all, which today is every platform metal_platform_has_backend does not
 # already exclude.
 assert_metal_backend_present() {  # bin, platform
@@ -213,11 +213,24 @@ assert_metal_backend_present() {  # bin, platform
     fail "metal: ${bin} does not carry the ggml Metal backend (or its embedded shader library)"
   fi
 
-  if metal_metadata_name_is_mtl "${bin}"; then
-    ok "metal: backend metadata name 'MTL' is present"
-  else
-    fail "metal: ${bin} does not carry the 'MTL' backend metadata string"
-  fi
+  # There is deliberately no static assertion on the `MTL` metadata name here.
+  #
+  # There was one, and it was wrong twice. First as a substring search, which
+  # passed on v1.0.42 — a build with no Metal at all — because that binary
+  # carries an unrelated "UHD_MTL". Then as an exact NUL-delimited match, which
+  # failed on the Apple Silicon runner against a build that does carry Metal
+  # and that had reported lavfi.whisper.backend=mtl seconds earlier in the same
+  # job: splitting a 116 MB binary on NUL with `tr` does not behave on macOS
+  # the way it does with GNU coreutils, and LC_ALL=C plus the \000 spelling did
+  # not rescue it either.
+  #
+  # The name is a three-character string. Any grep for it is either too loose
+  # to mean anything or too exact to survive a second libc's tools, and both
+  # failure modes have now cost a red build. What it was trying to prove is
+  # proven properly elsewhere: the Metal gates run the binary and require the
+  # filter itself to report `mtl` (.github/workflows/mac-runner-check.yml, and
+  # tools/metal/verify-on-mac.sh gate 1). A filter saying what it actually ran
+  # on beats a string search for what it might have been compiled with.
 }
 
 ffmpeg_bin="${WORKSPACE}/ffmpeg"
