@@ -133,11 +133,15 @@ jobs:
           ./ffprobe -hide_banner -v error -show_entries format=duration,bit_rate \
             -of default=noprint_wrappers=1 probe.mp3
 
-          # astats prints "Overall" and "RMS level dB:" on SEPARATE lines; the
-          # first bring-up run asked for both on one line, found nothing, and
-          # reported silence for audio that was fine. Take the last RMS line,
-          # which is the Overall section's.
-          rms="$(./ffmpeg -hide_banner -v error -i probe.mp3 -af astats=metadata=1 \
+          # Two traps, both hit for real on this runner before this worked:
+          #   1. astats puts "Overall" and "RMS level dB:" on SEPARATE
+          #      lines, so asking for both on one line matches nothing.
+          #   2. astats writes its summary at INFO level, and -v error threw
+          #      it away -- the check then reported silence for audio that
+          #      was fine. This repo has been bitten by exactly that before,
+          #      with -v error swallowing ametadata output.
+          # Take the last RMS line: that is the Overall section's.
+          rms="$(./ffmpeg -hide_banner -v info -i probe.mp3 -af astats=metadata=1 \
                  -f null - 2>&1 | awk -F': ' '/RMS level dB/{v=$2} END{print v}')"
           echo "decoded RMS level: ${rms:-unknown} dBFS"
           case "${rms:-}" in
