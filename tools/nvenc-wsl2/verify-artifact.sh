@@ -214,10 +214,23 @@ check_vulkan_libplacebo() {
         cat /tmp/log
     '
     out=$(dcp "$SCRIPT" 2>&1) || true
-    if echo "$out" | grep -qE "RC=(1|[2-9][0-9]*)" && ! echo "$out" | grep -qi "segmentation"; then
-        pass "libplacebo/Vulkan: loader ABSENT fails cleanly (no crash, no interposition)"
+    rc=$(echo "$out" | grep -oE 'RC=[0-9]+' | tail -1 | cut -d= -f2)
+    # A bare nonzero exit proves nothing on its own: 126/127 mean the shell
+    # never even ran the binary (not executable / not found), and a real
+    # crash also exits nonzero -- neither is "ffmpeg failed cleanly". Require
+    # positive evidence instead: ffmpeg's own diagnostic that it couldn't
+    # open the Vulkan loader, with an explicit, RC-independent check for
+    # crash evidence rather than trusting its absence from one pattern.
+    if echo "$out" | grep -qiE "segmentation fault|core dumped|bus error|illegal instruction|aborted"; then
+        fail "libplacebo/Vulkan: loader-absent case crashed (rc=${rc:-?}) instead of failing cleanly"
+        echo "$out"
+    elif [[ "${rc:-}" == "126" || "${rc:-}" == "127" ]]; then
+        fail "libplacebo/Vulkan: loader-absent case never ran the binary (rc=${rc}) -- not evidence of a clean Vulkan-absent failure"
+        echo "$out"
+    elif echo "$out" | grep -qE "Unable to open the libvulkan library|Failed to set value 'vulkan=vk' for option 'init_hw_device'"; then
+        pass "libplacebo/Vulkan: loader ABSENT fails cleanly with its own diagnostic (no crash, no interposition)"
     else
-        fail "libplacebo/Vulkan: loader-absent case did not fail cleanly"
+        fail "libplacebo/Vulkan: loader-absent case did not fail with ffmpeg's own diagnostic (rc=${rc:-?})"
         echo "$out"
     fi
 
@@ -353,16 +366,49 @@ distro_matrix() {
             echo "$out"
         fi
     done
-    for img in debian:11 alpine:latest; do
-        out=$(docker run --rm -v "${WORKSPACE}:/art" -w /art "$img" sh -c \
-            'chmod +x ./ffmpeg; ./ffmpeg -hide_banner -version' 2>&1)
-        if echo "$out" | grep -qE "GLIBC_2\.3[4-9].*not found|not found$"; then
-            pass "distro matrix: ${img} fails as expected (${img} is below the 2.34 floor) -- cost stays visible"
-        else
-            fail "distro matrix: ${img} was expected to fail below the glibc floor but didn't, or failed for a different reason"
-            echo "$out"
-        fi
-    done
+    # debian:11 and alpine:latest are the accepted failures (below the 2.34
+    # floor / musl instead of glibc). A failure to run is only evidence of
+    # THAT if the binary was actually there to fail -- an empty workspace
+    # produces the exact same shell "not found" tail, so both legs first
+    # prove the binary is present before drawing any conclusion from it.
+    out=$(docker run --rm -v "${WORKSPACE}:/art" -w /art debian:11 sh -c \
+        '[ -f ./ffmpeg ] && echo BIN=present || echo BIN=absent
+         chmod +x ./ffmpeg 2>/dev/null
+         ./ffmpeg -hide_banner -version' 2>&1)
+    if ! echo "$out" | grep -q "^BIN=present$"; then
+        fail "distro matrix: debian:11 -- ffmpeg not present in workspace, cannot evaluate the expected failure"
+        echo "$out"
+    elif echo "$out" | grep -qE "GLIBC_2\.3[4-9].*not found"; then
+        pass "distro matrix: debian:11 fails as expected (below the 2.34 floor) -- cost stays visible"
+    else
+        fail "distro matrix: debian:11 was expected to fail below the glibc floor but didn't, or failed for a different reason"
+        echo "$out"
+    fi
+
+    # alpine:latest is musl, not an old glibc: the real failure is the
+    # absence of the ELF interpreter /lib64/ld-linux-x86-64.so.2 (alpine
+    # only ships /lib/ld-musl-*.so.1). ash's exec error for "no such
+    # interpreter" and "no such file" is the SAME text ("not found"), so
+    # that text alone cannot tell a real musl rejection from an empty
+    # workspace -- require positive evidence of both preconditions instead
+    # of trusting the error text.
+    out=$(docker run --rm -v "${WORKSPACE}:/art" -w /art alpine:latest sh -c '
+        [ -f ./ffmpeg ] && echo BIN=present || echo BIN=absent
+        [ -e /lib64/ld-linux-x86-64.so.2 ] && echo INTERP=present || echo INTERP=absent
+        chmod +x ./ffmpeg 2>/dev/null
+        ./ffmpeg -hide_banner -version' 2>&1)
+    if ! echo "$out" | grep -q "^BIN=present$"; then
+        fail "distro matrix: alpine:latest -- ffmpeg not present in workspace, cannot evaluate the expected failure"
+        echo "$out"
+    elif ! echo "$out" | grep -q "^INTERP=absent$"; then
+        fail "distro matrix: alpine:latest -- /lib64/ld-linux-x86-64.so.2 unexpectedly present, cannot attribute the failure to musl"
+        echo "$out"
+    elif echo "$out" | grep -qE "not found$"; then
+        pass "distro matrix: alpine:latest fails as expected (musl has no glibc ELF interpreter, binary confirmed present) -- cost stays visible"
+    else
+        fail "distro matrix: alpine:latest was expected to fail below the glibc floor but didn't, or failed for a different reason"
+        echo "$out"
+    fi
 }
 
 # ---------------------------------------------------------------------------

@@ -236,6 +236,20 @@ int main(void)
         r = wcslcpy(wbuf, L"abcdef", 4);
         CHECK("wcslcpy (truncates)",
               r == 6 && wbuf[3] == L'\0' && wcscmp(wbuf, L"abc") == 0);
+
+        /* Same truncation contract for wcslcat: it must report the total
+         * length it TRIED to build (dstlen + srclen == 6), not the 1
+         * character that actually fit, while still truncating and
+         * NUL-terminating in place. This is the wcslcat-specific half of
+         * the strlcat-family return-value trap the wcslcpy case above
+         * covers for copying -- reviewed as correct by inspection only,
+         * never run. */
+        r = wcslcpy(wbuf, L"ab", 8);
+        CHECK("wcslcpy (for wcslcat setup)", r == 2 && wcscmp(wbuf, L"ab") == 0);
+
+        r = wcslcat(wbuf, L"cdef", 4);
+        CHECK("wcslcat (truncates)",
+              r == 6 && wbuf[3] == L'\0' && wcscmp(wbuf, L"abc") == 0);
     }
 
     /* randomness */
