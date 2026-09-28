@@ -1,0 +1,163 @@
+name: Mac Runner Check
+
+# Prove the self-hosted Apple Silicon runner works, and that a darwin-arm64
+# ffmpeg really runs on it.
+#
+# This exists because everything the pipeline knows about darwin-arm64 today is
+# either built in a Linux container or asserted statically over the artifact.
+# The Mac mini runner was idle and unused by any workflow; this is the smallest
+# thing that shows it picking up a job and executing our binary end to end.
+#
+# It fetches a published release rather than building anything, so it costs
+# minutes instead of hours and needs no build to have run first.
+#
+# runs-on carries four labels deliberately. The fleet also holds an Intel Mac
+# and the Linux beast-unit, and #74 was exactly this mistake: one unqualified
+# label matched eight jobs onto whatever machine carried it. `macOS` alone
+# would reach the Intel Mac, where an arm64 binary cannot even start.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to fetch the darwin-arm64 build from'
+        required: true
+        default: 'v1.0.42'
+      ffmpeg_version:
+        description: 'FFmpeg version in the archive name'
+        required: true
+        default: '9.0'
+
+concurrency:
+  group: mac-runner-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: [self-hosted, macOS, ARM64, apple-silicon]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: What machine is this
+        shell: bash
+        run: |
+          echo "model:   $(sysctl -n hw.model 2>/dev/null || echo unknown)"
+          echo "chip:    $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
+          echo "arch:    $(uname -m)"
+          echo "macOS:   $(sw_vers -productVersion 2>/dev/null || echo unknown)"
+          echo "cores:   $(sysctl -n hw.ncpu 2>/dev/null || echo '?')"
+          echo "bash:    ${BASH_VERSION}"
+          # Metal is the whole reason this runner matters, so say up front
+          # whether the OS can see a GPU at all.
+          echo "GPU:     $(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Chipset Model/{print $2; exit}' || echo 'not reported')"
+          # A login session has a window server attached; the runner daemon
+          # normally does not. Gate 3 of the Metal work turns on this
+          # difference, so record which one we are in.
+          echo "session: $(launchctl managername 2>/dev/null || echo unknown)"
+
+      - name: Fetch the published darwin-arm64 build
+        shell: bash
+        run: |
+          set -uo pipefail
+          tag="${{ inputs.release_tag }}"
+          ver="${{ inputs.ffmpeg_version }}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          archive="ffmpeg-${ver}-darwin-arm64-${tag}.tar.gz"
+
+          echo "fetching ${base}/${archive}"
+          curl -fsSL --retry 3 -o "${archive}" "${base}/${archive}" || {
+            echo "::error::could not download ${archive} from ${tag}"; exit 1; }
+          curl -fsSL --retry 3 -o "${archive}.sha256" "${base}/${archive}.sha256" || {
+            echo "::error::no .sha256 sidecar for ${archive}"; exit 1; }
+
+          # Every release ships a digest sidecar; checking it is the difference
+          # between testing our build and testing whatever arrived.
+          want="$(tr -d ' \n\r' < "${archive}.sha256" | cut -c1-64)"
+          got="$(shasum -a 256 "${archive}" | cut -d' ' -f1)"
+          if [ "${want}" != "${got}" ]; then
+            echo "::error::digest mismatch: sidecar ${want}, downloaded ${got}"
+            exit 1
+          fi
+          echo "digest ok: ${got}"
+
+          tar -xzf "${archive}"
+          chmod +x ./ffmpeg ./ffprobe
+          if ! file ./ffmpeg | grep -q 'arm64'; then
+            echo "::error::not an arm64 binary: $(file ./ffmpeg)"
+            exit 1
+          fi
+          file ./ffmpeg
+
+      - name: Run it — version, and what it was built with
+        shell: bash
+        run: |
+          ./ffmpeg -hide_banner -version | head -3
+          echo "---"
+          echo "Metal linked into THIS binary: $(otool -L ./ffmpeg | grep -c 'Metal.framework') framework reference(s)"
+          echo "embedded Metal shader section: $(otool -l ./ffmpeg | grep -c '__ggml_metallib') section(s)"
+          echo "(v1.0.42 predates the Metal work, so both are expected to be 0 —"
+          echo " they become 1 once a build carrying Metal is tested here.)"
+
+      - name: A real transcode, not just --version
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Encode, decode, and measure: a binary that merely prints its
+          # version has proved almost nothing about whether it runs.
+          ./ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "sine=frequency=440:duration=5" \
+            -c:a libmp3lame -b:a 128k probe.mp3
+          [ -s probe.mp3 ] || { echo "::error::no mp3 produced"; exit 1; }
+          echo "encoded probe.mp3: $(wc -c < probe.mp3) bytes"
+
+          ./ffprobe -hide_banner -v error -show_entries format=duration,bit_rate \
+            -of default=noprint_wrappers=1 probe.mp3
+
+          # Decode it back and have ffmpeg measure the result itself, so the
+          # check fails if the audio is silence rather than a 440 Hz tone.
+          rms="$(./ffmpeg -hide_banner -v error -i probe.mp3 -af astats=metadata=1 \
+                 -f null - 2>&1 | awk -F': ' '/Overall.*RMS level dB/{print $2; exit}')"
+          echo "decoded RMS level: ${rms:-unknown} dBFS"
+          case "${rms:-}" in
+            ""|*inf*) echo "::error::decoded audio is silent or unmeasurable"; exit 1 ;;
+          esac
+
+      - name: The project's own smoke suite (Metal assertion expected to FAIL on a pre-Metal release)
+        # continue-on-error, with a reason rather than to paper over a problem.
+        # smoke.sh now asserts the Metal backend for darwin-arm64, and any
+        # release before the Metal work genuinely does not carry it. On
+        # v1.0.42 that assertion SHOULD fail, and seeing it fail here is a
+        # live negative control on real Apple Silicon: it proves the check can
+        # say no. Point this workflow at a tag that does carry Metal and the
+        # same step must go green -- if it stays red then, that is a real
+        # finding.
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x tests/smoke.sh
+          tests/smoke.sh "${GITHUB_WORKSPACE}" "${{ inputs.ffmpeg_version }}" darwin-arm64
+
+      - name: Say plainly what the smoke result means for this tag
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Mac runner check — ${{ inputs.release_tag }}"
+            echo
+            echo "- machine: $(sysctl -n hw.model 2>/dev/null || echo unknown) / $(uname -m) / macOS $(sw_vers -productVersion 2>/dev/null || echo '?')"
+            echo "- the binary ran, encoded and decoded audio on this machine"
+            echo "- smoke suite: the Metal assertion fails on any tag before the"
+            echo "  Metal work, which is correct and is the point of running it here"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Clean up after ourselves
+        if: always()
+        shell: bash
+        run: |
+          # The runner is persistent, so leaving 500 MB of binaries behind each
+          # run is not acceptable.
+          rm -f ./ffmpeg ./ffprobe ./ffplay ./probe.mp3 ./*.tar.gz ./*.tar.gz.sha256 ./*.jar
+          echo "workspace after cleanup:"
+          ls -la | head -20
+          df -h . | tail -1
