@@ -597,11 +597,17 @@ metal_backend_compiled_in() {
 # ggml_backend_metal_device_init_backend, "%s: using embedded metal
 # library") -- confirming it really is ggml's own constant and not a
 # coincidence -- while the real v1.0.42 binary has zero (down from a false
-# "1 occurrence" under the old substring check). `tr` translates NUL bytes as
-# a plain byte substitution on every coreutils this project's tests run on
-# (GNU and BSD alike -- it is not a C-string-based tool the way `basename`,
-# `read` or an old `awk` can be); verified here against both real, 100+ MB
-# binaries, not assumed.
+# "1 occurrence" under the old substring check).
+#
+# `LC_ALL=C` and the OCTAL escape are both load-bearing, and both were paid for
+# on real hardware. An earlier version of this line said `tr` behaved the same
+# "on GNU and BSD alike"; that was asserted from a GNU box and it is wrong. On
+# the Apple Silicon runner this check FAILED against a darwin-arm64 build that
+# does carry Metal and that reported `mtl` at run time seconds earlier in the
+# same job. BSD `tr` wants the \000 spelling, and `grep` over binary input in a
+# UTF-8 locale abandons the line on an invalid multibyte sequence instead of
+# matching it. These tests run on macOS, so the GNU spelling quietly answered
+# "no Metal here" on the one machine that had just finished running Metal.
 metal_metadata_name_is_mtl() {
-	tr '\0' '\n' < "$1" | grep -qx "MTL"
+	LC_ALL=C tr '\000' '\n' < "$1" | LC_ALL=C grep -qx "MTL"
 }

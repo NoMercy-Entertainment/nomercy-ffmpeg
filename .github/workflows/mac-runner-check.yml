@@ -150,34 +150,77 @@ jobs:
 
       - name: Fetch the whisper model and sample
         shell: bash
+        env:
+          # secrets.PAT already carries org-wide read access — reusable-docker-
+          # build.yml checks out the private nomercy-ffmpeg-secrets repo with
+          # it. GITHUB_TOKEN would not do: it is scoped to this repository, and
+          # the models live in sibling repos behind draft releases.
+          PAT: ${{ secrets.PAT }}
         run: |
           set -uo pipefail
-          # Both public and pinned by digest. Downloading a model without
-          # checking what came back is how a green run measures something else.
+          # The models come from the org's own repos, not HuggingFace. The
+          # first attempt pulled ggml-base.bin from HuggingFace and sat in
+          # that one step for 26 minutes before the job was abandoned, while
+          # the same runner had pulled our 152 MB build from GitHub 36 seconds
+          # earlier. HuggingFace itself was fine — 52 MB/s measured from a
+          # different machine at the same moment — so it is this runner's
+          # route to it. Our own hosting is faster, is already how the media
+          # server gets these files, and needs no third party to be reachable.
           CACHE="${HOME}/nm-ci-assets"
           mkdir -p "${CACHE}"
-          fetch() {  # fetch <url> <name> <sha256>
-            local url="$1" out="${CACHE}/$2" want="$3" got
+
+          # fetch_asset <repo> <asset-id> <name> <sha256>
+          # By asset id through the API: these releases are DRAFTS, whose
+          # browser download URLs do not resolve, and this needs no gh or jq
+          # on the runner. The ids are pinned deliberately — a silent jump to
+          # a newer model would change what is being measured.
+          fetch_asset() {
+            local repo="$1" id="$2" out="${CACHE}/$3" want="$4" got
             if [ -f "${out}" ]; then
               got="$(shasum -a 256 "${out}" | cut -d' ' -f1)"
-              if [ "${got}" = "${want}" ]; then echo "cached:  $2"; return 0; fi
-              echo "::warning::cached $2 digest ${got} != ${want} — refetching"
+              if [ "${got}" = "${want}" ]; then echo "cached:  $3"; return 0; fi
+              echo "::warning::cached $3 digest ${got} != ${want} — refetching"
             fi
-            curl -fsSL --retry 3 -o "${out}.part" "${url}" || {
-              echo "::error::download failed: ${url}"; return 1; }
+            # --speed-limit/--speed-time abort a stalled transfer instead of
+            # hanging until the job timeout, and --max-time caps the whole
+            # thing. -w prints the rate so a slow route is visible next time
+            # rather than looking like a hang.
+            curl -fL --retry 3 --max-time 900 --speed-limit 102400 --speed-time 60 \
+                 -H "Authorization: Bearer ${PAT}" \
+                 -H "Accept: application/octet-stream" \
+                 -o "${out}.part" \
+                 -w "  %{size_download} bytes at %{speed_download} B/s in %{time_total}s\n" \
+                 "https://api.github.com/repos/${repo}/releases/assets/${id}" || {
+              echo "::error::download failed or stalled: ${repo} asset ${id}"; return 1; }
             got="$(shasum -a 256 "${out}.part" | cut -d' ' -f1)"
             if [ "${got}" != "${want}" ]; then
-              echo "::error::$2: expected ${want}, got ${got}"; rm -f "${out}.part"; return 1
+              echo "::error::$3: expected ${want}, got ${got}"; rm -f "${out}.part"; return 1
             fi
-            mv "${out}.part" "${out}"; echo "fetched: $2"
+            mv "${out}.part" "${out}"; echo "fetched: $3"
           }
-          fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" \
-                "ggml-base.en.bin" \
-                "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002" || exit 1
-          fetch "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav" \
-                "jfk.wav" \
-                "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e" || exit 1
-          cp "${CACHE}/ggml-base.en.bin" "${CACHE}/jfk.wav" ./
+
+          # nomercy-whisper-models, release v2026.08.09 (draft), ggml-base.bin.
+          # Multilingual base rather than base.en; the filter is given
+          # language=en explicitly below, so that costs nothing here.
+          fetch_asset "NoMercy-Entertainment/nomercy-whisper-models" 507104388 \
+                      "ggml-base.bin" \
+                      "c2dad44135a48bc7c5a93564f4cd5cc8735ba8822999e358eb31f28d14d72a8b" || exit 1
+
+          # jfk.wav is 344 KB and comes from the pinned whisper.cpp tag; it is
+          # the sample the upstream project ships and is not worth mirroring.
+          if [ ! -f "${CACHE}/jfk.wav" ]; then
+            curl -fsSL --retry 3 --max-time 120 \
+                 -o "${CACHE}/jfk.wav.part" \
+                 "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav" || {
+              echo "::error::could not fetch jfk.wav"; exit 1; }
+            got="$(shasum -a 256 "${CACHE}/jfk.wav.part" | cut -d' ' -f1)"
+            [ "${got}" = "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e" ] || {
+              echo "::error::jfk.wav digest ${got}"; exit 1; }
+            mv "${CACHE}/jfk.wav.part" "${CACHE}/jfk.wav"
+          fi
+          echo "jfk.wav ready"
+
+          cp "${CACHE}/ggml-base.bin" "${CACHE}/jfk.wav" ./
 
       - name: THE question — does Metal engage on this M4
         shell: bash
@@ -188,7 +231,7 @@ jobs:
           # machine, with newLibraryWithSource:. If that fails, the whole
           # feature is worthless however clean the build looked.
           ./ffmpeg -hide_banner -v verbose -y -i jfk.wav \
-            -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=ggml-base.en.bin:language=en:queue=3:use_gpu=1,ametadata=mode=print" \
+            -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=ggml-base.bin:language=en:queue=3:use_gpu=1,ametadata=mode=print" \
             -f null - > whisper-gpu.log 2>&1 || true
 
           echo "--- ggml / Metal lines ---"
@@ -248,7 +291,7 @@ jobs:
           # acceptable. The pinned models under ~/nm-ci-assets are kept on
           # purpose; everything copied into the workspace is not.
           rm -f ./ffmpeg ./ffprobe ./ffplay ./probe.mp3 ./build.tar.gz \
-                ./ggml-base.en.bin ./jfk.wav ./whisper-gpu.log ./*.jar
+                ./ggml-base.bin ./jfk.wav ./whisper-gpu.log ./*.jar
           echo "workspace after cleanup:"
           ls -la | head -15
           df -h . | tail -1
