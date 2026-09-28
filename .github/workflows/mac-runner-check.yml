@@ -11,6 +11,12 @@ name: Mac Runner Check
 # It fetches a published release rather than building anything, so it costs
 # minutes instead of hours and needs no build to have run first.
 #
+# Measured on the first run: this runner reports `launchctl managername` =
+# Aqua, i.e. it runs inside a GUI session with a window server attached. So it
+# does NOT by itself reproduce the daemon context the media server runs in --
+# verify-on-mac.sh has to create that itself, which it does via launchctl
+# submit. Do not treat "it worked on the runner" as "it works as a service".
+#
 # runs-on carries four labels deliberately. The fleet also holds an Intel Mac
 # and the Linux beast-unit, and #74 was exactly this mistake: one unqualified
 # label matched eight jobs onto whatever machine carried it. `macOS` alone
@@ -69,8 +75,12 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          tag="${{ inputs.release_tag }}"
-          ver="${{ inputs.ffmpeg_version }}"
+          # `inputs` is only populated for workflow_dispatch; on the push
+          # trigger above it is empty and the declared defaults do NOT apply.
+          # Measured, not guessed: the first run built the URL
+          # ".../releases/download//ffmpeg--darwin-arm64-.tar.gz" and 404'd.
+          tag="${{ inputs.release_tag || 'v1.0.42' }}"
+          ver="${{ inputs.ffmpeg_version || '9.0' }}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
           archive="ffmpeg-${ver}-darwin-arm64-${tag}.tar.gz"
 
