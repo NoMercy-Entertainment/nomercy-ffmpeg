@@ -17,6 +17,15 @@ name: Mac Runner Check
 # would reach the Intel Mac, where an arm64 binary cannot even start.
 
 on:
+  # TEMPORARY, REMOVE BEFORE MERGING.
+  # workflow_dispatch only works for workflows that exist on the default
+  # branch, so a brand-new workflow cannot be started by hand from a feature
+  # branch -- there is nothing on master to dispatch. This push trigger is
+  # scoped to this one branch purely to bring the runner up; once the file
+  # reaches master, workflow_dispatch below is the real entry point and this
+  # block must go.
+  push:
+    branches: [feat/metal-backend]
   workflow_dispatch:
     inputs:
       release_tag:
