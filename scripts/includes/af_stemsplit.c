@@ -197,6 +197,19 @@ typedef struct SSNet {
     SSLayer out;
 } SSNet;
 
+/* The stemsplit version, MAJOR.MINOR.PATCH (https://semver.org), kept in this
+ * one place. `ffmpeg -filters` shows it, the log names it once per filter,
+ * and every output frame carries it as lavfi.stemsplit.version. So any binary
+ * says which stemsplit it contains -- including nomercy-ffmpeg's, which
+ * carries this file verbatim. It must equal the newest version heading in
+ * docs/contract-changelog.md (tests/run_tests.sh checks that) and the release
+ * tag, v<version> (the release workflow checks that).
+ *   MAJOR: a change that breaks existing users -- an option, a default, an
+ *          output pad, or existing output.
+ *   MINOR: something new that leaves existing output unchanged.
+ *   PATCH: a fix that changes nothing a user relies on. */
+#define SS_VERSION        "1.0.0"
+
 #define SS_MODEL_ARCH     "spleeter-unet-v1"
 #define SS_NB_INSTRUMENTS 2
 #define SS_KERNEL         5
@@ -1331,6 +1344,9 @@ static int ss_model_load(AVFilterContext *ctx, int load_data)
         goto done;
     }
 
+    /* Here, not in init(): the ffmpeg CLI runs init() twice per command line,
+     * and this point is reached once per filter that processes audio. */
+    av_log(ctx, AV_LOG_INFO, "stemsplit: version %s.\n", SS_VERSION);
     av_log(ctx, AV_LOG_INFO,
            "stemsplit: model '%s' weights loaded (100 tensors); instruments: %s.\n",
            s->model_path, avail);
@@ -2988,8 +3004,10 @@ static int ss_push_outputs(AVFilterContext *ctx, AVFrame **out)
          * through on the way to ff_filter_frame -- normal emission, drain
          * and silence fill-in all funnel here -- so tagging it here, rather
          * than at any one of those producers, guarantees every frame that is
-         * sent says which backend (and, in nomercy-ffmpeg builds, which CPU
-         * variant) produced it. */
+         * sent says which stemsplit version and which backend (and, in
+         * nomercy-ffmpeg builds, which CPU variant) produced it. */
+        av_dict_set(&frame->metadata, "lavfi.stemsplit.version",
+                    SS_VERSION, 0);
 #if SS_NM_GGML
         av_dict_set(&frame->metadata, "lavfi.stemsplit.cpu_variant",
                     nm_ggml_cpu_variant_name(), 0);
@@ -3803,7 +3821,7 @@ static const AVFilterPad ss_inputs[] = {
 
 const FFFilter ff_af_stemsplit = {
     .p.name        = "stemsplit",
-    .p.description = NULL_IF_CONFIG_SMALL("Separate music into vocal and accompaniment stems."),
+    .p.description = NULL_IF_CONFIG_SMALL("Separate music into vocal and accompaniment stems (stemsplit " SS_VERSION ")."),
     .p.priv_class  = &stemsplit_class,
     /* Output pads are appended in init(); there is no FILTER_OUTPUTS. */
     .p.flags       = AVFILTER_FLAG_DYNAMIC_OUTPUTS,
