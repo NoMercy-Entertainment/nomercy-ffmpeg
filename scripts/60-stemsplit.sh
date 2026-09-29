@@ -5,8 +5,43 @@
 #/*  https://github.com/Fill84 */#
 #/******************************/#
 
-# Copy the custom filter source
-cp /scripts/includes/af_stemsplit.c /build/ffmpeg/libavfilter/af_stemsplit.c
+# The filter source comes from its own repository, pinned, the same way every
+# other component that is not in the base image does.
+#
+# It used to be a copy under scripts/includes/, kept in step by hand. That
+# stopped working exactly the way hand-copying always stops working: the copy
+# picked up a second `#define SS_VERSION "1.0.0"` ninety-six lines above the
+# real one. It compiled silently -- both replacement lists were identical, so
+# no warning -- and would only have broken at the next version bump, in a
+# place nobody would think to look.
+#
+# Two lines below are the whole contract. Bump them together to take a new
+# stemsplit release; nothing else in this repository needs to change.
+#
+# The digest is what actually guarantees the source, not the tag: a tag can be
+# moved, a digest cannot. A mismatch stops the build rather than quietly
+# compiling something nobody reviewed.
+stemsplit_version=1.0.0
+stemsplit_sha256=b2e52dbcb48e7622a233c03d9a4357f92fb8b7080a4023d70717a8656148f173
+
+stemsplit_url="https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit/raw/tag/v${stemsplit_version}/src/af_stemsplit.c"
+stemsplit_dst=/build/ffmpeg/libavfilter/af_stemsplit.c
+
+log "Step 0: Fetching af_stemsplit.c from ffmpeg-stemsplit v${stemsplit_version}"
+if ! curl -fsSL --retry 3 --max-time 120 -o "${stemsplit_dst}" "${stemsplit_url}"; then
+    log "  ✗ ERROR: could not fetch ${stemsplit_url}"
+    exit 1
+fi
+
+stemsplit_got=$(sha256sum "${stemsplit_dst}" | cut -d' ' -f1)
+if [ "${stemsplit_got}" != "${stemsplit_sha256}" ]; then
+    log "  ✗ ERROR: af_stemsplit.c digest mismatch"
+    log "      expected ${stemsplit_sha256}"
+    log "      got      ${stemsplit_got}"
+    rm -f "${stemsplit_dst}"
+    exit 1
+fi
+log "  ✓ af_stemsplit.c v${stemsplit_version} fetched and verified ($(wc -c < "${stemsplit_dst}") bytes)"
 
 # 1. Register the filter extern declaration in allfilters.c
 echo "Step 1: Adding extern declaration to allfilters.c" > /ffmpeg_build.log
