@@ -261,7 +261,10 @@ typedef struct StemSplitContext {
                                                * set in init() and clear in
                                                * ss_config_input(); freed in
                                                * ss_model_free */
-    int                         weights_ready; /* ss_model_load(ctx, 1) has run */
+    int                         weights_ready; /* ss_model_load(ctx, 1) has run --
+                                               * from ss_config_input(), or
+                                               * already from init() when
+                                               * debug_input is set */
     struct ggml_backend        *backend;     /* CPU or GPU, see ss_backend_init */
     SSNet    nets[SS_NB_INSTRUMENTS];
     int      nb_instruments;
@@ -934,9 +937,8 @@ static int ss_backend_init(AVFilterContext *ctx)
 
 /* nomercy-ffmpeg's nm_ggml layer: a GPU when one is usable and use_gpu allows
  * it, otherwise the CPU instruction-set variant ggml_cpu_dispatch.c selected
- * for this machine. This is the backend selection nomercy-ffmpeg's own copy of
- * this filter has always had, line for line, so a binary built there behaves
- * exactly as before.
+ * for this machine. This keeps the same behaviour as nomercy-ffmpeg's own
+ * copy of this filter, so a binary built there behaves as before.
  *
  * nm_ggml_gpu_count() is called whatever use_gpu says, not behind an &&:
  * nm_ggml_cpu.h requires its functions to be called unconditionally, because
@@ -966,6 +968,9 @@ static int ss_backend_init(AVFilterContext *ctx)
     }
     if (nm_ggml_backend_notice())
         av_log(ctx, AV_LOG_INFO, "stemsplit: %s.\n", nm_ggml_backend_notice());
+    /* docker/build.sh and tests/run_tests.sh both grep for this exact
+     * wording ("ggml cpu variant") to tell an nm build from a stock one --
+     * keep it byte for byte if it ever changes. */
     av_log(ctx, AV_LOG_INFO, "stemsplit: ggml cpu variant '%s'.\n",
            nm_ggml_cpu_variant_name());
     av_log(ctx, AV_LOG_INFO, "stemsplit: ggml backend '%s' (%s).\n",
@@ -985,26 +990,61 @@ static int ss_backend_init(AVFilterContext *ctx)
  * file actually as long as its own tensor table says it has to be.
  *
  * gguf_get_data_offset() is where the data section starts (padded to the
- * file's alignment); every tensor's offset is relative to that, so the
- * required file length is the data offset plus the furthest a tensor's own
- * offset and size reach. */
+ * file's alignment); every tensor's offset is relative to that. whisper
+ * 1.9.1's gguf.cpp then reads the whole *padded* data section -- the last
+ * tensor's own end rounded up to gguf_get_alignment(), not its raw end -- so
+ * the required file length has to include that padding too, or a download
+ * cut only in the last few bytes of that padding still passes here and fails
+ * later, at configure time.
+ *
+ * gguf_get_data_offset/_get_tensor_offset/_get_tensor_size all return size_t
+ * (unsigned); every conversion to the int64_t this function works in is
+ * guarded below so that a value too large to represent as int64_t, or an
+ * addition that would overflow it, is refused as malformed rather than
+ * silently wrapping into a small or negative "need" that a short file would
+ * then pass. */
 static int ss_check_model_size(AVFilterContext *ctx, struct gguf_context *gguf,
                                 const char *path)
 {
     int64_t n_tensors = gguf_get_n_tensors(gguf);
-    int64_t need = (int64_t) gguf_get_data_offset(gguf);
+    size_t  data_offset_sz = gguf_get_data_offset(gguf);
+    size_t  alignment_sz = gguf_get_alignment(gguf);
+    int64_t need;
     int64_t max_end = 0;
+    int64_t padded_end;
     FILE *f;
     int64_t have;
     int64_t i;
 
+    if (data_offset_sz > (size_t) INT64_MAX || alignment_sz == 0 ||
+        alignment_sz > (size_t) INT64_MAX)
+        goto malformed;
+    need = (int64_t) data_offset_sz;
+
     for (i = 0; i < n_tensors; i++) {
-        int64_t end = (int64_t) gguf_get_tensor_offset(gguf, i) +
-                      (int64_t) gguf_get_tensor_size(gguf, i);
+        size_t  offset_sz = gguf_get_tensor_offset(gguf, i);
+        size_t  size_sz   = gguf_get_tensor_size(gguf, i);
+        int64_t offset, size, end;
+
+        if (offset_sz > (size_t) INT64_MAX || size_sz > (size_t) INT64_MAX)
+            goto malformed;
+        offset = (int64_t) offset_sz;
+        size   = (int64_t) size_sz;
+        if (offset > INT64_MAX - size)
+            goto malformed;
+        end = offset + size;
         if (end > max_end)
             max_end = end;
     }
-    need += max_end;
+
+    /* GGML_PAD(max_end, alignment) rounds up to the next multiple of
+     * alignment; guard the round-up itself before applying the macro. */
+    if (max_end > INT64_MAX - ((int64_t) alignment_sz - 1))
+        goto malformed;
+    padded_end = GGML_PAD(max_end, (int64_t) alignment_sz);
+    if (need > INT64_MAX - padded_end)
+        goto malformed;
+    need += padded_end;
 
     /* ggml_fopen() is the same UTF-8-safe opener gguf_init_from_file() itself
      * used to open this same path a moment ago, so a path that just worked
@@ -1051,6 +1091,17 @@ static int ss_check_model_size(AVFilterContext *ctx, struct gguf_context *gguf,
     }
 
     return 0;
+
+malformed:
+    /* AVERROR_INVALIDDATA, not AVERROR(EIO): every EIO return above and in
+     * ss_model_load's truncation check means "the file is shorter than it
+     * should be" (an I/O-shaped problem with a real file); this path means
+     * the tensor table itself describes an offset, size or file length that
+     * no real file could have, which is a data problem, not an I/O one. */
+    av_log(ctx, AV_LOG_ERROR,
+           "Model '%s' is malformed: a tensor's offset or size does not fit "
+           "a real file.\n", path);
+    return AVERROR_INVALIDDATA;
 }
 
 /* Opens and validates the model.
@@ -1071,7 +1122,9 @@ static int ss_check_model_size(AVFilterContext *ctx, struct gguf_context *gguf,
  * the graph that actually processes audio, so this is where reading the
  * weights, and opening a GPU, happens once instead of twice. The data path is
  * the same gguf_init_from_file() call as ever, so the weights land in memory
- * exactly as they always have.
+ * exactly as they always have. The one exception is the debug_input path
+ * (design section 9.2): init() calls this with load_data == 1 itself, before
+ * any config_props, because that path never reaches config_props at all.
  */
 static int ss_model_load(AVFilterContext *ctx, int load_data)
 {
@@ -3509,7 +3562,15 @@ static av_cold int init(AVFilterContext *ctx)
 
     /* Bridge ggml's own log output (including gguf_init_from_file's internal
      * warnings, e.g. "invalid magic characters") to av_log at matching
-     * severity, before anything below can trigger it. */
+     * severity, before anything below can trigger it. Only the validation
+     * pass runs from here, though: the ggml messages from actually reading
+     * the weights and creating the backend now come later, at configure
+     * time (ss_config_input), by which point the process-wide sink this
+     * claims may belong to a different instance -- so those messages' prefix
+     * can name that other instance instead of this one. That is a cosmetic
+     * misattribution, not a use-after-free: releasing the sink is
+     * ownership-checked (ss_log_owner), so an instance can only release a
+     * sink it still owns. */
     ss_log_claim(ctx);
 
 #if SS_NM_GGML
@@ -3522,7 +3583,9 @@ static av_cold int init(AVFilterContext *ctx)
     (void) nm_ggml_gpu_usable();
 #endif
 
-    /* Validation only: the weights are read in ss_config_input(). */
+    /* Validation only: the weights are read in ss_config_input() -- except
+     * for the debug_input path below, which reads them here instead because
+     * it never reaches config_props. */
     ret = ss_model_load(ctx, 0);
     if (ret < 0)
         return ret;
