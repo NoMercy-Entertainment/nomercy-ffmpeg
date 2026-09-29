@@ -39,6 +39,15 @@
  * rate and layout on the way out (ss_rs_*), so a 24-bit 96 kHz file comes back
  * out 24-bit and 96 kHz instead of silently becoming a 44.1 kHz one.
  *
+ * The networks run on ggml's CPU backend unless `use_gpu=1` asks for a GPU and
+ * the ggml this is linked against has a GPU backend with a usable device
+ * (ss_backend_init). Built inside nomercy-ffmpeg, that choice goes through its
+ * nm_ggml layer (nm_ggml_cpu.h), which also picks the CPU instruction-set
+ * variant this machine runs and guards against Vulkan drivers that crash a
+ * statically linked binary; built anywhere else, it uses plain ggml. The same
+ * source file serves both. A GPU that cannot run the graph falls back to the
+ * CPU rather than failing (ss_graph_build).
+ *
  * `debug_input` remains an internal parity hook: it injects a spectrogram
  * straight from disk, runs the networks on it once and dumps every layer tap
  * for the per-layer comparison of design section 9.2. It bypasses the audio
@@ -71,9 +80,28 @@
 #include <ggml-backend.h>
 #include <ggml-cpu.h>
 #include <gguf.h>
+
+/* nomercy-ffmpeg installs nm_ggml_cpu.h next to ggml's own headers: its layer
+ * over ggml's backend registry, which picks the CPU instruction-set variant
+ * this machine runs and guards the registry against Vulkan drivers that crash
+ * a statically linked binary. Where the header exists this filter must go
+ * through that layer (contract spec section 7); where it does not -- any
+ * other FFmpeg build, which is what install.sh targets -- it uses plain ggml.
+ * One source file serves both, so the two repositories carry it byte for
+ * byte. __has_include is nested because a preprocessor that lacks it cannot
+ * parse it inside a single #if. */
+#if defined(__has_include)
+#if __has_include("nm_ggml_cpu.h")
+#define SS_NM_GGML 1
 #include "nm_ggml_cpu.h"
+#endif
+#endif
+#ifndef SS_NM_GGML
+#define SS_NM_GGML 0
+#endif
 
 #include "libavutil/avassert.h"
+#include "libavutil/avstring.h"
 #include "libavutil/file_open.h"
 #include "libavutil/opt.h"
 #include "libavutil/channel_layout.h"
@@ -197,6 +225,12 @@ typedef struct StemSplitContext {
      * and the log line and lavfi.stemsplit.backend metadata must report what
      * ran, not what was asked for. */
     int      gpu_active;
+    /* The device behind gpu_active, for the log and the metadata: ggml's
+     * registry name folded to lower case ("vulkan"), and the device's own
+     * description ("NVIDIA GeForce RTX 3070"). The description belongs to
+     * ggml, which keeps its devices for the life of the process. */
+    char        gpu_name[32];
+    const char *gpu_desc;
     char    *dump_dir;
     char    *debug_input_path;
 
@@ -221,10 +255,14 @@ typedef struct StemSplitContext {
 
     /* Model loading (Task 6): 100 GGUF tensors resolved by name into two
      * SSNet structures and validated by dtype and shape. */
-    struct ggml_context        *gguf_ctx;    /* owns all tensor metadata and data;
-                                               * created by gguf_init_from_file with
-                                               * no_alloc=false, freed in ss_model_free */
-    struct ggml_backend        *backend;     /* CPU or GPU, see nm_ggml_backend_init */
+    struct ggml_context        *gguf_ctx;    /* owns all tensor metadata, and the
+                                               * data once weights_ready: created by
+                                               * gguf_init_from_file, with no_alloc
+                                               * set in init() and clear in
+                                               * ss_config_input(); freed in
+                                               * ss_model_free */
+    int                         weights_ready; /* ss_model_load(ctx, 1) has run */
+    struct ggml_backend        *backend;     /* CPU or GPU, see ss_backend_init */
     SSNet    nets[SS_NB_INSTRUMENTS];
     int      nb_instruments;
     char    *instrument_names[SS_NB_INSTRUMENTS];
@@ -481,6 +519,30 @@ static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
     av_log(ctx, av_log_level, "%s", text);
 }
 
+/* Which instance currently owns ggml's process-wide log callback. The same
+ * rule as nomercy-ffmpeg's whisper filter (af_whisper.c, nm_whisper_log_owner):
+ * every init() claims the sink for itself, and uninit() gives it back only if
+ * it is still the owner. Otherwise tearing down the FIRST of two stemsplit
+ * filters in a graph would unregister the SECOND one's callback, and that
+ * survivor's ggml messages would go straight to stderr, around -loglevel.
+ * Read and written only from init() and uninit(), which FFmpeg runs on one
+ * thread per graph -- the same assumption af_whisper.c makes. */
+static const AVFilterContext *ss_log_owner;
+
+static void ss_log_claim(AVFilterContext *ctx)
+{
+    ggml_log_set(cb_log, ctx);
+    ss_log_owner = ctx;
+}
+
+static void ss_log_release(AVFilterContext *ctx)
+{
+    if (ss_log_owner != ctx)
+        return;
+    ggml_log_set(NULL, NULL);
+    ss_log_owner = NULL;
+}
+
 /* Looks up one tensor by name and validates its dtype and shape, naming the
  * offending tensor in every failure message (design section 10). Returns
  * NULL on any mismatch; the caller turns that into AVERROR(EINVAL). */
@@ -697,6 +759,7 @@ static void ss_model_free(StemSplitContext *s)
     if (s->gguf_ctx)
         ggml_free(s->gguf_ctx);
     s->gguf_ctx = NULL;
+    s->weights_ready = 0;
 
     for (i = 0; i < SS_NB_INSTRUMENTS; i++)
         av_freep(&s->instrument_names[i]);
@@ -739,10 +802,281 @@ static int ss_valid_instrument_name(const char *name)
     return 1;
 }
 
-static int ss_model_load(AVFilterContext *ctx)
+#if !SS_NM_GGML
+/* ---- GPU selection -------------------------------------------------------
+ *
+ * Only ever reached with use_gpu=1, and that is deliberate. ggml builds its
+ * backend registry the first time anything asks it a question, and with a GPU
+ * backend compiled in, that first question enumerates the machine's GPU
+ * drivers. The CPU path never asks: it creates its backend with
+ * ggml_backend_cpu_init(), exactly as this filter did before it had a GPU
+ * path, so a run that does not opt in touches nothing it did not touch before.
+ *
+ * Devices are counted the way whisper.cpp counts them -- the gpu_device'th
+ * device of type GPU or IGPU, in registry order -- so one gpu_device value
+ * picks the same card for both filters in a shared filtergraph.
+ */
+
+/* ggml's Vulkan backend names its devices "Vulkan0", "Vulkan1", ..., so the
+ * description (the driver's device name, e.g. "llvmpipe (LLVM 17.0.6, 256
+ * bits)") is the field that carries the evidence. Both are checked, because
+ * another registry may name them differently. Full phrases only: a bare
+ * "software" would also reject a "Software Defined ..." product name. */
+static int ss_device_is_software(ggml_backend_dev_t dev)
+{
+    static const char *const markers[] = {
+        "llvmpipe", "swiftshader", "lavapipe", "softpipe",
+        "software rasterizer", "software rasteriser", NULL,
+    };
+    const char *name = ggml_backend_dev_name(dev);
+    const char *desc = ggml_backend_dev_description(dev);
+    int i;
+
+    for (i = 0; markers[i]; i++)
+        if ((name && av_stristr(name, markers[i])) ||
+            (desc && av_stristr(desc, markers[i])))
+            return 1;
+    return 0;
+}
+
+/* The requested GPU as a ready backend, or NULL -- with the reason logged --
+ * when the caller should use the CPU instead. Fills s->gpu_name and
+ * s->gpu_desc on success. */
+static ggml_backend_t ss_gpu_backend_init(AVFilterContext *ctx)
 {
     StemSplitContext *s = ctx->priv;
-    struct gguf_init_params gp = { .no_alloc = false, .ctx = &s->gguf_ctx };
+    ggml_backend_dev_t dev = NULL;
+    ggml_backend_reg_t reg;
+    ggml_backend_t be;
+    const char *reg_name;
+    size_t i, n = ggml_backend_dev_count();
+    int seen = 0;
+
+    for (i = 0; i < n; i++) {
+        ggml_backend_dev_t d = ggml_backend_dev_get(i);
+        enum ggml_backend_dev_type type;
+
+        if (!d)
+            continue;
+        type = ggml_backend_dev_type(d);
+        if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU)
+            continue;
+        if (seen++ == s->gpu_device)
+            dev = d;
+    }
+
+    if (!seen) {
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: use_gpu=1 but ggml reports no GPU device (is it built "
+               "with a GPU backend, such as -DGGML_VULKAN=ON?); running on the "
+               "CPU.\n");
+        return NULL;
+    }
+    if (!dev) {
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: gpu_device=%d but this machine has %d GPU device(s); "
+               "running on the CPU.\n", s->gpu_device, seen);
+        return NULL;
+    }
+    /* A software rasteriser is a GPU in name only, and slower than the CPU
+     * backend it would replace. */
+    if (ss_device_is_software(dev)) {
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: GPU device %d is '%s', a software rasteriser; running "
+               "on the CPU.\n", s->gpu_device, ggml_backend_dev_description(dev));
+        return NULL;
+    }
+
+    be = ggml_backend_dev_init(dev, NULL);
+    if (!be) {
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: could not open '%s'; running on the CPU.\n",
+               ggml_backend_dev_description(dev));
+        return NULL;
+    }
+
+    /* ggml spells it "Vulkan"; the metadata value is lower case. */
+    reg = ggml_backend_dev_backend_reg(dev);
+    reg_name = reg ? ggml_backend_reg_name(reg) : NULL;
+    av_strlcpy(s->gpu_name, reg_name && *reg_name ? reg_name : "gpu",
+               sizeof(s->gpu_name));
+    for (i = 0; s->gpu_name[i]; i++)
+        s->gpu_name[i] = av_tolower(s->gpu_name[i]);
+    s->gpu_desc = ggml_backend_dev_description(dev);
+
+    return be;
+}
+
+/* Plain ggml: the GPU only when use_gpu asks for one and ss_gpu_backend_init
+ * finds a usable device, the CPU otherwise. Reads what it got off the backend
+ * it was handed, because that -- not the request -- is what runs. */
+static int ss_backend_init(AVFilterContext *ctx)
+{
+    StemSplitContext *s = ctx->priv;
+
+    s->backend = s->use_gpu ? ss_gpu_backend_init(ctx) : NULL;
+    if (!s->backend)
+        s->backend = ggml_backend_cpu_init();
+    if (!s->backend)
+        return AVERROR(ENOMEM);
+
+    s->gpu_active = !ggml_backend_is_cpu(s->backend);
+    if (s->gpu_active)
+        av_log(ctx, AV_LOG_INFO, "stemsplit: ggml backend '%s' (%s).\n",
+               s->gpu_name, s->gpu_desc);
+    else
+        av_log(ctx, AV_LOG_INFO, "stemsplit: ggml backend 'cpu'.\n");
+
+    return 0;
+}
+
+#else /* SS_NM_GGML */
+
+/* nomercy-ffmpeg's nm_ggml layer: a GPU when one is usable and use_gpu allows
+ * it, otherwise the CPU instruction-set variant ggml_cpu_dispatch.c selected
+ * for this machine. This is the backend selection nomercy-ffmpeg's own copy of
+ * this filter has always had, line for line, so a binary built there behaves
+ * exactly as before.
+ *
+ * nm_ggml_gpu_count() is called whatever use_gpu says, not behind an &&:
+ * nm_ggml_cpu.h requires its functions to be called unconditionally, because
+ * the first call is what runs the Vulkan driver guard. */
+static int ss_backend_init(AVFilterContext *ctx)
+{
+    StemSplitContext *s = ctx->priv;
+    const int nb_gpus = nm_ggml_gpu_count();
+
+    if (s->use_gpu && s->gpu_device >= nb_gpus)
+        av_log(ctx, AV_LOG_WARNING,
+               "stemsplit: gpu_device=%d but this machine has %d GPU device(s); "
+               "running on the CPU.\n", s->gpu_device, nb_gpus);
+    s->backend = nm_ggml_backend_init(s->use_gpu, s->gpu_device);
+    if (!s->backend)
+        return AVERROR(ENOMEM);
+
+    /* Read off the backend we were HANDED, not off the request and not off a
+     * global flag. nm_ggml_backend_init() falls back to the CPU on its own if
+     * the device refuses to open a second time, and asking the backend is the
+     * only way to see that. */
+    s->gpu_active = s->use_gpu && !ggml_backend_is_cpu(s->backend);
+    if (s->gpu_active) {
+        av_strlcpy(s->gpu_name, nm_ggml_backend_name(s->gpu_device),
+                   sizeof(s->gpu_name));
+        s->gpu_desc = nm_ggml_backend_device(s->gpu_device);
+    }
+    if (nm_ggml_backend_notice())
+        av_log(ctx, AV_LOG_INFO, "stemsplit: %s.\n", nm_ggml_backend_notice());
+    av_log(ctx, AV_LOG_INFO, "stemsplit: ggml cpu variant '%s'.\n",
+           nm_ggml_cpu_variant_name());
+    av_log(ctx, AV_LOG_INFO, "stemsplit: ggml backend '%s' (%s).\n",
+           s->gpu_active ? s->gpu_name : "cpu",
+           s->gpu_active ? s->gpu_desc : nm_ggml_cpu_variant_name());
+
+    return 0;
+}
+
+#endif /* SS_NM_GGML */
+
+/* no_alloc never reads the data section, so gguf_init_from_file() alone
+ * cannot tell a complete model from a partial download that happens to have
+ * an intact header and tensor table -- exactly what SS_NB_INSTRUMENTS *
+ * layer validation above checks by name, type and shape, none of which need
+ * the data to be present. This asks the question those checks cannot: is the
+ * file actually as long as its own tensor table says it has to be.
+ *
+ * gguf_get_data_offset() is where the data section starts (padded to the
+ * file's alignment); every tensor's offset is relative to that, so the
+ * required file length is the data offset plus the furthest a tensor's own
+ * offset and size reach. */
+static int ss_check_model_size(AVFilterContext *ctx, struct gguf_context *gguf,
+                                const char *path)
+{
+    int64_t n_tensors = gguf_get_n_tensors(gguf);
+    int64_t need = (int64_t) gguf_get_data_offset(gguf);
+    int64_t max_end = 0;
+    FILE *f;
+    int64_t have;
+    int64_t i;
+
+    for (i = 0; i < n_tensors; i++) {
+        int64_t end = (int64_t) gguf_get_tensor_offset(gguf, i) +
+                      (int64_t) gguf_get_tensor_size(gguf, i);
+        if (end > max_end)
+            max_end = end;
+    }
+    need += max_end;
+
+    /* ggml_fopen() is the same UTF-8-safe opener gguf_init_from_file() itself
+     * used to open this same path a moment ago, so a path that just worked
+     * there will open here too. */
+    f = ggml_fopen(path, "rb");
+    if (!f) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Model '%s' could not be read to check its size.\n", path);
+        return AVERROR(EIO);
+    }
+
+#if defined(_WIN32)
+    if (_fseeki64(f, 0, SEEK_END)) {
+        fclose(f);
+        av_log(ctx, AV_LOG_ERROR,
+               "Model '%s' could not be read to check its size.\n", path);
+        return AVERROR(EIO);
+    }
+    have = _ftelli64(f);
+#else
+    if (fseeko(f, 0, SEEK_END)) {
+        fclose(f);
+        av_log(ctx, AV_LOG_ERROR,
+               "Model '%s' could not be read to check its size.\n", path);
+        return AVERROR(EIO);
+    }
+    have = ftello(f);
+#endif
+    fclose(f);
+    if (have < 0) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Model '%s' could not be read to check its size.\n", path);
+        return AVERROR(EIO);
+    }
+
+    if (have < need) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Model '%s' is truncated: it is %"PRId64" bytes, but its "
+               "tensors need %"PRId64". Download it again "
+               "(spleeter-2stems-f16.gguf, "
+               "https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases).\n",
+               path, have, need);
+        return AVERROR(EIO);
+    }
+
+    return 0;
+}
+
+/* Opens and validates the model.
+ *
+ * With load_data == 0 -- what init() does -- only the header, the architecture
+ * tag, the instrument list and every tensor's name, type and shape are read;
+ * ss_check_model_size() then confirms the file is actually long enough to
+ * hold every tensor's data, because no_alloc never reads the data section
+ * itself and so would not otherwise notice a download cut short. That is
+ * enough to refuse a bad file exactly where it has always been refused, and
+ * enough to create the output pads. The weights are not read and no backend
+ * is created.
+ *
+ * With load_data == 1 -- what ss_config_input() does, once -- the file is read
+ * again with its tensor data, the kernels are repacked and the backend is
+ * created. The ffmpeg CLI initialises every filter twice per command line
+ * (once to parse the graph, once to run it), and config_props only runs for
+ * the graph that actually processes audio, so this is where reading the
+ * weights, and opening a GPU, happens once instead of twice. The data path is
+ * the same gguf_init_from_file() call as ever, so the weights land in memory
+ * exactly as they always have.
+ */
+static int ss_model_load(AVFilterContext *ctx, int load_data)
+{
+    StemSplitContext *s = ctx->priv;
+    struct gguf_init_params gp = { .no_alloc = !load_data, .ctx = &s->gguf_ctx };
     struct gguf_context *gguf = NULL;
     int64_t key;
     size_t n_inst;
@@ -754,27 +1088,14 @@ static int ss_model_load(AVFilterContext *ctx)
     int k, n, i;
     int ret;
 
-    /* Defensive idempotency: no known FFmpeg path calls ss_model_load()
-     * twice on a live context, but if one ever does, s->backend, s->gguf_ctx
-     * and s->instrument_names[] would each be silently overwritten and
-     * leaked rather than freed.
-     *
-     * The graph goes first, and the order is load-bearing rather than
-     * cosmetic: every tensor in s->graph_ctx (g_input, g_raw, g_up, g_est,
-     * g_mask) points at weight data owned by s->gguf_ctx, which ss_model_free
-     * releases. Freeing only the model would leave a live graph of dangling
-     * weight pointers, and the next ss_infer() would compute through freed
-     * memory instead of failing. This is uninit()'s ordering, for the same
-     * reason. Together the two calls make "a load always starts from a clean
-     * slate, with nothing left pointing into the old one" true rather than
-     * merely intended. */
+    /* A load always starts from a clean slate, with nothing left pointing
+     * into the old one. The graph goes first, and the order is load-bearing
+     * rather than cosmetic: every tensor in s->graph_ctx points at weight data
+     * owned by s->gguf_ctx, which ss_model_free releases. Freeing only the
+     * model would leave a live graph of dangling weight pointers. This is
+     * uninit()'s ordering, for the same reason. */
     ss_graph_free(s);
     ss_model_free(s);
-
-    /* Bridge ggml's own log output (including gguf_init_from_file's
-     * internal warnings, e.g. "invalid magic characters") to av_log at
-     * matching severity, before anything below can trigger it. */
-    ggml_log_set(cb_log, ctx);
 
     if (!s->model_path || !*s->model_path) {
         av_log(ctx, AV_LOG_ERROR,
@@ -861,7 +1182,10 @@ static int ss_model_load(AVFilterContext *ctx)
     }
     s->nb_instruments = SS_NB_INSTRUMENTS;
 
-    /* ---- 100 tensors: conv1..conv6, up1..up6, out, per instrument ---- */
+    /* ---- 100 tensors: conv1..conv6, up1..up6, out, per instrument ----
+     * Validated from the tensor table alone, so a file with a missing or
+     * misshapen tensor is refused in init() whether or not its data has been
+     * read. */
     for (k = 0; k < SS_NB_INSTRUMENTS; k++) {
         const char *inst = s->instrument_names[k];
 
@@ -898,11 +1222,6 @@ static int ss_model_load(AVFilterContext *ctx)
         }
     }
 
-    /* ---- GGUF axis order -> ggml convolution axis order ---- */
-    ret = ss_repack_all_kernels(s);
-    if (ret < 0)
-        goto done;
-
     /* ---- the requested stem must actually be in this model ---- */
     if (s->stem != SS_STEM_ALL) {
         const char *want = s->stem == SS_STEM_VOCALS ? "vocals" : "accompaniment";
@@ -924,41 +1243,45 @@ static int ss_model_load(AVFilterContext *ctx)
         }
     }
 
-    /* ---- backend ----
-     * A GPU when one is usable and `use_gpu` allows it, otherwise the
-     * instruction-set variant ggml_cpu_dispatch.c selected for this machine.
-     * The choice can still be revoked later, in ss_graph_build(), if the
-     * device turns out not to support every op this network needs. */
-    if (s->use_gpu && s->gpu_device >= nm_ggml_gpu_count())
-        av_log(ctx, AV_LOG_WARNING,
-               "stemsplit: gpu_device=%d but this machine has %d GPU device(s); "
-               "running on the CPU.\n", s->gpu_device, nm_ggml_gpu_count());
-    s->backend = nm_ggml_backend_init(s->use_gpu, s->gpu_device);
-    if (!s->backend) {
-        av_log(ctx, AV_LOG_ERROR,
-               "Could not initialize a ggml backend.\n");
-        ret = AVERROR(ENOMEM);
+    ss_join_instruments(s, avail, sizeof(avail));
+    if (!load_data) {
+        /* Catches a partial download here, in init(), rather than letting it
+         * through to ss_config_input() only to fail there once outputs have
+         * already been opened. */
+        ret = ss_check_model_size(ctx, gguf, s->model_path);
+        if (ret < 0)
+            goto done;
+
+        av_log(ctx, AV_LOG_VERBOSE,
+               "stemsplit: model '%s' validated (100 tensors); instruments: %s.\n",
+               s->model_path, avail);
+        ret = 0;
         goto done;
     }
-    /* Read off the backend we were HANDED, not off the request and not off a
-     * global flag. nm_ggml_backend_init() falls back to the CPU on its own if
-     * the device refuses to open a second time, and asking the backend is the
-     * only way to see that - it is also exact, and free of the shared mutable
-     * state (and the data race) a previous version used for the same job. */
-    s->gpu_active = s->use_gpu && !ggml_backend_is_cpu(s->backend);
-    if (nm_ggml_backend_notice())
-        av_log(ctx, AV_LOG_INFO, "stemsplit: %s.\n", nm_ggml_backend_notice());
-    av_log(ctx, AV_LOG_INFO, "stemsplit: ggml cpu variant '%s'.\n",
-           nm_ggml_cpu_variant_name());
-    av_log(ctx, AV_LOG_INFO, "stemsplit: ggml backend '%s' (%s).\n",
-           s->gpu_active ? nm_ggml_backend_name(s->gpu_device) : "cpu",
-           s->gpu_active ? nm_ggml_backend_device(s->gpu_device)
-                         : nm_ggml_cpu_variant_name());
 
-    ss_join_instruments(s, avail, sizeof(avail));
+    /* ---- GGUF axis order -> ggml convolution axis order ----
+     * Needs the tensor data, so it happens here and not in the validation
+     * pass above. The shape checks already ran against the on-disk order. */
+    ret = ss_repack_all_kernels(s);
+    if (ret < 0)
+        goto done;
+
+    /* ---- backend ----
+     * ss_backend_init() picks it: through nomercy-ffmpeg's nm_ggml layer when
+     * this file is built there, through plain ggml otherwise. The choice can
+     * still be revoked later, in ss_graph_build(), if the device turns out
+     * not to support every op this network needs. */
+    ret = ss_backend_init(ctx);
+    if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Could not initialize a ggml backend.\n");
+        goto done;
+    }
+
     av_log(ctx, AV_LOG_INFO,
-           "stemsplit: model '%s' loaded (100 tensors); instruments: %s.\n",
+           "stemsplit: model '%s' weights loaded (100 tensors); instruments: %s.\n",
            s->model_path, avail);
+    s->weights_ready = 1;
     ret = 0;
 
 done:
@@ -1493,7 +1816,7 @@ static int ss_weights_to_backend(AVFilterContext *ctx)
     if (!s->weights_buf) {
         av_log(ctx, AV_LOG_WARNING,
                "stemsplit: could not allocate model weights on '%s'.\n",
-               nm_ggml_backend_device(s->gpu_device));
+               s->gpu_desc);
         ggml_free(s->weights_ctx);
         s->weights_ctx = NULL;
         return AVERROR(ENOMEM);
@@ -1514,7 +1837,7 @@ static int ss_weights_to_backend(AVFilterContext *ctx)
 
     av_log(ctx, AV_LOG_VERBOSE,
            "stemsplit: %d model tensors uploaded to '%s'.\n",
-           n, nm_ggml_backend_device(s->gpu_device));
+           n, s->gpu_desc);
 
     return 0;
 }
@@ -1632,7 +1955,7 @@ static int ss_graph_build(AVFilterContext *ctx)
         if (bad) {
             av_log(ctx, AV_LOG_WARNING,
                    "stemsplit: '%s' cannot run '%s' (%s); using the CPU "
-                   "backend instead.\n", nm_ggml_backend_device(s->gpu_device),
+                   "backend instead.\n", s->gpu_desc,
                    ggml_op_name(bad->op), ggml_get_name(bad));
             ss_graph_free(s);
             ss_weights_release(s);
@@ -1798,12 +2121,12 @@ static int ss_physical_cores(void)
 
 /* ggml thread count for `threads=0`.
  *
- * ggml's own threadpool (windows-x64 builds without OpenMP, see #64) syncs on
+ * ggml's own threadpool (builds without OpenMP, nomercy-ffmpeg#64) syncs on
  * spin barriers, so a worker that shares a core with its hyperthread twin, or
- * with FFmpeg's own threads, stalls every other worker. Measured (#67): 8 on
- * an 8-core/16-thread desktop is 24% faster than 16, and 28 on a 28-core/
- * 56-thread server is 12% faster than FFmpeg's 16 while 56 is 7x slower. The
- * physical core count wins on both.
+ * with FFmpeg's own threads, stalls every other worker. Measured in
+ * nomercy-ffmpeg#67: 8 on an 8-core/16-thread desktop is 24% faster than 16,
+ * and 28 on a 28-core/56-thread server is 12% faster than FFmpeg's 16 while 56
+ * is 7x slower. The physical core count wins on both.
  *
  * A graph thread count below FFmpeg's automatic ceiling was lowered on purpose
  * (-filter_threads, or the filter's own `threads` context option), so it stays
@@ -2611,12 +2934,15 @@ static int ss_push_outputs(AVFilterContext *ctx, AVFrame **out)
         /* This is the single point every stemsplit output frame passes
          * through on the way to ff_filter_frame -- normal emission, drain
          * and silence fill-in all funnel here -- so tagging it here, rather
-         * than at any one of those producers, guarantees the media server
-         * reads the variant on the same frame that was actually sent. */
+         * than at any one of those producers, guarantees every frame that is
+         * sent says which backend (and, in nomercy-ffmpeg builds, which CPU
+         * variant) produced it. */
+#if SS_NM_GGML
         av_dict_set(&frame->metadata, "lavfi.stemsplit.cpu_variant",
                     nm_ggml_cpu_variant_name(), 0);
+#endif
         av_dict_set(&frame->metadata, "lavfi.stemsplit.backend",
-                    s->gpu_active ? nm_ggml_backend_name(s->gpu_device) : "cpu", 0);
+                    s->gpu_active ? s->gpu_name : "cpu", 0);
         ret = ff_filter_frame(ctx->outputs[j], frame);
         if (ret < 0)
             return ret;
@@ -3181,7 +3507,23 @@ static av_cold int init(AVFilterContext *ctx)
 
     s->next_pts = AV_NOPTS_VALUE;
 
-    ret = ss_model_load(ctx);
+    /* Bridge ggml's own log output (including gguf_init_from_file's internal
+     * warnings, e.g. "invalid magic characters") to av_log at matching
+     * severity, before anything below can trigger it. */
+    ss_log_claim(ctx);
+
+#if SS_NM_GGML
+    /* The nm_ggml layer takes its process-wide GPU decision -- and runs its
+     * Vulkan driver guard -- on its first call, which nm_ggml_cpu.h asks to
+     * be early and on one thread. init() is the earliest point, on the thread
+     * that parses the graph; the backend itself is only created later, in
+     * ss_config_input(). Called unconditionally, whatever use_gpu says, as
+     * the header requires. */
+    (void) nm_ggml_gpu_usable();
+#endif
+
+    /* Validation only: the weights are read in ss_config_input(). */
+    ret = ss_model_load(ctx, 0);
     if (ret < 0)
         return ret;
 
@@ -3199,8 +3541,12 @@ static av_cold int init(AVFilterContext *ctx)
      * The driver's buffers are not allocated on this path and audio is passed
      * through untouched -- this hook exists to measure the network, not to
      * separate anything. */
-    if (s->debug_input_path && *s->debug_input_path)
+    if (s->debug_input_path && *s->debug_input_path) {
+        ret = ss_model_load(ctx, 1);
+        if (ret < 0)
+            return ret;
         return ss_run_debug_input(ctx);
+    }
 
     return ss_driver_init(ctx);
 }
@@ -3213,18 +3559,15 @@ static av_cold void uninit(AVFilterContext *ctx)
     ss_graph_free(s);
     ss_model_free(s);
 
-    /* ggml_log_set() is process-global, not per-context: ss_model_load()
-     * registered cb_log with THIS ctx as its user_data. If we leave that
-     * registration in place, any ggml call anywhere in the process after
-     * this AVFilterContext is freed -- including from an unrelated whisper
-     * filter instance still running in the same filtergraph/process, which
-     * this media server routinely does for subtitles -- invokes cb_log with
-     * a dangling AVFilterContext* and writes through it via av_log(): a
-     * use-after-free. Restore ggml's default sink instead. If another ggml
-     * user (e.g. whisper) is still live, its messages just fall back to
-     * ggml's default logging rather than being routed through freed memory
-     * -- degraded logging beats a crash. Do not remove this. */
-    ggml_log_set(NULL, NULL);
+    /* ggml_log_set() is process-global, not per-context: ss_log_claim()
+     * registered cb_log with THIS ctx as its user_data. Leaving that in place
+     * after this context is freed would let any later ggml message --
+     * including one from a whisper filter still running in the same process,
+     * which this media server routinely does for subtitles -- call cb_log
+     * with a dangling AVFilterContext* and write through it via av_log(): a
+     * use-after-free. So the sink is restored -- but only by its current
+     * owner, see ss_log_owner. Do not remove this. */
+    ss_log_release(ctx);
 
     ss_dsp_free(s);
     ss_driver_free(s);
@@ -3237,7 +3580,20 @@ static av_cold void uninit(AVFilterContext *ctx)
  * init() has already set. */
 static int ss_config_input(AVFilterLink *inlink)
 {
-    return ss_rs_init(inlink->dst, inlink);
+    AVFilterContext *ctx = inlink->dst;
+    StemSplitContext *s = ctx->priv;
+    int ret;
+
+    /* The first point that belongs only to the graph that will process audio
+     * (see ss_model_load). config_props can run again if the graph is
+     * reconfigured; the weights are already in memory then. */
+    if (!s->weights_ready) {
+        ret = ss_model_load(ctx, 1);
+        if (ret < 0)
+            return ret;
+    }
+
+    return ss_rs_init(ctx, inlink);
 }
 
 static int ss_filter_frame(AVFilterContext *ctx, AVFrame *frame)
