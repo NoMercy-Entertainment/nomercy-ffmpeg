@@ -750,11 +750,15 @@ lib_private_flags="Libs.private: -lstdc++"
         lib_flags+=" -lwinpthread -lws2_32"
         lib_private_flags+=" -lm -lwinpthread -lws2_32"
     else
-        # windows-x64: ggml no longer links libgomp/OpenMP here either (see
-        # the GGML_OPENMP=OFF comment above) -- its worker-pool teardown
-        # deadlocked intermittently at process exit on this MinGW build.
-        lib_flags+=" -lggml-blas -lwinpthread -lws2_32"
-        lib_private_flags+=" -lm -lopenblas -lwinpthread -lws2_32"
+        # windows-x64: no OpenBLAS any more (see includes/windows/48-openblas.sh
+        # -- the CPU-variant dispatcher supplies the AVX2 that BLAS was standing
+        # in for, and OpenBLAS committed 487 MiB per process to do it), so no
+        # -lggml-blas/-lopenblas, exactly as windows-aarch64 has always been.
+        # ggml also no longer links libgomp/OpenMP here (see the GGML_OPENMP=OFF
+        # comment above) -- its worker-pool teardown deadlocked intermittently
+        # at process exit on this MinGW build.
+        lib_flags+=" -lwinpthread -lws2_32"
+        lib_private_flags+=" -lm -lwinpthread -lws2_32"
     fi
     echo "${lib_flags}"
     echo "${lib_private_flags}"
