@@ -130,7 +130,7 @@ assert_vulkan_backend_present() {  # bin, platform
   local bin="$1" platform="$2" diag
 
   if ! vulkan_platform_has_backend "${platform}"; then
-    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin gets Metal in a later phase; freebsd's static dlopen cannot open a loader at all)"
+    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin-arm64 gets Metal instead, asserted separately below; freebsd's static dlopen cannot open a loader at all)"
     return 0
   fi
 
@@ -190,6 +190,53 @@ assert_vulkan_startup() {  # bin, platform
   esac
 }
 
+# ggml Metal GPU backend (2026-09-27-metal-backend plan, Task 3): darwin-arm64
+# only, and unlike Vulkan there is no startup check to add here. Global
+# Constraint of that plan is that nothing in this repo's own CI proves Metal
+# actually runs -- only the owner's Apple Silicon Mac can, via
+# tools/metal/verify-on-mac.sh -- so both checks below are pure greps over the
+# artifact, same reasoning as the Vulkan presence check above: it needs no
+# execution, so it runs for every platform this runner cannot execute at
+# all, which today is every platform metal_platform_has_backend does not
+# already exclude.
+assert_metal_backend_present() {  # bin, platform
+  local bin="$1" platform="$2"
+
+  if ! metal_platform_has_backend "${platform}"; then
+    note "metal: skipped on ${platform} — Metal is darwin-arm64 only (darwin-x86_64 stays off on purpose; freebsd and linux/windows never had a Metal question at all)"
+    return 0
+  fi
+
+  if metal_backend_compiled_in "${bin}"; then
+    ok "metal: ggml Metal backend is linked in (embedded shader library present)"
+  else
+    fail "metal: ${bin} does not carry the ggml Metal backend (or its embedded shader library)"
+  fi
+
+  # There is deliberately no static assertion on the `MTL` metadata name here.
+  #
+  # There was one, and it went wrong twice. First as a substring search, which
+  # PASSED on v1.0.42 — a build with no Metal at all — because that binary
+  # carries an unrelated "UHD_MTL". Then as an exact NUL-delimited match, which
+  # FAILED on the Apple Silicon runner against a build that does carry Metal
+  # and had reported lavfi.whisper.backend=mtl seconds earlier in the same job.
+  #
+  # That second failure was not what it looked like. It was not macOS, not
+  # `tr`, not the locale: measured on the runner itself, `LC_ALL=C tr` passed
+  # all 122,674,224 bytes through and found the match. It was `grep -q` under
+  # the `set -uo pipefail` at the top of this file — grep exits on first match,
+  # `tr` dies of SIGPIPE with ~120 MB still to write, and pipefail reports the
+  # pipeline as failed. A match was returned as "not found". See the long note
+  # in lib/cpu-variant.sh where that function used to live.
+  #
+  # It stays removed, but because execution proves it better, not because it
+  # could not be written: the Metal gates run the binary and require the filter
+  # itself to report `mtl` (.github/workflows/mac-runner-check.yml, and
+  # tools/metal/verify-on-mac.sh gate 1), and darwin-arm64 is executed by a
+  # real runner on every CI run. A filter saying what it actually ran on beats
+  # a string search for what it might have been compiled with.
+}
+
 ffmpeg_bin="${WORKSPACE}/ffmpeg"
 ffprobe_bin="${WORKSPACE}/ffprobe"
 
@@ -204,6 +251,7 @@ chmod +x "${ffmpeg_bin}" "${ffprobe_bin}" 2>/dev/null || true
 # to come before the cross-exec early-return, not after it.
 assert_cpu_variant_dispatcher_present "${ffmpeg_bin}" "${PLATFORM}"
 assert_vulkan_backend_present "${ffmpeg_bin}" "${PLATFORM}"
+assert_metal_backend_present "${ffmpeg_bin}" "${PLATFORM}"
 
 # Cross-exec platforms: never execute — validate ELF headers and stop here.
 if spec="$(cross_exec_spec "${PLATFORM}")"; then

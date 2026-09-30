@@ -1,0 +1,297 @@
+name: Mac Runner Check
+
+# Run OUR darwin-arm64 build on the self-hosted Apple Silicon Mac mini and see
+# whether Metal actually engages.
+#
+# Everything the pipeline knows about Metal today is static: the backend is
+# linked, the embedded shader blob is the right size, the metadata string is
+# present. None of that executes a line of Metal. The shaders ship as *source*
+# that the user's machine compiles at run time, so "it built" says nothing
+# about "it runs" — and the compile could fail on the first real device.
+#
+# Measured on the first bring-up run of this workflow, on the runner itself:
+#   model Mac16,10 / Apple M4 / arm64 / macOS 26.5.2 / 10 cores
+#   bash 3.2.57      <- why tools/metal/verify-on-mac.sh is bash-3.2 only
+#   GPU  Apple M4
+#   launchctl managername = Aqua
+# That last line matters: the runner sits in a GUI session with a window
+# server attached, so it does NOT by itself reproduce the daemon context the
+# media server runs in. verify-on-mac.sh creates that itself with launchctl
+# submit. Never read "it worked on the runner" as "it works as a service".
+#
+# runs-on carries four labels deliberately. The fleet also holds an Intel Mac
+# and the Linux beast-unit, and #74 was exactly this mistake: one unqualified
+# label matched eight jobs onto whatever machine carried it. `macOS` alone
+# would reach the Intel Mac, where Metal is off by design and an arm64 binary
+# cannot even start.
+
+on:
+  # TEMPORARY, REMOVE BEFORE MERGING.
+  # workflow_dispatch only works for workflows that already exist on the
+  # default branch, so a new workflow cannot be started by hand from a feature
+  # branch — there is nothing on master to dispatch. Scoped to this one branch
+  # purely to bring the runner up.
+  push:
+    branches: [feat/metal-backend]
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: 'Release asset id to test (a draft release asset is fine)'
+        required: false
+        default: '594439780'
+      asset_sha256:
+        description: 'Expected sha256 of that asset'
+        required: false
+        default: '9b309a364ea14706c419e0c8a7ccc2e040f4b2146a1dafad3e0d0de6a61a9bb3'
+
+concurrency:
+  group: mac-runner-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: [self-hosted, macOS, ARM64, apple-silicon]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: What machine is this
+        shell: bash
+        run: |
+          echo "model:   $(sysctl -n hw.model 2>/dev/null || echo unknown)"
+          echo "chip:    $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
+          echo "arch:    $(uname -m)"
+          echo "macOS:   $(sw_vers -productVersion 2>/dev/null || echo unknown)"
+          echo "cores:   $(sysctl -n hw.ncpu 2>/dev/null || echo '?')"
+          echo "bash:    ${BASH_VERSION}"
+          echo "GPU:     $(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Chipset Model/{print $2; exit}' || echo 'not reported')"
+          echo "session: $(launchctl managername 2>/dev/null || echo unknown)"
+
+      - name: Fetch the build under test
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `inputs` is empty on a push event and the declared defaults do NOT
+          # apply — measured: the first run built ".../download//ffmpeg--darwin
+          # -arm64-.tar.gz" and 404'd. Hence the explicit fallbacks.
+          ASSET_ID: ${{ inputs.asset_id || '594439780' }}
+          WANT_SHA: ${{ inputs.asset_sha256 || '9b309a364ea14706c419e0c8a7ccc2e040f4b2146a1dafad3e0d0de6a61a9bb3' }}
+        run: |
+          set -uo pipefail
+          # Fetched by asset id through the API rather than by browser URL: the
+          # asset lives on a DRAFT release, whose download URL needs auth. This
+          # also avoids needing gh or jq on the runner.
+          curl -fL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o build.tar.gz \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}" || {
+              echo "::error::could not download release asset ${ASSET_ID}"; exit 1; }
+
+          got="$(shasum -a 256 build.tar.gz | cut -d' ' -f1)"
+          if [ "${got}" != "${WANT_SHA}" ]; then
+            echo "::error::digest mismatch: expected ${WANT_SHA}, got ${got}"
+            exit 1
+          fi
+          echo "digest ok: ${got}  ($(wc -c < build.tar.gz) bytes)"
+
+          tar -xzf build.tar.gz
+          chmod +x ./ffmpeg ./ffprobe
+          # This runner keeps state between jobs. An ffmpeg left behind by an
+          # earlier run would answer everything below while proving nothing.
+          if ! file ./ffmpeg | grep -q 'arm64'; then
+            echo "::error::not an arm64 binary: $(file ./ffmpeg)"
+            exit 1
+          fi
+          file ./ffmpeg
+
+      - name: Is Metal actually in this binary
+        shell: bash
+        run: |
+          set -uo pipefail
+          ./ffmpeg -hide_banner -version | head -2
+          echo "---"
+          fw="$(otool -L ./ffmpeg | grep -c 'Metal.framework')"
+          sec="$(otool -l ./ffmpeg | grep -c '__ggml_metallib')"
+          echo "Metal.framework references: ${fw}"
+          echo "__ggml_metallib sections:   ${sec}"
+          otool -l ./ffmpeg | grep -A3 '__ggml_metallib' | sed 's/^/  /'
+          if [ "${fw}" -lt 1 ] || [ "${sec}" -lt 1 ]; then
+            echo "::error::this build does not carry Metal — wrong artifact under test"
+            exit 1
+          fi
+
+      - name: A real transcode, not just --version
+        shell: bash
+        run: |
+          set -uo pipefail
+          ./ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "sine=frequency=440:duration=5" \
+            -c:a libmp3lame -b:a 128k probe.mp3
+          [ -s probe.mp3 ] || { echo "::error::no mp3 produced"; exit 1; }
+          echo "encoded probe.mp3: $(wc -c < probe.mp3) bytes"
+          ./ffprobe -hide_banner -v error -show_entries format=duration,bit_rate \
+            -of default=noprint_wrappers=1 probe.mp3
+
+          # Two traps, both hit for real on this runner before this worked:
+          #   1. astats puts "Overall" and "RMS level dB:" on SEPARATE
+          #      lines, so asking for both on one line matches nothing.
+          #   2. astats writes its summary at INFO level, and -v error threw
+          #      it away -- the check then reported silence for audio that
+          #      was fine. This repo has been bitten by exactly that before,
+          #      with -v error swallowing ametadata output.
+          # Take the last RMS line: that is the Overall section's.
+          rms="$(./ffmpeg -hide_banner -v info -i probe.mp3 -af astats=metadata=1 \
+                 -f null - 2>&1 | awk -F': ' '/RMS level dB/{v=$2} END{print v}')"
+          echo "decoded RMS level: ${rms:-unknown} dBFS"
+          case "${rms:-}" in
+            ""|*inf*) echo "::error::decoded audio is silent or unmeasurable"; exit 1 ;;
+          esac
+
+      - name: Fetch the whisper model and sample
+        shell: bash
+        env:
+          # secrets.PAT already carries org-wide read access — reusable-docker-
+          # build.yml checks out the private nomercy-ffmpeg-secrets repo with
+          # it. GITHUB_TOKEN would not do: it is scoped to this repository, and
+          # the models live in sibling repos behind draft releases.
+          PAT: ${{ secrets.PAT }}
+        run: |
+          set -uo pipefail
+          # The models come from the org's own repos, not HuggingFace. The
+          # first attempt pulled ggml-base.bin from HuggingFace and sat in
+          # that one step for 26 minutes before the job was abandoned, while
+          # the same runner had pulled our 152 MB build from GitHub 36 seconds
+          # earlier. HuggingFace itself was fine — 52 MB/s measured from a
+          # different machine at the same moment — so it is this runner's
+          # route to it. Our own hosting is faster, is already how the media
+          # server gets these files, and needs no third party to be reachable.
+          CACHE="${HOME}/nm-ci-assets"
+          mkdir -p "${CACHE}"
+
+          # fetch_asset <repo> <asset-id> <name> <sha256>
+          # By asset id through the API: these releases are DRAFTS, whose
+          # browser download URLs do not resolve, and this needs no gh or jq
+          # on the runner. The ids are pinned deliberately — a silent jump to
+          # a newer model would change what is being measured.
+          fetch_asset() {
+            local repo="$1" id="$2" out="${CACHE}/$3" want="$4" got
+            if [ -f "${out}" ]; then
+              got="$(shasum -a 256 "${out}" | cut -d' ' -f1)"
+              if [ "${got}" = "${want}" ]; then echo "cached:  $3"; return 0; fi
+              echo "::warning::cached $3 digest ${got} != ${want} — refetching"
+            fi
+            # --speed-limit/--speed-time abort a stalled transfer instead of
+            # hanging until the job timeout, and --max-time caps the whole
+            # thing. -w prints the rate so a slow route is visible next time
+            # rather than looking like a hang.
+            curl -fL --retry 3 --max-time 900 --speed-limit 102400 --speed-time 60 \
+                 -H "Authorization: Bearer ${PAT}" \
+                 -H "Accept: application/octet-stream" \
+                 -o "${out}.part" \
+                 -w "  %{size_download} bytes at %{speed_download} B/s in %{time_total}s\n" \
+                 "https://api.github.com/repos/${repo}/releases/assets/${id}" || {
+              echo "::error::download failed or stalled: ${repo} asset ${id}"; return 1; }
+            got="$(shasum -a 256 "${out}.part" | cut -d' ' -f1)"
+            if [ "${got}" != "${want}" ]; then
+              echo "::error::$3: expected ${want}, got ${got}"; rm -f "${out}.part"; return 1
+            fi
+            mv "${out}.part" "${out}"; echo "fetched: $3"
+          }
+
+          # nomercy-whisper-models, release v2026.08.09 (draft), ggml-base.bin.
+          # Multilingual base rather than base.en; the filter is given
+          # language=en explicitly below, so that costs nothing here.
+          fetch_asset "NoMercy-Entertainment/nomercy-whisper-models" 507104388 \
+                      "ggml-base.bin" \
+                      "c2dad44135a48bc7c5a93564f4cd5cc8735ba8822999e358eb31f28d14d72a8b" || exit 1
+
+          # jfk.wav is 344 KB and comes from the pinned whisper.cpp tag; it is
+          # the sample the upstream project ships and is not worth mirroring.
+          if [ ! -f "${CACHE}/jfk.wav" ]; then
+            curl -fsSL --retry 3 --max-time 120 \
+                 -o "${CACHE}/jfk.wav.part" \
+                 "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav" || {
+              echo "::error::could not fetch jfk.wav"; exit 1; }
+            got="$(shasum -a 256 "${CACHE}/jfk.wav.part" | cut -d' ' -f1)"
+            [ "${got}" = "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e" ] || {
+              echo "::error::jfk.wav digest ${got}"; exit 1; }
+            mv "${CACHE}/jfk.wav.part" "${CACHE}/jfk.wav"
+          fi
+          echo "jfk.wav ready"
+
+          cp "${CACHE}/ggml-base.bin" "${CACHE}/jfk.wav" ./
+
+      - name: THE question — does Metal engage on this M4
+        shell: bash
+        run: |
+          set -uo pipefail
+          # This is the first time a line of Metal has ever executed in this
+          # project. ggml compiles the embedded shader SOURCE here, on this
+          # machine, with newLibraryWithSource:. If that fails, the whole
+          # feature is worthless however clean the build looked.
+          ./ffmpeg -hide_banner -v verbose -y -i jfk.wav \
+            -af "aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,whisper=model=ggml-base.bin:language=en:queue=3:use_gpu=1,ametadata=mode=print" \
+            -f null - > whisper-gpu.log 2>&1 || true
+
+          echo "--- ggml / Metal lines ---"
+          grep -iE "metal|ggml_backend|backend '|using embedded|loaded in" whisper-gpu.log | head -25 || true
+          echo "--- what backend did the filter report ---"
+          grep -E "lavfi\.whisper\.(backend|backend_device)" whisper-gpu.log | head -5 || true
+          echo "--- transcript ---"
+          grep -iE "ask not|country" whisper-gpu.log | head -3 || true
+
+          backend="$(grep -oE "lavfi\.whisper\.backend=[a-z0-9]+" whisper-gpu.log | head -1 | cut -d= -f2)"
+          echo
+          echo "reported backend: ${backend:-none}"
+          if [ "${backend:-}" != "mtl" ]; then
+            echo "::error::whisper ran on '${backend:-nothing}', not Metal — the GPU path did not engage"
+            echo "::error::full log follows"
+            tail -60 whisper-gpu.log
+            exit 1
+          fi
+          echo "Metal engaged: the embedded shaders compiled and ran on this M4."
+
+      - name: The project's own smoke suite
+        shell: bash
+        run: |
+          chmod +x tests/smoke.sh
+          tests/smoke.sh "${GITHUB_WORKSPACE}" 9.0 darwin-arm64
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Our Metal build on real Apple Silicon"
+            echo
+            echo "- machine: $(sysctl -n hw.model 2>/dev/null) / $(sysctl -n machdep.cpu.brand_string 2>/dev/null) / macOS $(sw_vers -productVersion 2>/dev/null)"
+            echo "- session: $(launchctl managername 2>/dev/null) (GUI, not a daemon — gate 3 still needs launchctl submit)"
+            if [ -f whisper-gpu.log ]; then
+              echo
+              echo '```'
+              grep -iE "metal|backend '|loaded in|lavfi\.whisper\.backend" whisper-gpu.log | head -20
+              echo '```'
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the whisper log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-gpu-log
+          path: whisper-gpu.log
+          if-no-files-found: warn
+
+      - name: Clean up after ourselves
+        if: always()
+        shell: bash
+        run: |
+          # Persistent runner: leaving half a gigabyte behind every run is not
+          # acceptable. The pinned models under ~/nm-ci-assets are kept on
+          # purpose; everything copied into the workspace is not.
+          rm -f ./ffmpeg ./ffprobe ./ffplay ./probe.mp3 ./build.tar.gz \
+                ./ggml-base.bin ./jfk.wav ./whisper-gpu.log ./*.jar
+          echo "workspace after cleanup:"
+          ls -la | head -15
+          df -h . | tail -1
