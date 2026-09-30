@@ -26,13 +26,14 @@ name: Mac Runner Check
 # cannot even start.
 
 on:
-  # TEMPORARY, REMOVE BEFORE MERGING.
-  # workflow_dispatch only works for workflows that already exist on the
-  # default branch, so a new workflow cannot be started by hand from a feature
-  # branch — there is nothing on master to dispatch. Scoped to this one branch
-  # purely to bring the runner up.
-  push:
-    branches: [feat/metal-backend]
+  # Hand-started only. It reads a published release rather than this branch's
+  # build, so there is nothing for it to react to automatically.
+  #
+  # During bring-up this also carried a push trigger scoped to
+  # feat/metal-backend, because workflow_dispatch only works for workflows that
+  # already exist on the default branch and there was nothing on master to
+  # dispatch yet. Once this file reaches master that crutch is not needed, and
+  # it is removed here rather than left to be found later.
   workflow_dispatch:
     inputs:
       asset_id:
