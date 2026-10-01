@@ -160,8 +160,33 @@ rm -rf /build/giflib
 
 #region libtiff
 cd /build/libtiff
+# Settle libtiff's 8/12-bit JPEG decision instead of letting configure probe
+# for it.
+#
+# libtiff decides whether to compile tif_jpeg_12.c by looking for ONE symbol:
+#
+#     AC_CHECK_LIB(jpeg, jpeg12_read_scanlines, HAVE_JPEGTURBO_DUAL_MODE_8_12=yes)
+#
+# Our libjpeg-turbo answers that probe, but does not provide the three
+# functions the resulting object then needs -- jpeg12_write_raw_data,
+# jpeg12_read_raw_data and jpeg12_write_scanlines. So the object compiles and
+# the failure surfaces much later and somewhere else: as undefined references
+# while gdk-pixbuf links, which aborts LIBRSVG seven minutes into the build
+# with an error naming neither libtiff nor libjpeg.
+#
+# Measured: the probe falls that way on the mingw cross to windows-x86_64 and
+# the other way on linux-x86_64 and darwin-x86_64, where librsvg builds fine.
+# It is a build-time coin flip nobody chose, so it is settled here for every
+# platform rather than only for the one that lost -- leaving the other two on a
+# probe leaves them free to flip the same way tomorrow. Overriding the autoconf
+# cache variable is enough: no patch to libtiff, and the probe never runs.
+#
+# Nothing is lost by it. 12-bit JPEG inside TIFF is not something this project
+# reads or writes; libtiff is here for gdk-pixbuf, which is here for librsvg,
+# which renders SVG.
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
     --host=${CROSS_PREFIX%-}
+ac_cv_lib_jpeg_jpeg12_read_scanlines=no \
 ./configure --prefix=${PREFIX} --enable-static --disable-shared --with-pkgconfigdir=${PREFIX}/lib/pkgconfig \
     --host=${CROSS_PREFIX%-} 2>&1 | log
 

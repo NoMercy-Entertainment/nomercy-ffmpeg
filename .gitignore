@@ -11,3 +11,15 @@ tmp/*
 .claude/memories/
 .claude/scheduled_tasks.lock
 .superpowers/
+
+# Directories whose name ends in ";C" are not real: they are what Git Bash
+# leaves behind when a docker bind mount is written without MSYS_NO_PATHCONV=1.
+# It rewrites "-v /f/path:/container" into "F:\path;C:\Program Files\Git\container",
+# docker takes the whole string as one source path, and creates a directory
+# literally called "<path>;C". Three of them were reported as issue #78.
+#
+# Prefix every docker command that bind-mounts a path from Git Bash with
+# MSYS_NO_PATHCONV=1. This line only stops the debris being committed; it
+# cannot stop it being created.
+*;C
+*;C/

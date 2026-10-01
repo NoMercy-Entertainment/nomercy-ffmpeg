@@ -473,11 +473,66 @@ and macOS, which have none.
 | linux-aarch64 | ✅ | Built and verified under emulation; no ARM GPU has been measured. |
 | windows-aarch64 | ✅ | Built and statically verified; not yet executed on Windows-on-ARM hardware. |
 | freebsd-x86_64 | ❌ | These binaries link statically, and FreeBSD's static `dlopen` always fails, so a loader could never be opened. |
-| darwin-x86_64 / darwin-arm64 | ❌ | Metal, not Vulkan, is the right backend on macOS; a later phase. |
+| darwin-x86_64 | ❌ | No Vulkan, and deliberately no Metal either — see below. |
+| darwin-arm64 | ❌ | No Vulkan; gets **Metal** instead — see below. |
 
 The GPU path adds no runtime dependency on any of them: the binaries stay
 fully static, and there is no Vulkan loader in the import table or the dynamic
 section anywhere.
+
+#### 🍎 **Metal — `whisper` and `stemsplit` on Apple Silicon**
+
+macOS gets no Vulkan (see the table above), but `whisper` and `stemsplit` are
+not CPU-only there either: **darwin-arm64** links ggml's **Metal** backend
+into the same static binary, the same way Linux and Windows link Vulkan.
+There is nothing to install and nothing extra ships — the Metal shader
+*source* (not a compiled `.metallib`) is embedded in the binary itself, and
+the user's machine compiles it the first time it is needed.
+
+**darwin-x86_64 does not get Metal, on purpose.** Two independent reasons,
+either one enough on its own:
+
+- This project's darwin build targets macOS **10.13**, but ggml's Metal
+  backend calls APIs that only exist from macOS **10.15** onward, unguarded.
+  An Intel Mac on the old end of that range would crash, not degrade.
+- Even on a newer Intel or AMD Mac, the GPU itself is the wrong shape for this
+  backend: ggml's fast paths key off the `Apple7` and `Metal3` GPU feature
+  sets, which no Intel or AMD GPU ever reports. Those machines would take
+  ggml's slow, generic paths — for a "GPU acceleration" feature that is worse
+  than doing nothing.
+
+So the split is deliberate and by architecture, not a gap: Apple Silicon gets
+a real speedup path, Intel Macs stay exactly as they were.
+
+**The reported backend name is `mtl`, not `metal`.** ggml's own registry name
+for this backend is the literal string `MTL` (`GGML_METAL_NAME`), and this
+project lower-cases whatever the registry reports rather than inventing its
+own spelling — the same generic fold Vulkan's `vulkan` name goes through. So
+on darwin-arm64 the frame metadata and log line read:
+
+```
+whisper: ggml backend 'mtl' (Apple M4 Pro).
+```
+
+not `'metal'`. Anything that parses this value — a media server included —
+should match `mtl` exactly.
+
+**The first `whisper` or `stemsplit` call in a process compiles the embedded
+shader source once.** ggml builds its Metal device, and compiles the ~600 KB
+of embedded MSL into a usable pipeline, when its backend registry is first
+constructed, and caches the result for the rest of the process. That cost is
+real today: it is paid by the *first* whisper or stemsplit invocation in a
+process, regardless of whether that invocation actually asked for the GPU.
+**A `use_gpu=0` run does not currently avoid it** — whether it *can* be made
+to is a separate, open question this repository has not yet answered, so
+nothing here should be read as promising it either way. Once a process has
+paid the cost, every later call in that same process is unaffected.
+
+**Nothing here proves Metal is fast, or even correct.** This is what builds
+and links; whether it actually accelerates anything, compiles cleanly on a
+real device, behaves under a daemon/SSH session, and beats the CPU path are
+questions only Apple Silicon hardware can answer, and are tracked separately
+rather than claimed here.
 
 #### 🔇 **`trailingsilence` — Trailing-Silence Detection**
 

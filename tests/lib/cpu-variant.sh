@@ -495,3 +495,138 @@ vulkan_startup_ok() {
 	[[ ${inconclusive} -eq 0 ]] || return 2
 	return 0
 }
+
+# --------------------------------------------------------------------------
+# ggml Metal GPU backend (2026-09-27-metal-backend plan, Task 3)
+# --------------------------------------------------------------------------
+#
+# Before this, vulkan_platform_has_backend() returned false for every darwin
+# tag and nothing else here mentioned Metal at all -- so a darwin-arm64 build
+# that lost its GPU backend entirely had zero automated coverage. These are
+# new, Metal-specific predicates rather than an added arm inside
+# vulkan_platform_has_backend(): that function answers "does this platform
+# carry ggml's VULKAN backend", and darwin-arm64's answer to that question is
+# still no (NM_VULKAN stays 0 there, unconditionally, on every darwin arch) --
+# folding Metal into it would make assert_vulkan_backend_present() fail a
+# correct darwin-arm64 build for carrying no "ggml_vulkan" string, which is
+# exactly right for that build.
+#
+# Metal is darwin-arm64 only. darwin-x86_64 stays off on purpose: that
+# dockerfile's deployment floor is 10.13 while ggml uses unguarded 10.15
+# APIs, and Intel/AMD GPUs report neither Apple7 nor Metal3, so they would
+# take ggml's slow paths on the oldest Macs this project supports. freebsd
+# never had a Metal question to begin with. Every other platform (linux,
+# windows) has no Metal at all, ever.
+metal_platform_has_backend() {
+	case "$1" in
+	*darwin-arm64*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# True if ggml's Metal backend is really linked in. Greppable, so it works
+# without executing the binary at all -- no runner here can execute a
+# darwin-arm64 binary regardless of whether it crashes, so this static check
+# is the ONLY automated coverage this platform can get, same reasoning as
+# linux-aarch64 and windows-aarch64 above.
+#
+# Two markers, chosen and verified against Task 1's actual cross-built
+# artefacts rather than assumed: "kernel void kernel_mul_mm" is MSL shader
+# SOURCE TEXT that exists only inside the embedded shader blob
+# (GGML_METAL_EMBED_LIBRARY=ON is what puts it there at all), and "using
+# embedded metal library" is the log line ggml prints only on that same embed
+# path. Measured by concatenating every other library from the same darwin-
+# arm64 build (libggml.a, libggml-base.a, libggml-blas.a, libggml-cpu.a,
+# libwhisper.a, libparakeet.a -- i.e. everything Metal-less that build
+# produces) against libggml-metal.a itself (896,544 bytes, matching the
+# plan's known-good number):
+#
+#     marker                          libggml-metal.a   everything else
+#     kernel void kernel_mul_mm       4                 0
+#     using embedded metal library    1                 0
+#
+# Either string alone already discriminates cleanly; both are required so a
+# future refactor would have to lose the shader source AND the log line
+# before this stops noticing.
+metal_backend_compiled_in() {
+	grep -aq "kernel void kernel_mul_mm" "$1" && grep -aq "using embedded metal library" "$1"
+}
+
+# The metadata value nm_backend_discover() reports for a Metal device is
+# `mtl`, NOT `metal`: GGML_METAL_NAME is the literal C string "MTL"
+# (ggml-metal.cpp), and nm_backend_discover() lower-cases whatever
+# ggml_backend_reg_name() hands back generically, for every backend -- there
+# is no Metal-specific spelling anywhere in this project's own code.
+#
+# DO NOT write this assertion as `grep -aqi metal` or `grep -aq metal`.
+# Measured on the exact same Metal-less concatenation used above: the
+# lowercase substring "metal" is present TWICE even with no Metal backend
+# linked in at all --
+#
+#     ...cann cuda hip metal rpc sycl vulkan...      (ggml-backend-reg.cpp's
+#                                                      compiled-in table of
+#                                                      every backend NAME it
+#                                                      knows how to try, on
+#                                                      every platform)
+#     _ggml_backend_metal_reg                        (an extern reference to
+#                                                      the registration
+#                                                      function, present even
+#                                                      when the function
+#                                                      itself never links)
+#
+# An assertion against "metal" would therefore report PASS on a CPU fallback
+# that never touched Metal at all -- exactly the failure this exists to
+# catch. Case-sensitive "MTL" was 0 occurrences in Task 3's own Metal-less
+# test artifact (a concatenation of just the whisper/ggml .a files) -- but
+# that was too narrow a negative control. Task 4 built the real,
+# fully-linked darwin-arm64 ffmpeg and also checked the real, previously
+# released Metal-less v1.0.42 binary, and a bare substring search FAILS
+# there: v1.0.42 contains the literal bytes "UHD_MTL" (almost certainly an
+# unrelated hardware/codec capability-table entry -- MTL is also Intel's
+# "Meteor Lake" codename), which `grep -aq "MTL"` matches as a substring even
+# though that binary has no Metal backend at all. Same shape of bug this
+# comment already warns about for "metal": a check that reports PASS on a
+# build it should fail.
+#
+# The fix for that was whole-string equality instead of containment: split the
+# binary on NUL and require an exact line match, since `MTL` is its own
+# NUL-terminated string (it IS GGML_METAL_NAME).
+#
+#     tr '\0' '\n' < "$1" | grep -qx "MTL"
+#
+# That line then failed on the Apple Silicon runner against a build which does
+# carry Metal and which had reported `lavfi.whisper.backend=mtl` seconds
+# earlier in the same job. It is worth knowing exactly why, because the two
+# obvious explanations are both wrong and both were tried:
+#
+#   NOT the tools.  Measured on that runner: `LC_ALL=C tr '\000' '\n'` passed
+#   all 122,674,224 bytes through untouched and `grep -cx MTL` found its one
+#   match. BSD tr and BSD grep handle this fine.
+#
+#   NOT the locale or the escape spelling.  Adding LC_ALL=C and \000 changed
+#   nothing, because neither was broken.
+#
+#   IT WAS `grep -q` UNDER `pipefail`.  smoke.sh sets `set -uo pipefail`, and
+#   this file is sourced into it. `grep -q` exits the moment it matches, which
+#   closes the pipe; `tr` is then killed by SIGPIPE with status 141 while it
+#   still has ~120 MB to write, and pipefail faithfully reports the pipeline as
+#   failed. A successful match was thus returned as "not found". It is
+#   size-dependent, which is why it passed on Task 3's small concatenated-.a
+#   fixture and only failed on the real, fully linked binary -- on a small
+#   input `tr` finishes before `grep` can exit.
+#
+# The check was therefore sound and its plumbing was not. It is still gone,
+# but for a different reason than the one first written here: what it proves is
+# proven better by execution. The Metal gates run the binary and require the
+# filter to report `mtl` itself (.github/workflows/mac-runner-check.yml;
+# tools/metal/verify-on-mac.sh gate 1), and darwin-arm64 is executed by a real
+# runner on every CI run, so there is no coverage gap to fill with a grep.
+#
+# The general lesson outlives this check: `big_producer | grep -q` under
+# pipefail is a trap, and the rest of this suite was swept for it -- the
+# `tools/` harnesses do not set pipefail, capabilities.sh is only sourced by
+# tests.sh which does not either, and every other pipeline reachable from
+# smoke.sh feeds grep from a small `echo` that fits in the pipe buffer.
+#
+# metal_backend_compiled_in() above remains the static half, and it is sound:
+# its markers are long and unambiguous, and it does not pipe.

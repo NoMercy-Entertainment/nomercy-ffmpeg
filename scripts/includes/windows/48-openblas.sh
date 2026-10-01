@@ -3,6 +3,26 @@ if [[ ${TARGET_OS} != "windows" ]]; then
     exit 255
 fi
 
+# OpenBLAS is no longer built at all. It was added when ggml here had no SIMD:
+# the cross-compile turns GGML_NATIVE off and nothing set AVX flags, so ggml ran
+# on baseline kernels and BLAS was what made whisper bearable. That hole is
+# closed -- the CPU-variant dispatcher now selects a haswell (AVX2) build at run
+# time, measured at ~4.6x whisper over baseline, and BLAS was only ever helping
+# because SIMD was missing.
+#
+# What it costs to keep is not hypothetical. OpenBLAS starts one worker per
+# logical processor from a linker constructor, before main(), and each commits
+# its buffer before receiving any work -- in every process linking it, whether
+# or not BLAS is ever called. Capped, that is still 487 MiB committed per
+# ffmpeg process (issue #70, where the uncapped figure was 7078 MiB and killed
+# 178 stemsplit runs). A media server starting many processes pays that every
+# time, for a second accelerator that the first one made redundant.
+#
+# Nothing else changes: 48-whisper.sh enables BLAS only when libopenblas.a
+# exists, so leaving it unbuilt is enough to disable it, and linux, darwin and
+# freebsd never had it to begin with.
+exit 255
+
 if [[ ${ARCH} == "aarch64" ]]; then
     # OpenBLAS is skipped on Windows-on-ARM. With DYNAMIC_ARCH=ON its CMake
     # enumerates the x86 kernel family regardless of TARGET ("Targeting the

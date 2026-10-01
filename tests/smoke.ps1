@@ -117,6 +117,34 @@ function Assert-PeMachine($bin, $expected) {
     }
 }
 
+# ggml Metal GPU backend, mirroring Assert-VulkanBackendPresent above. No
+# platform this script's caller ever runs on (windows-x86_64, windows-aarch64)
+# is darwin-arm64, so Test-MetalPlatformHasBackend is always false in
+# practice here and this always reports the skip note - kept in full anyway,
+# the same reason Assert-VulkanBackendPresent above is, so the .ps1 and .sh
+# sides stay easy to diff. Unlike Vulkan there is no startup half to add:
+# nothing in this repo's own CI proves Metal actually runs (only the owner's
+# Apple Silicon Mac can, via tools/metal/verify-on-mac.sh), so both checks are
+# pure string searches over the artifact.
+function Assert-MetalBackendPresent($bin, $platform) {
+    if (-not (Test-MetalPlatformHasBackend $platform)) {
+        Note "$(Split-Path $bin -Leaf): $platform carries no Metal by design (darwin-arm64 only); check skipped"
+        return
+    }
+
+    if (Test-MetalBackendPresent -Bin $bin) {
+        Write-Host "✅ $(Split-Path $bin -Leaf): ggml Metal backend is linked in (embedded shader library present)"
+    } else {
+        Fail "$(Split-Path $bin -Leaf): does not carry the ggml Metal backend (or its embedded shader library)"
+    }
+
+    if (Test-MetalMetadataIsMtl -Bin $bin) {
+        Write-Host "✅ $(Split-Path $bin -Leaf): backend metadata name 'MTL' is present"
+    } else {
+        Fail "$(Split-Path $bin -Leaf): does not carry the 'MTL' backend metadata string"
+    }
+}
+
 $ffmpeg  = Join-Path $Workspace 'ffmpeg.exe'
 $ffprobe = Join-Path $Workspace 'ffprobe.exe'
 
@@ -187,6 +215,7 @@ function Assert-VulkanStartup($bin, $platform) {
 # come before the cross-exec early-return, not after it.
 Assert-CpuVariantDispatcherPresent $ffmpeg $Platform
 Assert-VulkanBackendPresent $ffmpeg $Platform
+Assert-MetalBackendPresent $ffmpeg $Platform
 
 # Cross-exec platforms: never execute — validate PE headers and stop here.
 $machine = Get-CrossExecMachine $Platform
