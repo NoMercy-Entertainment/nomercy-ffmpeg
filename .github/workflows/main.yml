@@ -211,6 +211,173 @@ jobs:
         shell: pwsh
         run: ./tests/smoke.ps1 -Workspace $env:GITHUB_WORKSPACE -ExpectedVersion $env:FFMPEG_VERSION -Platform "${{ matrix.platform }}"
 
+  # ── Metal release gates, on real Apple Silicon ──────────────────────────
+  # The only job in this pipeline that can answer whether Metal actually
+  # WORKS. Every other Metal check is static: the backend is linked, the
+  # embedded shader blob is the right size, the metadata string is present.
+  # None of that executes a line of Metal — the shaders ship as *source* that
+  # the user's machine compiles at run time, so "it built" says nothing about
+  # "it runs", and that compile could fail on the first real device.
+  #
+  # Four labels on runs-on, on purpose. The fleet also holds an Intel Mac and
+  # the Linux beast-unit, and #74 was exactly this mistake: a runs-on with one
+  # unqualified label matched eight jobs onto whatever machine happened to
+  # carry it, and put a linux-x86_64 docker build on a macOS runner. `macOS`
+  # alone would reach the Intel Mac, where Metal is deliberately OFF and an
+  # arm64 binary cannot even start.
+  #
+  # Deliberately NOT in any other job's `needs`. It reports; it does not gate
+  # the release. Whether a red Metal gate should block a release is the
+  # owner's call, not something to smuggle in with the job that first measures
+  # it.
+  metal-gates:
+    needs: [detect-changes, export-artifacts]
+    if: |
+      always() && !cancelled()
+      && needs.export-artifacts.result == 'success'
+      && contains(needs.detect-changes.outputs.platforms-to-build, 'darwin-arm64')
+    runs-on: [self-hosted, macOS, ARM64, apple-silicon]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: downloads/
+
+      - name: Unpack the darwin-arm64 binary
+        shell: bash
+        run: |
+          archive="downloads/ffmpeg-${FFMPEG_VERSION}-darwin-arm64.tar.gz"
+          if [[ ! -f "${archive}" ]]; then
+            echo "::error::expected artifact missing: ${archive}"
+            ls -la downloads/ || true
+            exit 1
+          fi
+          tar -xzf "${archive}"
+          chmod +x ./ffmpeg
+          # Refuse to test the wrong thing. This runner keeps state between
+          # jobs, and an ffmpeg left over from an earlier run would answer
+          # every gate below while proving nothing about this build.
+          if ! file ./ffmpeg | grep -q 'arm64'; then
+            echo "::error::unpacked ffmpeg is not arm64: $(file ./ffmpeg)"
+            exit 1
+          fi
+
+      - name: Prepare test assets
+        shell: bash
+        run: |
+          set -uo pipefail
+          # The models are large and unchanging, so on this persistent runner
+          # they live outside the workspace and are fetched once. The
+          # workspace itself is wiped by the cleanup step at the end.
+          CACHE="${HOME}/nm-ci-assets"
+          mkdir -p "${CACHE}"
+
+          # Pinned by digest. Downloading a model and not checking what came
+          # back is how a green run ends up measuring something else.
+          fetch() {  # fetch <url> <name> <sha256>
+            local url="$1" out="${CACHE}/$2" want="$3" got
+            if [ -f "${out}" ]; then
+              got="$(shasum -a 256 "${out}" | cut -d' ' -f1)"
+              if [ "${got}" = "${want}" ]; then echo "cached:  $2"; return 0; fi
+              echo "::warning::cached $2 has digest ${got}, expected ${want} — refetching"
+            fi
+            curl -fsSL --retry 3 -o "${out}.part" "${url}" || {
+              echo "::error::download failed: ${url}"; return 1; }
+            got="$(shasum -a 256 "${out}.part" | cut -d' ' -f1)"
+            if [ "${got}" != "${want}" ]; then
+              echo "::error::$2: expected ${want}, got ${got}"
+              rm -f "${out}.part"; return 1
+            fi
+            mv "${out}.part" "${out}"
+            echo "fetched: $2"
+          }
+
+          fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" \
+                "ggml-base.en.bin" \
+                "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002" || exit 1
+          fetch "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav" \
+                "jfk.wav" \
+                "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e" || exit 1
+
+          # The stemsplit model is not public. README.md:249 says it is
+          # "published as a GitHub release asset"; it is attached to no release
+          # yet (checked against v1.0.42). Until it is, it has to be placed on
+          # this runner by hand, once.
+          if [ ! -f "${CACHE}/spleeter-2stems-f16.gguf" ]; then
+            echo "::error::${CACHE}/spleeter-2stems-f16.gguf is missing on this runner."
+            echo "::error::Place it there once — 39,319,552 bytes, sha256 155dc9d2e2eef70ad633af98134df29a5273defaeb98ef013d46251faa69d0ad."
+            echo "::error::Better: attach it to a release as README.md:249 already promises, then fetch it here by digest like the two above."
+            exit 1
+          fi
+
+          # A music clip generated by the binary under test rather than
+          # downloaded: no licensing question, identical every run, and gate 4
+          # only needs *some* audio to compare CPU against Metal on. ~40 s
+          # because the gate script wants at least ~35 s.
+          ./ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "sine=frequency=220:duration=40" \
+            -f lavfi -i "anoisesrc=duration=40:color=pink:amplitude=0.1" \
+            -filter_complex "[0][1]amix=inputs=2,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo" \
+            -c:a libmp3lame -b:a 192k "${CACHE}/input.mp3"
+
+          for a in ggml-base.en.bin jfk.wav spleeter-2stems-f16.gguf input.mp3; do
+            cp "${CACHE}/${a}" "./${a}"
+          done
+          ls -la ggml-base.en.bin jfk.wav spleeter-2stems-f16.gguf input.mp3
+
+      - name: Run the four Metal gates
+        shell: bash
+        run: |
+          chmod +x tools/metal/verify-on-mac.sh
+          # tee, so the summary step can quote the script's real output
+          # instead of a retyped version of it.
+          set -o pipefail
+          tools/metal/verify-on-mac.sh "${GITHUB_WORKSPACE}" ffmpeg 2>&1 | tee metal-gates.log
+
+      - name: Publish the gate summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Metal release gates — darwin-arm64 on Apple Silicon"
+            echo
+            echo "Runner: $(sysctl -n hw.model 2>/dev/null || echo unknown) / $(uname -m) / macOS $(sw_vers -productVersion 2>/dev/null || echo '?')"
+            echo
+            if [ -f metal-gates.log ]; then
+              echo '```'
+              # The script ends with a copy-pasteable block meant for issue #69.
+              sed -n '/=== METAL RELEASE GATES/,/=== END SUMMARY ===/p' metal-gates.log
+              echo '```'
+            else
+              echo "The gate script produced no log — it failed before writing one."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the full gate log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal-gates-log
+          path: metal-gates.log
+          if-no-files-found: warn
+
+      - name: Clean the workspace
+        if: always()
+        shell: bash
+        run: |
+          # This runner is persistent and these files are large. The cached
+          # models under ~/nm-ci-assets are deliberately kept; everything this
+          # job copied into the workspace is not.
+          rm -f ./ffmpeg ./ffprobe ./ffplay ./*.jar \
+                ./ggml-base.en.bin ./jfk.wav ./spleeter-2stems-f16.gguf ./input.mp3 \
+                ./metal-gates.log
+          rm -rf ./downloads
+          df -h . | tail -1
+
   # ── Publish/refresh the Release Candidate prerelease (release PR only) ───
   # Gives contributors version-stamped binaries to test manually on each
   # platform. Deleted+recreated each run so assets and tag always match the

@@ -5,8 +5,59 @@
 #/*  https://github.com/Fill84 */#
 #/******************************/#
 
-# Copy the custom filter source
-cp /scripts/includes/af_beatdetect.c /build/ffmpeg/libavfilter/af_beatdetect.c
+# The filter source comes from its own repository, always at its newest
+# RELEASE -- same arrangement as 60-stemsplit.sh, and the owner's decision of
+# 2026-09-30: these repositories are theirs, and a release there is meant to
+# ship here.
+#
+# The RELEASE is resolved, not the default branch. A branch carries whatever
+# was half-written that afternoon; a release is something the author decided to
+# publish.
+#
+# Two consequences, recorded rather than hidden:
+#
+#   * builds are not reproducible from this repository alone -- the same
+#     nomercy-ffmpeg commit produces a different binary once a new beatdetect
+#     release exists;
+#   * there is no digest to verify against, so the content check below carries
+#     the weight a digest otherwise would. `curl -f` does not catch a proxy or
+#     error page served with HTTP 200, and compiling one of those into ffmpeg
+#     fails in a way that looks like anything except a bad download.
+#
+# What replaces reproducibility is traceability: the resolved tag, byte count
+# and digest are logged here, and the filter reports its version at runtime as
+# lavfi.beatdetect.version.
+beatdetect_api=https://forgejo.phillippepelzer.me/api/v1/repos/FiLL/ffmpeg-beatdetect
+beatdetect_dst=/build/ffmpeg/libavfilter/af_beatdetect.c
+
+log "Step 0: Resolving the newest ffmpeg-beatdetect release"
+beatdetect_tag=$(curl -fsSL --retry 3 --max-time 60 "${beatdetect_api}/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+if [ -z "${beatdetect_tag}" ]; then
+    log "  ✗ ERROR: could not resolve the newest release from ${beatdetect_api}/releases/latest"
+    log "      (no tag_name in the response -- server unreachable, or no release published yet)"
+    exit 1
+fi
+log "  ✓ newest release is ${beatdetect_tag}"
+
+beatdetect_url="https://forgejo.phillippepelzer.me/FiLL/ffmpeg-beatdetect/raw/tag/${beatdetect_tag}/src/af_beatdetect.c"
+if ! curl -fsSL --retry 3 --max-time 120 -o "${beatdetect_dst}" "${beatdetect_url}"; then
+    log "  ✗ ERROR: could not fetch ${beatdetect_url}"
+    exit 1
+fi
+
+# Without a digest to compare against, this is what stands between the build
+# and a plausible-looking error page. Both markers must be present: the filter
+# FFmpeg links by name, and the version macro the runtime metadata reports.
+if ! grep -q "ff_af_beatdetect" "${beatdetect_dst}" || ! grep -q "define BEATDETECT_VERSION" "${beatdetect_dst}"; then
+    log "  ✗ ERROR: what came back from ${beatdetect_tag} is not af_beatdetect.c"
+    log "      ($(wc -c < "${beatdetect_dst}") bytes, first line: $(head -1 "${beatdetect_dst}" | cut -c1-70))"
+    rm -f "${beatdetect_dst}"
+    exit 1
+fi
+
+beatdetect_declared=$(sed -n 's/^#define BEATDETECT_VERSION *"\([^"]*\)".*/\1/p' "${beatdetect_dst}" | head -1)
+log "  ✓ af_beatdetect.c ${beatdetect_tag} (declares ${beatdetect_declared:-?}), $(wc -c < "${beatdetect_dst}") bytes, sha256 $(sha256sum "${beatdetect_dst}" | cut -d' ' -f1)"
 
 # 1. Register the filter extern declaration in allfilters.c
 echo "Step 1: Adding extern declaration to allfilters.c" > /ffmpeg_build.log
