@@ -105,7 +105,7 @@ jobs:
           echo "✅ Docker daemon is healthy"
 
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         timeout-minutes: 5
 
       - name: Setup Error Handling
@@ -155,7 +155,7 @@ jobs:
 
       - name: Checkout Secrets Repository
         if: ${{ inputs.secrets_repo }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: master
@@ -316,7 +316,7 @@ jobs:
 
       - name: Upload Build Failure Report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-failure-report-${{ inputs.platform }}
           path: build-failure-report.md

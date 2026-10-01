@@ -118,7 +118,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, beast-unit]
     steps:
       - name: Log in to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
@@ -155,7 +155,7 @@ jobs:
           done
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-artifacts
           path: downloads/
@@ -177,10 +177,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: build-artifacts
           path: downloads/
@@ -239,10 +239,10 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, apple-silicon]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: build-artifacts
           path: downloads/
@@ -359,7 +359,7 @@ jobs:
 
       - name: Upload the full gate log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: metal-gates-log
           path: metal-gates.log
@@ -412,7 +412,7 @@ jobs:
       contents: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: build-artifacts
           path: downloads/
@@ -494,7 +494,7 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes 2>/dev/null || true
 
       - name: Publish RC prerelease
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.detect-changes.outputs.version }}-rc
           name: Release Candidate ${{ needs.detect-changes.outputs.version }}-rc
@@ -573,7 +573,7 @@ jobs:
       security-events: write
     steps:
       - name: Log in to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
@@ -606,7 +606,7 @@ jobs:
       contents: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: build-artifacts
           path: downloads/
@@ -684,7 +684,7 @@ jobs:
           ls -lh release/
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.detect-changes.outputs.version }}
           name: FFmpeg Build ${{ needs.detect-changes.outputs.version }}

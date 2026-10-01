@@ -180,7 +180,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.head-sha }}
 
@@ -343,7 +343,7 @@ jobs:
       # comment needs to say WHICH test failed, not just that something did.
       - name: Upload verdict
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verdict-${{ matrix.platform }}
           path: verdict-${{ matrix.platform }}.json
@@ -357,12 +357,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.head-sha }}
 
       - name: Download all verdicts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: verdict-*
           path: verdicts
