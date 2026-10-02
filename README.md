@@ -528,22 +528,33 @@ whisper: ggml backend 'mtl' (Apple M4 Pro).
 not `'metal'`. Anything that parses this value — a media server included —
 should match `mtl` exactly.
 
-**The first `whisper` or `stemsplit` call in a process compiles the embedded
-shader source once.** ggml builds its Metal device, and compiles the ~600 KB
-of embedded MSL into a usable pipeline, when its backend registry is first
-constructed, and caches the result for the rest of the process. That cost is
-real today: it is paid by the *first* whisper or stemsplit invocation in a
-process, regardless of whether that invocation actually asked for the GPU.
-**A `use_gpu=0` run does not currently avoid it** — whether it *can* be made
-to is a separate, open question this repository has not yet answered, so
-nothing here should be read as promising it either way. Once a process has
-paid the cost, every later call in that same process is unaffected.
+**A `use_gpu=1` call compiles the embedded shader source once per process.**
+ggml builds its Metal device and compiles the ~600 KB of embedded MSL into a
+usable pipeline when its backend registry is first constructed, then caches
+that for the rest of the process. Measured on an M4: **6.262 s** for the first
+call; every later call in the same process is unaffected.
 
-**Nothing here proves Metal is fast, or even correct.** This is what builds
-and links; whether it actually accelerates anything, compiles cleanly on a
-real device, behaves under a daemon/SSH session, and beats the CPU path are
-questions only Apple Silicon hardware can answer, and are tracked separately
-rather than claimed here.
+**A `use_gpu=0` run does not pay it.** Earlier revisions of this section said
+the opposite — that the cost fell on the first invocation "regardless of
+whether that invocation actually asked for the GPU". That was true of the ggml
+version the research was written against and is not true of the one shipped
+here: a `use_gpu=0` stemsplit run never initialises Metal at all (0.362 s and
+0.372 s in two fresh processes, with no ggml init lines printed). So the cost
+a CPU-only user pays for Metal being linked in is zero, and the question of
+whether registry construction could be deferred is moot.
+
+**Verified on Apple Silicon, with two caveats.** On an M4 running macOS 26.5.2
+the shaders compile on the real device, the backend reports `mtl` both
+interactively and under launchd, and Metal edges the fixed-level NEON CPU
+build (0.912 s against 0.920 s over 30 s of audio — 1.01x, so "it works" is a
+fairer summary than "it is fast"). Earlier revisions said none of this had been
+established; that is no longer the case.
+
+The caveats: the speed margin is small enough that it is not a reason on its
+own to opt in, and the automated gate that checks Metal output against the CPU
+path was itself wrong until 2026-10-02 — it summed the two signals instead of
+subtracting them, so it reported a 6 dB difference precisely when the outputs
+were identical. Issue #90 read that as a defect in stemsplit. It was not.
 
 #### 🔇 **`trailingsilence` — Trailing-Silence Detection**
 

@@ -250,8 +250,19 @@ else
     echo "  ggml log, run #2: ${RUN2_EMBED:-<not printed>} / ${RUN2_LOADED:-<not printed>}"
 
     if [ -z "${RUN1_EMBED}" ]; then
-        G2_STATUS="FAIL"
-        G2_REASON="use_gpu=0 stemsplit never printed the ggml Metal init lines -- either the premise in the research (section 6: a use_gpu=0 run still pays the compile) no longer holds on this ggml version, or Metal never initialised at all. Either way this number cannot be trusted; investigate before reporting a timing."
+        # No Metal init on a use_gpu=0 run. This gate used to call that a
+        # failure, because the research (section 6) believed such a run still
+        # paid the ~6 s shader compile. It does not on this ggml version, and
+        # that is the best possible answer to the Task 2 question: what a
+        # CPU-only user pays for Metal being linked in is zero, not merely
+        # small, so there is nothing to defer. README.md carried the same
+        # stale claim and is corrected alongside this.
+        #
+        # Kept as an assertion rather than deleted: if a future ggml builds
+        # the registry on the CPU path again, the cost returns and this is
+        # where it surfaces -- see the else branch.
+        G2_STATUS="PASS"
+        G2_REASON="use_gpu=0 does not initialise Metal at all (baseline ${T1_VERSION}s, run #1 ${T2_STEMSPLIT1}s, run #2 ${T3_STEMSPLIT2}s) -- a CPU-only run pays nothing for Metal being linked in"
     else
         SUBTRACTION="$(awk -v a="${T1_VERSION}" -v b="${T2_STEMSPLIT1}" 'BEGIN{printf "%.3f", b-a}')"
         echo "  subtraction (run #1 - baseline)                  : ${SUBTRACTION}s  <-- the number a use_gpu=0 user pays for Metal being linked in"
@@ -270,8 +281,17 @@ else
                 echo "  verdict: BORDERLINE (0.25s-1.0s) -- not obviously negligible or obviously bad. This is a judgment call for the owner, not this script; report the raw number in the summary block below rather than a verdict."
                 ;;
         esac
-        G2_STATUS="PASS"
-        G2_REASON="measured: baseline ${T1_VERSION}s, first use_gpu=0 run ${T2_STEMSPLIT1}s, subtraction ${SUBTRACTION}s (${VERDICT})"
+        # Reaching here means Metal DID initialise on a use_gpu=0 run, which
+        # is the regression the branch above guards against. The size decides:
+        # SMALL is noise, BORDERLINE is the owner's call and is reported rather
+        # than judged here, LARGE is a real cost on the CPU path and fails so
+        # that it cannot be merged without someone having seen the number.
+        if [ "${VERDICT}" = "LARGE" ]; then
+            G2_STATUS="FAIL"
+        else
+            G2_STATUS="PASS"
+        fi
+        G2_REASON="Metal initialised on a use_gpu=0 run (unexpected): baseline ${T1_VERSION}s, first run ${T2_STEMSPLIT1}s, subtraction ${SUBTRACTION}s (${VERDICT})"
     fi
 fi
 
@@ -344,9 +364,15 @@ hr
 echo "GATE 4a: output matches the CPU path (same standard the Vulkan work used)"
 hr
 
-rms_dbfs() {   # rms_dbfs <wav>  -> "Overall RMS level dB", via ffmpeg's own astats
+# Returns the literal string "-inf" for silence as well as a number. astats
+# prints "RMS level dB: -inf" for a pure-silence stream, which the old
+# [-0-9.]+ pattern could not match -- so a PERFECT null came back empty and
+# gate 4a took that for "astats reported nothing" and failed. The best
+# possible result was unreachable. Callers must test for "-inf" before doing
+# arithmetic, because awk would coerce it to 0.
+rms_dbfs() {   # rms_dbfs <wav>  -> "Overall RMS level dB" or "-inf"
     "${FF}" -hide_banner -nostats -loglevel info -i "$1" -af astats -f null - 2>&1 \
-        | grep -oE "RMS level dB: [-0-9.]+" | tail -1 | awk '{print $NF}'
+        | grep -oE "RMS level dB: (-inf|[-0-9.]+)" | tail -1 | awk '{print $NF}'
 }
 
 if [ ! -f "${SS_MODEL_PATH}" ] || [ ! -f "${SS_INPUT_PATH}" ]; then
@@ -372,13 +398,29 @@ else
         G4A_REASON="one of the two output files is empty -- a backend that produced no audio would trivially 'match' nothing, so this is a hard fail, not a pass by omission"
     else
         DIFF_WAV="${TMP}/g4_diff.wav"
+        # Invert one input, then sum. `amix` does NOT honour a negative
+        # weight: weights='1 -1' adds instead of subtracting, which is what
+        # this gate did until now. Measured on two byte-identical files it
+        # reports +6.0 dB -- exactly the 6.02 dB of doubling a signal. That is
+        # the number issue #90 read as a Metal defect in stemsplit; it is in
+        # fact the signature of the two outputs being IDENTICAL. The gate
+        # failed hardest when the build was perfect.
         "${FF}" -hide_banner -loglevel error -y -i "${CPU_WAV}" -i "${MTL_WAV}" \
-            -filter_complex "[0:a][1:a]amix=inputs=2:weights='1 -1':normalize=0:duration=shortest[out]" \
+            -filter_complex "[1:a]volume=-1[inv];[0:a][inv]amix=inputs=2:weights='1 1':normalize=0:duration=shortest[out]" \
             -map "[out]" -f wav "${DIFF_WAV}" 2>&1
 
         SIG_DB="$(rms_dbfs "${CPU_WAV}")"
         DIFF_DB="$(rms_dbfs "${DIFF_WAV}")"
-        if [ -z "${SIG_DB}" ] || [ -z "${DIFF_DB}" ]; then
+        if [ "${DIFF_DB}" = "-inf" ]; then
+            # Cancelled to exact silence: the two outputs are bit-identical.
+            G4A_STATUS="PASS"
+            G4A_DB="-inf"
+            G4A_REASON="stemsplit: cpu and mtl output null to exact silence -- bit-identical, the strongest result this gate can report"
+        elif [ "${SIG_DB}" = "-inf" ]; then
+            # The reference is silent, so a null would mean nothing at all.
+            G4A_STATUS="FAIL"
+            G4A_REASON="the cpu reference is pure silence -- the fixture produced no audio, so no comparison here proves anything"
+        elif [ -z "${SIG_DB}" ] || [ -z "${DIFF_DB}" ]; then
             G4A_STATUS="FAIL"
             G4A_REASON="astats did not report an RMS level for the signal or the difference -- cannot compute a relative dB figure"
         else
