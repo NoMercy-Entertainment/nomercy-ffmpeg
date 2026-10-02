@@ -246,11 +246,22 @@ its rate but not its top octave, because the separation happened at 44.1 kHz;
 and more than two channels is folded to stereo for the network and upmixed
 back, which the filter logs as a warning.
 
-**Model:** `spleeter-2stems-f16.gguf` (39,319,552 bytes) is published as a
-GitHub release asset on this repository, downloaded the same way whisper's
-ggml models are — not bundled in the platform tarballs. *At the time of
-writing this asset has not yet been attached to a release; the download
-link will resolve once it is published.*
+**Model:** `spleeter-2stems-f16.gguf` (39,319,552 bytes, sha256
+`155dc9d2e2eef70ad633af98134df29a5273defaeb98ef013d46251faa69d0ad`) is
+downloaded the same way whisper's ggml models are, not bundled in the
+platform tarballs. It is published as a release asset on the org's
+[nomercy-stemsplit-models](https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/tag/v2026.09.09)
+repository, which is public, so no token is needed:
+
+```
+https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/download/v2026.09.09/spleeter-2stems-f16.gguf
+```
+
+Earlier revisions of this section said the asset lived on *this*
+repository and had not been attached to a release yet. Both were wrong,
+and the CI gate that verifies Metal trusted it: it refused to fetch the
+model and demanded it be copied onto the runner by hand, which nobody
+did, so that job failed on every run from 2026-09-09 onward.
 
 **This is an offline filter, by design.** The network needs a full ~512-frame
 (~11.9 s) segment before it can emit anything, so `stemsplit` is unsuitable
