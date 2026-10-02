@@ -177,12 +177,26 @@ jobs:
           matches "^(scripts|dev)/includes/[^/]+$"     && SHARED=true
           matches "^dev/init/"                         && SHARED=true
 
-          # npm-publish.yml is an npm-client-only workflow — it never affects
-          # the binaries, so a change to it alone must not force a rebuild.
+          # A change confined to workflows that cannot affect the binaries must
+          # not trigger a rebuild. Before this, anything under .github/workflows/
+          # except npm-publish.yml rebuilt all seven platforms, so every CI fix
+          # forced a release whose archives were byte-identical to the previous
+          # one -- v1.0.44 was exactly that.
+          #
+          # Only three workflows decide what ends up in an archive: this one,
+          # main.yml and reusable-docker-build.yml. The rest gate pull requests,
+          # report fleet health, verify or retract an existing release, or tidy
+          # up after one. None of them can change a binary.
+          #
+          # Deliberately a denylist, not an allowlist: a workflow added later
+          # falls through to WORKFLOW=true and rebuilds. Rebuilding when it was
+          # not needed costs an hour; not rebuilding when it was needed ships
+          # stale binaries, so the unknown case has to be the conservative one.
+          NON_BUILD_WORKFLOWS='^\.github/workflows/(delete-workflow-runs|fleet-health|mac-runner-check|npm-publish|pr-guards|retract-release|verify-rc|verify-windows-arm64-emulated)\.yml$'
           WORKFLOW=false
           if echo "${CHANGED_FILES}" \
                | grep -E "^\.github/workflows/" \
-               | grep -qvE "^\.github/workflows/npm-publish\.yml$"; then
+               | grep -qvE "${NON_BUILD_WORKFLOWS}"; then
             WORKFLOW=true
           fi
 
