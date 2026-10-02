@@ -25,10 +25,16 @@ jobs:
   # before FFmpeg 9.0, for two months. Deriving it removes the step instead of
   # documenting it.
   check:
+    # Deliberately NOT gated on workflow_run.conclusion. One failing job
+    # makes the whole run conclude 'failure', and metal-gates -- a
+    # reporting job in no other job's needs -- did exactly that for
+    # v1.0.43 and v1.0.44, so this workflow skipped and npm sat on 1.0.42
+    # while two releases shipped. What actually matters is whether the run
+    # produced a release; that is checked per-job below instead of being
+    # inferred from the run as a whole.
     if: >-
       github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'master')
+      github.event.workflow_run.head_branch == 'master'
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.version-check.outputs.skip }}
@@ -48,8 +54,24 @@ jobs:
         id: version-check
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
+
+          # Did that pipeline run actually release anything? Ask the release
+          # job, not the run's overall conclusion -- see the note on this
+          # job's `if`. A run whose release job was skipped or failed has
+          # nothing to publish, and saying so is not an error.
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then
+            RELEASE_RESULT=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" --paginate \
+              --jq '[.jobs[] | select(.name == "release")] | .[0].conclusion // "missing"')
+            if [ "${RELEASE_RESULT}" != "success" ]; then
+              echo "release job is ${RELEASE_RESULT} - nothing was released, so nothing to publish."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
 
           # The latest full release, whatever triggered this run: a release
           # event, the pipeline finishing on master, or a manual dispatch.
@@ -69,7 +91,18 @@ jobs:
           fi
 
           PACKAGE_NAME=$(node -p "require('./package.json').name")
-          PUBLISHED=$(npm view "$PACKAGE_NAME@$VERSION" version 2>/dev/null || echo "")
+          # Asked of the registry directly rather than through `npm view`,
+          # which serves cached metadata: on 2026-10-02 it still reported
+          # latest 1.0.42 and no 1.0.44 minutes after 1.0.44 had published
+          # successfully. A stale answer here either skips a release that
+          # should ship or attempts a republish, which npm rejects.
+          CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+            "https://registry.npmjs.org/${PACKAGE_NAME}/${VERSION}")
+          case "${CODE}" in
+            200) PUBLISHED="$VERSION" ;;
+            404) PUBLISHED="" ;;
+            *)   echo "::error::registry.npmjs.org answered ${CODE} for ${PACKAGE_NAME}@${VERSION}; refusing to guess."; exit 1 ;;
+          esac
 
           {
             echo "tag=${TAG}"
