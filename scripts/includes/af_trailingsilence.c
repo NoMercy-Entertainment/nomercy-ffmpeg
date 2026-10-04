@@ -204,8 +204,17 @@ static void write_report(AVFilterContext *ctx, int detected,
  * path rather than losing it.
  *
  * The retry exists for Windows, where ANSI rename() refuses an existing
- * destination. Removing it first is safe here precisely because the
- * replacement is already complete on disk. */
+ * destination. Removing it first never loses the NEW report, which is
+ * already complete at the temp path. It can lose the OLD one: if the remove
+ * succeeds and the second rename then fails, the previous report is gone.
+ * That double failure is rare, but it used to be reported as "unchanged",
+ * which is the one thing it is not -- so each failure now says what is
+ * actually on disk.
+ *
+ * MoveFileExA(MOVEFILE_REPLACE_EXISTING) would make the replacement atomic
+ * and close that window, but it needs <windows.h> in a cross-compiled
+ * filter, whose min/max and similar macros can collide with the rest of
+ * the tree. A truthful message on every platform is the safer change. */
 static void finalize_report(AVFilterContext *ctx)
 {
     TrailingSilenceContext *s = ctx->priv;
@@ -215,12 +224,24 @@ static void finalize_report(AVFilterContext *ctx)
 
     avio_closep(&s->report);
 
-    if (rename(s->tmp_path, s->destination) &&
-        (remove(s->destination) || rename(s->tmp_path, s->destination))) {
+    if (rename(s->tmp_path, s->destination) == 0)
+        return;
+
+    if (remove(s->destination) != 0) {
         av_log(ctx, AV_LOG_ERROR,
-               "trailingsilence: could not move %s onto %s: %s. The report is "
+               "trailingsilence: could not replace %s: %s. The new report is "
                "complete and left at %s; %s is unchanged.\n",
-               s->tmp_path, s->destination, av_err2str(AVERROR(errno)),
+               s->destination, av_err2str(AVERROR(errno)),
+               s->tmp_path, s->destination);
+        return;
+    }
+
+    if (rename(s->tmp_path, s->destination) != 0) {
+        av_log(ctx, AV_LOG_ERROR,
+               "trailingsilence: removed the old %s to replace it, but could "
+               "not move the new report into place: %s. The new report is "
+               "complete and left at %s; the previous %s is gone.\n",
+               s->destination, av_err2str(AVERROR(errno)),
                s->tmp_path, s->destination);
     }
 }

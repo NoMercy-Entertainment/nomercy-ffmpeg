@@ -343,6 +343,67 @@ static void uninit(AVFilterContext *ctx)
 // value is reported with confidence 1.0; with 'auto' the detection reuses the
 // mel spectrogram of the whisper_full() call that produced the current window,
 // costing one extra encoder pass exactly once per filter instance.
+/**
+ * Escape a string as the contents of a JSON string literal (RFC 8259, 7).
+ *
+ * The json destination used to insert text with a plain %s. Whisper output
+ * containing a double quote, a backslash or a control character therefore
+ * produced a line no JSON parser accepts -- and a transcript quoting someone
+ * is exactly where a double quote turns up. The language field had the same
+ * hole and a worse source: it can be the user's own language= option, not
+ * only one of whisper.cpp's fixed codes.
+ *
+ * Bytes from 0x80 up are copied as they are, since JSON is UTF-8 and the
+ * transcript is too. Returns a newly allocated string, or NULL when
+ * allocation fails; the caller frees it.
+ */
+static char *json_escape(const char *s)
+{
+    static const char hex[] = "0123456789abcdef";
+    const unsigned char *p;
+    size_t n = 0;
+    char *out, *o;
+
+    for (p = (const unsigned char *) s; *p; p++) {
+        switch (*p) {
+        case '"': case '\\': case '\b': case '\f':
+        case '\n': case '\r': case '\t':
+            n += 2;
+            break;
+        default:
+            n += *p < 0x20 ? 6 : 1;
+        }
+    }
+
+    out = av_malloc(n + 1);
+    if (!out)
+        return NULL;
+
+    for (p = (const unsigned char *) s, o = out; *p; p++) {
+        switch (*p) {
+        case '"':  *o++ = '\\'; *o++ = '"';  break;
+        case '\\': *o++ = '\\'; *o++ = '\\'; break;
+        case '\b': *o++ = '\\'; *o++ = 'b';  break;
+        case '\f': *o++ = '\\'; *o++ = 'f';  break;
+        case '\n': *o++ = '\\'; *o++ = 'n';  break;
+        case '\r': *o++ = '\\'; *o++ = 'r';  break;
+        case '\t': *o++ = '\\'; *o++ = 't';  break;
+        default:
+            if (*p < 0x20) {
+                *o++ = '\\';
+                *o++ = 'u';
+                *o++ = '0';
+                *o++ = '0';
+                *o++ = hex[*p >> 4];
+                *o++ = hex[*p & 0xf];
+            } else
+                *o++ = (char) *p;
+        }
+    }
+    *o = '\0';
+    return out;
+}
+
 static void resolve_language(AVFilterContext *ctx)
 {
     WhisperContext *wctx = ctx->priv;
@@ -380,13 +441,41 @@ static void resolve_language(AVFilterContext *ctx)
            wctx->detected_language, wctx->language_confidence);
 
     if (wctx->avio_context && !av_strcasecmp(wctx->format, "json")) {
-        char *buf = av_asprintf("{\"detected_language\":\"%s\",\"language_confidence\":%.6f}\n",
-                                wctx->detected_language, wctx->language_confidence);
+        char *lang_json = json_escape(wctx->detected_language);
+        char *buf = lang_json
+            ? av_asprintf("{\"detected_language\":\"%s\",\"language_confidence\":%.6f}\n",
+                          lang_json, wctx->language_confidence)
+            : NULL;
+        av_freep(&lang_json);
         if (buf) {
             avio_write(wctx->avio_context, buf, strlen(buf));
             av_freep(&buf);
         }
     }
+}
+
+/**
+ * Drop the first `samples` from the audio buffer and move the rest to the
+ * front.
+ *
+ * This used memcpy, and source and destination are the same buffer: they
+ * overlap as soon as more than half of it is kept (fill > 2 * samples).
+ * Overlapping memcpy is undefined behaviour. It mostly works because glibc
+ * happens to copy forwards, and silently corrupts the buffer on any
+ * implementation that copies in blocks or backwards. memmove is defined for
+ * exactly this.
+ */
+static void consume_buffer(WhisperContext *wctx, int samples)
+{
+    const float duration = (float) samples / WHISPER_SAMPLE_RATE;
+
+    if (wctx->audio_buffer_fill_size > samples) {
+        memmove(wctx->audio_buffer, wctx->audio_buffer + samples,
+                (wctx->audio_buffer_fill_size - samples) * sizeof(*wctx->audio_buffer));
+        wctx->audio_buffer_start_ms += duration * 1000;
+    }
+    wctx->audio_buffer_fill_size -= samples;
+    wctx->audio_buffer_vad_size = wctx->audio_buffer_fill_size;
 }
 
 static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
@@ -418,6 +507,13 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
 
     if (whisper_full(wctx->ctx_wsp, params, wctx->audio_buffer, samples) != 0) {
         av_log(ctx, AV_LOG_ERROR, "Failed to process audio with whisper.cpp\n");
+        /* Drain the failed window anyway. This used to return with the
+         * buffer untouched, and filter_frame calls this function precisely to
+         * make room: it then appended the next frame to a buffer that was
+         * still full and wrote past the end of the allocation. Dropping the
+         * audio is the only option that does not overflow, and it also stops
+         * the same window being retried forever. */
+        consume_buffer(wctx, samples);
         return;
     }
 
@@ -478,7 +574,11 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
 
                 wctx->index++;
             } else if (!av_strcasecmp(wctx->format, "json")) {
-                buf = av_asprintf("{\"start\":%" PRId64 ",\"end\":%" PRId64 ",\"text\":\"%s\"}\n", start_t, end_t, text_cleaned);
+                char *text_json = json_escape(text_cleaned);
+                if (text_json)
+                    buf = av_asprintf("{\"start\":%" PRId64 ",\"end\":%" PRId64 ",\"text\":\"%s\"}\n",
+                                      start_t, end_t, text_json);
+                av_freep(&text_json);
             } else
                 buf = av_asprintf("%s\n", text_cleaned);
 
@@ -511,13 +611,7 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
     }
     av_freep(&segments_text);
 
-    if (wctx->audio_buffer_fill_size > samples) {
-        memcpy(wctx->audio_buffer, wctx->audio_buffer + samples,
-               (wctx->audio_buffer_fill_size - samples) * sizeof(*wctx->audio_buffer));
-        wctx->audio_buffer_start_ms += duration * 1000;
-    }
-    wctx->audio_buffer_fill_size -= samples;
-    wctx->audio_buffer_vad_size = wctx->audio_buffer_fill_size;
+    consume_buffer(wctx, samples);
 }
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
@@ -528,17 +622,54 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 
     const int samples = frame->nb_samples;
     const float *input_data = (const float *) frame->data[0];
+    int copy = samples;
+    int skipped = 0;
 
     if (wctx->audio_buffer_fill_size + samples > wctx->audio_buffer_queue_size) {
         run_transcription(ctx, frame, wctx->audio_buffer_fill_size);
     }
 
+    /* The append below writes into an allocation of exactly
+     * audio_buffer_queue_size floats, and nothing checked that it fit. Two
+     * ways it did not, both of which wrote past the end of the heap buffer:
+     *
+     *  - run_transcription could not drain. Since it now drains even when
+     *    whisper_full fails, that is down to a missing context; the buffered
+     *    audio cannot be transcribed then, so it is dropped.
+     *
+     *  - this frame alone is bigger than the whole queue. queue= accepts
+     *    values down to 20 ms, which is 320 samples at 16 kHz, and an
+     *    ordinary audio frame is 1024 or more -- so queue=0.02 on a normal
+     *    input was enough to overflow. The newest queue_size samples are
+     *    kept, and the start time moves forward by what was skipped.
+     *
+     * After this, fill + copy <= audio_buffer_queue_size always holds. */
+    if (wctx->audio_buffer_fill_size + copy > wctx->audio_buffer_queue_size) {
+        if (wctx->audio_buffer_fill_size) {
+            av_log(ctx, AV_LOG_WARNING,
+                   "dropping %d buffered samples that could not be transcribed\n",
+                   wctx->audio_buffer_fill_size);
+            wctx->audio_buffer_fill_size = 0;
+            wctx->audio_buffer_vad_size  = 0;
+        }
+        if (copy > wctx->audio_buffer_queue_size) {
+            skipped = copy - wctx->audio_buffer_queue_size;
+            copy    = wctx->audio_buffer_queue_size;
+            av_log(ctx, AV_LOG_WARNING,
+                   "frame of %d samples is larger than the %d-sample queue; "
+                   "keeping the last %d. Raise queue= to avoid this.\n",
+                   samples, wctx->audio_buffer_queue_size, copy);
+        }
+    }
+
     if (!wctx->audio_buffer_fill_size)
         wctx->audio_buffer_start_ms = av_rescale_q(frame->pts,
                                                    (AVRational) {1000, 1},
-                                                   (AVRational) {inlink->time_base.den, inlink->time_base.num});
-    memcpy(wctx->audio_buffer + wctx->audio_buffer_fill_size, input_data, samples * sizeof(*wctx->audio_buffer));
-    wctx->audio_buffer_fill_size += samples;
+                                                   (AVRational) {inlink->time_base.den, inlink->time_base.num})
+                                    + av_rescale(skipped, 1000, WHISPER_SAMPLE_RATE);
+    memcpy(wctx->audio_buffer + wctx->audio_buffer_fill_size, input_data + skipped,
+           copy * sizeof(*wctx->audio_buffer));
+    wctx->audio_buffer_fill_size += copy;
 
     if (wctx->ctx_vad
         && (wctx->audio_buffer_fill_size - wctx->audio_buffer_vad_size) >=
