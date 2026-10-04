@@ -1,6 +1,32 @@
-# actionlint config. `beast-unit` is our self-hosted runner label — declaring
-# it here stops actionlint flagging it as unknown, so the lint signal stays
-# meaningful (real errors aren't drowned out by a known false positive).
+# actionlint config. Every custom self-hosted runner label used in this
+# repository is declared here, so actionlint stops flagging them as unknown
+# and the lint signal stays meaningful -- real errors are not drowned out by
+# known false positives.
+#
+# This used to list beast-unit alone. apple-silicon was added to runs-on in
+# main.yml and mac-runner-check.yml without being declared, which is the
+# failure mode a single-entry list invites: nobody remembers to extend it.
+# The full fleet is listed now, including labels that only appear inside a
+# fromJSON() label set (verify-rc.yml), which actionlint cannot see statically
+# but which a future literal runs-on would otherwise trip over.
+#
+# GitHub's built-in labels (self-hosted, Linux, Windows, macOS, X64, ARM64)
+# are known to actionlint already and are not repeated.
 self-hosted-runner:
   labels:
+    # build fleet
     - beast-unit
+    # the Apple Silicon Mac mini (Metal gates, mac-runner-check)
+    - apple-silicon
+    # verification fleet: one label per target platform
+    - ffmpeg-verify
+    - linux-x86_64
+    - linux-aarch64
+    - windows-x86_64
+    - windows-aarch64
+    - darwin-x86_64
+    - darwin-arm64
+    - freebsd-driver
+    # emulated Windows ARM64 guest (verify-windows-arm64-emulated.yml)
+    - ffmpeg-emulated
+    - windows-aarch64-tcg

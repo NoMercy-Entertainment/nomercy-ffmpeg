@@ -24,6 +24,9 @@ on:
       any-changed:
         description: 'True if base or any platform needs rebuild'
         value: ${{ jobs.detect-changes.outputs.any-changed }}
+      all-platforms:
+        description: 'Every supported platform, space-separated -- what a complete release must carry'
+        value: ${{ jobs.detect-changes.outputs.all-platforms }}
 
 # Single source of truth for the platform list. Anything that needs to know
 # about platforms (this workflow, the matrix in main.yml) reads it from here.
@@ -39,6 +42,7 @@ jobs:
       platforms-to-build: ${{ steps.detect.outputs.platforms-to-build }}
       test-matrix: ${{ steps.detect.outputs.test-matrix }}
       any-changed: ${{ steps.detect.outputs.any-changed }}
+      all-platforms: ${{ steps.detect.outputs.all-platforms }}
 
     steps:
       - name: Checkout
@@ -63,6 +67,8 @@ jobs:
         id: detect
         env:
           FORCE_REBUILD: ${{ inputs.force_rebuild }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
@@ -134,6 +140,7 @@ jobs:
               echo "platforms-to-build=${platforms_json}"
               echo "test-matrix=${test_matrix}"
               echo "any-changed=${any}"
+              echo "all-platforms=${ALL_PLATFORMS}"
             } >> "$GITHUB_OUTPUT"
 
             echo "─── Detection result ────────────────────────────────"
@@ -151,10 +158,36 @@ jobs:
             exit 0
           fi
 
-          # Diff against previous commit. On the first commit of a branch HEAD^
-          # doesn't exist, so we fall back to an empty diff (=> nothing changed,
-          # which is the safe default — operator can force_rebuild if needed).
-          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || true)
+          # Diff the whole push, not just its last commit. This used to compare
+          # HEAD^ with HEAD, so a push carrying several commits had only the last
+          # one classified: if an earlier commit changed a script, a dockerfile or
+          # a workflow and the last did not, nothing was rebuilt. The comment that
+          # stood here called an empty diff "the safe default", which it is not
+          # for a release pipeline -- it skips a rebuild that was needed.
+          #
+          # `github.event.before` is the tip before the push. In a reusable
+          # workflow the github context belongs to the caller, so it is the push
+          # to master. When it is missing or unreachable (all zeros on a new ref,
+          # a force push) there is no honest diff to take, so rebuild everything
+          # rather than guess. In practice master only takes squash merges, which
+          # are single commits, so this mostly guards against that policy changing.
+          #
+          # Only pushes are affected. A workflow_dispatch with force_rebuild=false
+          # is an explicit request not to force, and keeps the old HEAD^ diff.
+          if [[ "${EVENT_NAME}" == "push" ]]; then
+            if [[ -n "${PUSH_BEFORE:-}" && ! "${PUSH_BEFORE}" =~ ^0+$ ]] \
+               && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+              CHANGED_FILES=$(git diff --name-only "${PUSH_BEFORE}" HEAD)
+              echo "Diffing the whole push: ${PUSH_BEFORE:0:12}..HEAD"
+            else
+              echo "No usable push base (${PUSH_BEFORE:-<none>}) -- rebuilding everything rather than guessing."
+              PLATFORMS_JSON=$(echo "${ALL_PLATFORMS}" | jq -Rc 'split(" ")')
+              emit_outputs "${PLATFORMS_JSON}" "true"
+              exit 0
+            fi
+          else
+            CHANGED_FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || true)
+          fi
           echo "Changed files:"
           echo "${CHANGED_FILES:-(none)}"
 
@@ -269,6 +302,30 @@ jobs:
           fi
 
           echo "  PLATFORMS array: (${#PLATFORMS[@]}) ${PLATFORMS[*]}"
+
+          # All or nothing. A release has to carry every platform: the npm client
+          # pins itself to the newest tag and builds every asset URL from it, so
+          # a release holding only the linux archives hands a 404 to everyone
+          # else. This loop used to narrow a master push to the platforms whose
+          # inputs changed -- a change under scripts/includes/linux/ built two
+          # platforms and published a two-platform release.
+          #
+          # Narrowing had no other use left. Pull requests already force a full
+          # build and dispatch takes its own input, so a master push was the ONLY
+          # caller it affected, and there it was harmful. So: if anything needs
+          # building, build everything. Unchanged platforms rebuild to identical
+          # archives -- v1.0.44 against v1.0.43 was byte-for-byte equal on all
+          # seven -- so this costs time, never correctness. An empty set stays
+          # empty, which keeps a non-build workflow change from cutting a release.
+          set -- ${ALL_PLATFORMS}
+          ALL_COUNT=$#
+          if [[ ${#PLATFORMS[@]} -gt 0 && ${#PLATFORMS[@]} -lt ${ALL_COUNT} ]]; then
+            echo "  -> ${#PLATFORMS[@]} of ${ALL_COUNT} platforms changed; widening to all ${ALL_COUNT} so the release stays complete"
+            PLATFORMS=()
+            for p in ${ALL_PLATFORMS}; do
+              PLATFORMS+=("${p}")
+            done
+          fi
 
           # Emit JSON array — directly usable as matrix input via fromJSON().
           # -n is critical: without it, jq consumes the first stdin line as

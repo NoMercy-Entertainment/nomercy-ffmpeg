@@ -438,6 +438,26 @@ jobs:
           done
           ls -lh release/
 
+          # Refuse to publish an incomplete release. The npm client pins itself
+          # to the newest tag and builds every platform's asset URL from it, so
+          # a release missing one platform is a 404 for everyone on that
+          # platform. detect-changes now widens any partial selection to every
+          # platform, which is what prevents this; this check is the second
+          # line, so that a future change to that selection cannot quietly
+          # bring partial releases back. It runs before anything is tagged.
+          missing=""
+          for platform in ${{ needs.detect-changes.outputs.all-platforms }}; do
+            n=$(find release/ -maxdepth 1 -name "ffmpeg-${FFMPEG_VERSION}-${platform}-${VERSION}.*" ! -name "*.sha256" | wc -l)
+            if [[ "${n}" -ne 1 ]]; then
+              missing="${missing} ${platform}(${n})"
+            fi
+          done
+          if [[ -n "${missing}" ]]; then
+            echo "::error::refusing to publish ${VERSION}: expected exactly one archive per platform, got:${missing}"
+            exit 1
+          fi
+          echo "All platforms present: ${{ needs.detect-changes.outputs.all-platforms }}"
+
       - name: Generate per-asset SHA256, manifest and signature
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
