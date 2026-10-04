@@ -334,7 +334,13 @@ WRAPPER
 
         if [ ! -e "${G3_DONE}" ]; then
             G3_STATUS="FAIL"
-            G3_REASON="the launchd job did not finish within 60s -- see ${G3_OUT} if it exists"
+            # Print the output rather than naming the file. G3_OUT lives under
+            # TMP, which this script removes in its EXIT trap, so a message
+            # saying "see ${G3_OUT}" pointed at a path that was already gone by
+            # the time anyone read it.
+            echo "  last lines of the launchd job's output:"
+            tail -5 "${G3_OUT}" 2>/dev/null | sed 's/^/    /' || echo "    <nothing captured>"
+            G3_REASON="the launchd job did not finish within 60s; its last output is printed above"
         else
             G3_TEXT="$(cat "${G3_OUT}" 2>/dev/null || echo '')"
             printf '%s\n' "${G3_TEXT}" | grep -E "ggml backend|using embedded metal library|MTLCreateSystemDefaultDevice|lavfi.whisper.backend=" | sed 's/^/  /'
@@ -347,7 +353,9 @@ WRAPPER
                 G3_REASON="ran fine but fell back to cpu under launchd -- this is the MTLCreateSystemDefaultDevice()-returns-nil-with-no-window-server failure mode the research flagged as most likely. Metal cannot be relied on for a media-server daemon until this is fixed."
             else
                 G3_STATUS="FAIL"
-                G3_REASON="could not determine the backend from the launchd job's output (got '${G3_BACKEND:-<none>}') -- see ${G3_OUT}"
+                echo "  last lines of the launchd job's output:"
+                tail -5 "${G3_OUT}" 2>/dev/null | sed 's/^/    /' || echo "    <nothing captured>"
+                G3_REASON="could not determine the backend from the launchd job's output (got '${G3_BACKEND:-<none>}'); its last output is printed above"
             fi
         fi
     else
@@ -451,9 +459,19 @@ else
         WH_MTL_BACKEND="$(backend_of "${WH_MTL_LOG}")"
 
         if [ -z "${WH_MTL_TXT}" ]; then
+            # Each of the three FAIL branches below must also fail the GATE.
+            # Before this only the "transcript differs" branch set G4A_STATUS,
+            # so a missing transcript, a non-mtl backend or a missing asset
+            # left the gate on whatever the audio comparison had decided --
+            # and the OVERALL loop reads G4A_STATUS, never G4A_TXT_STATUS. A
+            # half-run gate could end the script with OVERALL: PASS.
             G4A_TXT_STATUS="FAIL: the Metal whisper run produced no transcript at all -- two empty outputs would compare equal and prove nothing"
+            G4A_STATUS="FAIL"
+            G4A_REASON="${G4A_REASON}; also: the Metal whisper run produced no transcript"
         elif [ "${WH_MTL_BACKEND}" != "mtl" ]; then
             G4A_TXT_STATUS="FAIL: the use_gpu=1 whisper run did not report backend='mtl' (got '${WH_MTL_BACKEND:-<none>}')"
+            G4A_STATUS="FAIL"
+            G4A_REASON="${G4A_REASON}; also: the whisper use_gpu=1 run was not on mtl, so the transcript check proves nothing"
         elif [ "${WH_CPU_TXT}" = "${WH_MTL_TXT}" ]; then
             G4A_TXT_STATUS="PASS: whisper transcript identical, cpu vs mtl"
         else
@@ -465,6 +483,8 @@ else
     else
         echo "  whisper transcript check: FAIL: asset missing (need ${WMODEL_NAME} and ${WINPUT_NAME})"
         G4A_TXT_STATUS="FAIL: asset missing"
+        G4A_STATUS="FAIL"
+        G4A_REASON="${G4A_REASON}; also: whisper assets missing, so the transcript half of this gate never ran"
     fi
 fi
 
