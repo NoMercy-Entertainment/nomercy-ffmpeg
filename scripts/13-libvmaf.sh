@@ -24,7 +24,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-ninja -j$(nproc) && ninja install
+ninja -j$(nproc) && ninja install || exit 1
 sed -i 's/Libs.private:/Libs.private: -lstdc++/; t; $ a Libs.private: -lstdc++' ${PREFIX}/lib/pkgconfig/libvmaf.pc
 rm -rf /build/libvmaf
 

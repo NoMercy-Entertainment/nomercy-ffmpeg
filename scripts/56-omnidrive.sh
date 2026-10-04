@@ -14,7 +14,7 @@ cmake -S libomnidrive -B libomnidrive/build ${CMAKE_COMMON_ARG} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
-cmake --build libomnidrive/build
+cmake --build libomnidrive/build || exit 1
 cmake --install libomnidrive/build
 
 cp ./ffmpeg-integration/omnidrive.c /build/ffmpeg/libavformat/omnidrive.c

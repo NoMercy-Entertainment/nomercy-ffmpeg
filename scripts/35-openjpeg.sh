@@ -12,7 +12,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make && make install
+make && make install || exit 1
 
 if [[ ${TARGET_OS} != "linux" ]]; then
     sed -i 's/^Libs: \(.*\)[\r|\n]/Libs: \1 -lz/' ${PREFIX}/lib/pkgconfig/libjpeg.pc
@@ -28,7 +28,7 @@ cd /build/libjpeg-turbo
 mkdir build && cd build
 cmake -S .. -B . \
     ${CMAKE_COMMON_ARG}
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 if [[ ${TARGET_OS} != "linux" ]]; then
     sed -i 's/^Libs: \(.*\)[\r|\n]/Libs: \1 -lz/' ${PREFIX}/lib/pkgconfig/libjpeg.pc
 fi
@@ -52,8 +52,21 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) 2>&1 | log -a || { log -a "openjpeg build failed"; exit 1; }
-make install 2>&1 | log -a || { log -a "openjpeg install failed"; exit 1; }
+# Checked through PIPESTATUS, not `| log -a || exit`. Without pipefail -- and
+# nothing here sets it -- a pipeline's status is its LAST command, which is
+# log, which is tee, which succeeds. So `make | log -a || { ...; exit 1; }`
+# looked guarded and could never fire: a failed build was logged and then
+# carried on. PIPESTATUS[0] is the build's own status.
+make -j$(nproc) 2>&1 | log -a
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    log -a "openjpeg build failed"
+    exit 1
+fi
+make install 2>&1 | log -a
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    log -a "openjpeg install failed"
+    exit 1
+fi
 
 OPENJPEG_PC="${PREFIX}/lib/pkgconfig/libopenjp2.pc"
 

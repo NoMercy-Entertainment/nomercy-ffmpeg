@@ -154,6 +154,11 @@ for i in /scripts/*.sh; do
     name="${name^^}"   # Uppercase
     text_with_padding "🛠️ Building ${name}" "[${string_current_count}/${string_total_count}]" -5
     start_time=$(date +%s)
+    # Reset per script. Only the success and failure branches below set it, yet
+    # it is added to total_time after the if for every script -- so a skipped
+    # script (exit 255) added the previous script's duration a second time and
+    # inflated the reported total build time.
+    end_time=0
     $i >/dev/null 2>&1
     result=$?
     if [ ${result} -eq 255 ]; then # This is skipped

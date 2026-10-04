@@ -315,7 +315,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-ninja -C build install >/dev/null 2>&1
+ninja -C build install >/dev/null 2>&1 || exit 1
 
 if [[ ! -f "${PREFIX}/lib/libbluray.a" ]]; then
     log "Error: ${PREFIX}/lib/libbluray.a does not exist."

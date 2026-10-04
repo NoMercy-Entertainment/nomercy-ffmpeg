@@ -167,9 +167,21 @@ build_glib2() {
         return 1
     fi
 
-    ninja -j$(nproc) 2>&1 | log -a && ninja install 2>&1 | log -a
-    if [ $? -ne 0 ]; then
+    # Two steps, each checked through PIPESTATUS, the way build_cairo below
+    # already does it. This was `ninja | log -a && ninja install | log -a`
+    # followed by `$?`, which failed twice over: `&&` read the status of the
+    # first log, so the install ran even when the build had failed, and `$?`
+    # then read the second log. Both are tee, both succeed, so a failed
+    # glib2 build was reported as built.
+    ninja -j$(nproc) 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "glib2 build failed"
+        return 1
+    fi
+
+    ninja install 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        log "glib2 install failed"
         return 1
     fi
 
@@ -213,9 +225,21 @@ build_pixman() {
         return 1
     fi
 
-    ninja -j$(nproc) 2>&1 | log -a && ninja install 2>&1 | log -a
-    if [ $? -ne 0 ]; then
+    # Two steps, each checked through PIPESTATUS, the way build_cairo below
+    # already does it. This was `ninja | log -a && ninja install | log -a`
+    # followed by `$?`, which failed twice over: `&&` read the status of the
+    # first log, so the install ran even when the build had failed, and `$?`
+    # then read the second log. Both are tee, both succeed, so a failed
+    # pixman build was reported as built.
+    ninja -j$(nproc) 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "pixman build failed"
+        return 1
+    fi
+
+    ninja install 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        log "pixman install failed"
         return 1
     fi
 
@@ -361,9 +385,21 @@ build_pango() {
         return 1
     fi
 
-    ninja -j$(nproc) 2>&1 | log -a && ninja install 2>&1 | log -a
-    if [ $? -ne 0 ]; then
+    # Two steps, each checked through PIPESTATUS, the way build_cairo below
+    # already does it. This was `ninja | log -a && ninja install | log -a`
+    # followed by `$?`, which failed twice over: `&&` read the status of the
+    # first log, so the install ran even when the build had failed, and `$?`
+    # then read the second log. Both are tee, both succeed, so a failed
+    # pango build was reported as built.
+    ninja -j$(nproc) 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "pango build failed"
+        return 1
+    fi
+
+    ninja install 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        log "pango install failed"
         return 1
     fi
 

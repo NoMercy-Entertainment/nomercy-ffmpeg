@@ -26,8 +26,8 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 make clean
-make -j$(nproc)
-make install
+make -j$(nproc) || exit 1
+make install || exit 1
 
 if [ ! -f ${PREFIX}/lib/libpng.a ]; then
     log "Failed to build libpng a "
@@ -75,15 +75,19 @@ if [[ ${TARGET_OS} != "windows" ]]; then
         sed -i 's/-Wl,-soname/-Wl,-install_name/g' Makefile
     fi
 
-    make PREFIX=${PREFIX} || (
+    # `|| { ...; exit 1; }`, never `|| ( ...; exit 1 )`. Parentheses run the
+    # block in a subshell, so its exit leaves the subshell and nothing else:
+    # a failed giflib make logged its error and the build carried on as though
+    # it had worked. All five handlers in this region had that shape.
+    make PREFIX=${PREFIX} || {
         log "Error: giflib make failed."
         exit 1
-    )
+    }
 
-    make PREFIX=${PREFIX} install || (
+    make PREFIX=${PREFIX} install || {
         log "Error: giflib install failed."
         exit 1
-    )
+    }
 else
     if [[ ${ARCH} == "aarch64" ]]; then
         # giflib's Makefile links the shared libgif.so with -soname, an ELF-only
@@ -94,19 +98,19 @@ else
         # the header are consumed here, so build just the static target and skip
         # `make install`, whose shared targets hit the same error. The
         # gif_lib.h / libgif.a copies below install exactly what is needed.
-        make libgif.a || (
+        make libgif.a || {
             log "Error: giflib make failed."
             exit 1
-        )
+        }
     else
-        make || (
+        make || {
             log "Error: giflib make failed."
             exit 1
-        )
-        make install || (
+        }
+        make install || {
             log "Error: giflib install failed."
             exit 1
-        )
+        }
     fi
     if [ ! -f ${PREFIX}/include/gif_lib.h ]; then
         if [ -f gif_lib.h ]; then
@@ -194,7 +198,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libtiff"
     exit 1
 fi
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 if [ ! -f ${PREFIX}/lib/pkgconfig/libtiff-4.pc ]; then
     log "Failed to build libtiff"
     exit 1
@@ -238,7 +242,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 rm -rf /build/libwebp
 
 cp ${PREFIX}/lib/pkgconfig/libsharpyuv.pc ${PREFIX}/lib/pkgconfig/sharpyuv.pc
