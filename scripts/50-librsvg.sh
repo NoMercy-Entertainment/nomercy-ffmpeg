@@ -71,7 +71,15 @@ if [ ${TARGET_OS} == "windows" ]; then
 
 	#region gettext (required by glib for localization)
 	cd /build
-	wget https://ftp.gnu.org/pub/gnu/gettext/gettext-0.26.tar.gz
+	# Checked against a pinned SHA-256 before anything unpacks it. These two
+	# tarballs were fetched with wget and used unverified, so whatever the mirror
+	# served went into the Windows build. GNU and libexpat publish signatures but
+	# no SHA-256 for these releases, so the values below were computed from the
+	# downloads on 2026-10-04: they pin what was served that day and catch any
+	# later change, which is the guarantee that was missing. Bump them together
+	# with the version in the URL.
+	wget https://ftp.gnu.org/pub/gnu/gettext/gettext-0.26.tar.gz || exit 1
+	echo "39acf4b0371e9b110b60005562aace5b3631fed9b1bb9ecccfc7f56e58bb1d7f  gettext-0.26.tar.gz" | sha256sum -c - || exit 1
 	tar -xzf gettext-0.26.tar.gz && rm gettext-0.26.tar.gz && mv gettext-0.26 gettext
 	cd gettext
 
@@ -112,7 +120,8 @@ if [ ${TARGET_OS} == "windows" ]; then
 	# not built anywhere else in the Windows pipeline, so provide it here, before
 	# cairo, so the subproject both compiles and links it.
 	cd /build
-	wget -O expat.tar.gz https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz
+	wget -O expat.tar.gz https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz || exit 1
+	echo "fd03b7172b3bd7427a3e7a812063f74754f24542429b634e0db6511b53fb2278  expat.tar.gz" | sha256sum -c - || exit 1
 	tar -xzf expat.tar.gz && rm expat.tar.gz && mv expat-2.6.4 expat
 	cd expat
 
@@ -235,7 +244,11 @@ if [[ ${TARGET_OS} == "windows" ]]; then
 		{
 			echo "[wrap-git]"
 			echo "url = https://github.com/frida/proxy-libintl.git"
-			echo "revision = head"
+			# A commit, not `head`. `head` took whatever the default branch held at
+			# build time. With depth = 1 meson fetches this exact commit shallowly,
+			# which GitHub permits and which was checked to resolve. This is the commit
+			# that was head on 2026-10-04.
+			echo "revision = 33934de09af6a6627eb44e310a8079df009abdbb"
 			echo "depth = 1"
 		}>./subprojects/proxy-libintl.wrap
 	fi

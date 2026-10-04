@@ -49,6 +49,12 @@ ENV TARGET_OS=freebsd
 ENV PREFIX=/ffmpeg_build/freebsd
 ENV ARCH=x86_64
 ENV FREEBSD_VERSION=14.3
+# SHA-256 of that release's base.txz, from FreeBSD's own MANIFEST for
+# 14.3-RELEASE. The sysroot every freebsd binary links against was unpacked
+# with no check at all. Tied to FREEBSD_VERSION: bump both together, and a
+# bump without a new hash fails the build here instead of linking unverified
+# code. The archive mirror serves the same file, so one hash covers both URLs.
+ARG FREEBSD_BASE_SHA256=e38b5cf756d60086a6c2f736eff19cc7685f7e2313e31d14342fc8df57200a92
 ENV SYSROOT=/opt/freebsd-sysroot
 ENV CROSS_PREFIX=${ARCH}-unknown-freebsd14-
 ENV CC=${CROSS_PREFIX}gcc
@@ -79,6 +85,7 @@ RUN echo "------------------------------------------------------" \
     # mirror keeps it, so fall back there instead of failing the build.
     && (wget -O /tmp/base.txz https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1 \
         || wget -O /tmp/base.txz https://archive.freebsd.org/old-releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1) \
+    && echo "${FREEBSD_BASE_SHA256}  /tmp/base.txz" | sha256sum -c - \
     && tar -xJf /tmp/base.txz -C ${SYSROOT} ./lib ./usr/lib ./usr/include ./usr/libdata >/dev/null 2>&1 \
     && rm -f /tmp/base.txz \
     # -Qunused-arguments: -fuse-ld=lld is unused in compile-only invocations and

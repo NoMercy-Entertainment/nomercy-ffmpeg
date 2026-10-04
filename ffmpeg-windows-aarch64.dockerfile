@@ -71,12 +71,18 @@ ENV PREFIX=/ffmpeg_build/windows
 # resolve to this toolchain's real C++ runtime, which is what they mean, and
 # keeps every shared script untouched.
 ARG LLVM_MINGW_VERSION=20260728
+# SHA-256 of the ucrt-ubuntu-22.04-x86_64 tarball for that release, as GitHub
+# reports it for the asset. This is the compiler that builds every
+# windows-aarch64 binary, and it was unpacked unverified. Tied to the version:
+# bump both together, or the check below stops the build.
+ARG LLVM_MINGW_SHA256=bdc15cb613f2ef309827a90d409806a45eb68e4e607c290fa1b933d74ab87846
 ENV LLVM_MINGW_DIR=/opt/llvm-mingw
 RUN echo "------------------------------------------------------" \
     && echo "🔧 Start downloading llvm-mingw ${LLVM_MINGW_VERSION} (Windows-on-ARM toolchain)" \
     && TARBALL="llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz" \
     && curl -fsSL --retry 5 --retry-delay 5 -o /tmp/llvm-mingw.tar.xz \
         "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${TARBALL}" \
+    && echo "${LLVM_MINGW_SHA256}  /tmp/llvm-mingw.tar.xz" | sha256sum -c - \
     && mkdir -p ${LLVM_MINGW_DIR} \
     && tar -xJf /tmp/llvm-mingw.tar.xz -C ${LLVM_MINGW_DIR} --strip-components=1 \
     && rm -f /tmp/llvm-mingw.tar.xz \
