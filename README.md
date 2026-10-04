@@ -393,12 +393,27 @@ exactly as they did before, and nothing about the command line changes.
 | filter | default | why |
 |---|---|---|
 | `whisper` | **GPU on** (`use_gpu=1`) | Faster, and the transcript is unchanged — see below. |
-| `stemsplit` | **CPU** (`use_gpu=0`) | Opt in with `use_gpu=1`. It is faster, but the audio is not the same. |
+| `stemsplit` | **CPU** (`use_gpu=0`) | Opt in with `use_gpu=1`. What that buys you depends on the backend — see below. |
 
 **Measured — `stemsplit` on a GPU.** 30 s of audio, twenty runs each on one
 RTX 3070, whole-process wall time including model load, so the filter itself
 is faster than this: **830 ms** mean with `use_gpu=1` against **2198 ms** on
-the CPU (2.6x). No other GPU has been measured.
+the CPU (2.6x).
+
+**Measured — `stemsplit` on Metal (Apple Silicon).** Different on both counts,
+so the sentence above does not generalise. On an M4, seven paired runs of 30 s
+each, alternating sides so thermal drift cannot favour one: **0.952 s** median
+with `use_gpu=1` against **0.945 s** on the CPU, a ratio of 1.007. The spread
+within each side (37 ms for the CPU, 75 ms for Metal) is five to ten times the
+7 ms between them, so the honest statement is that the two are **equal on this
+hardware** — not that either wins. Metal is the less consistent of the two.
+
+And on Metal the output is **bit-identical**: the two results null to exact
+silence. The FP16 accumulation described below is a property of ggml’s Vulkan
+backend, not of GPUs in general, so the reason `stemsplit` defaults to CPU does
+not apply on a Mac. The default is per filter rather than per backend, so it is
+still off there — opting in costs you nothing in quality and gains you nothing
+in speed.
 
 **`whisper` is on by default because the output does not change.** GPU and CPU
 transcripts were compared on an RTX 3070 across three inputs — clean speech,
