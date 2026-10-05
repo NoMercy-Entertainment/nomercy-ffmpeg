@@ -106,14 +106,29 @@ else
     exit 1
 fi
 
-# 3. Add filter to the configure script
-log "Step 3: Adding filter dependencies to configure script"
-
-if ! grep -q "beatdetect_filter_deps" /build/ffmpeg/configure; then
-    sed -i '/^abench_filter_deps=/i beatdetect_filter_deps="lm"' /build/ffmpeg/configure
-    log "  ✓ Added filter dependencies"
-else
-    log "  ✓ Filter dependencies already exist"
-fi
+# 3. Filter dependencies: none to declare.
+#
+# This step used to insert beatdetect_filter_deps="lm" before abench_filter_deps=
+# and log "Added filter dependencies". abench_filter_deps does not exist in
+# FFmpeg 9.0, so the sed matched nothing and the log claimed success anyway,
+# on every build.
+#
+# Measured with FFmpeg 9.0's own configure, on a filter with no deps:
+#   no _deps line        -> filter enabled
+#   _deps="lm"           -> filter DISABLED
+#   _deps="libm"         -> filter enabled (on linux-x86_64)
+# So the dead edit is what kept this filter working: had its anchor matched,
+# "lm" would have switched it off.
+#
+# The October 2026 audit (AUD-9128) proposed re-anchoring it with "libm".
+# That keeps the filter on in linux configure, but libm is detected
+# differently on mingw, darwin and freebsd, and where configure does not see
+# it enabled the filter would quietly disappear from that platform while the
+# build still succeeds. With no dependency declared, the filter has shipped
+# working on all seven platforms, and it needs none: it is plain DSP with no
+# external library, and libm is linked into every ffmpeg build regardless.
+# Compare 60-stemsplit.sh, whose dependencies (whisper, swresample) are real
+# features and are declared.
+log "Step 3: no filter dependencies to declare (libm is always linked)"
 
 exit 0

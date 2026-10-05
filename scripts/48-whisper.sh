@@ -178,8 +178,25 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     CFLAGS="${CFLAGS} -lws2_32 -lwinpthread -lkernel32"
     CXXFLAGS="${CXXFLAGS} -lws2_32 -lwinpthread -lkernel32"
 
-    find . -name '*.cpp' -exec sed -i 's|%ld|%llu|g' {} +
-    find . -name '*.cpp' -exec sed -i 's|%lld|%llu|g' {} +
+    # Two seds stood here that rewrote %ld and %lld to %llu in every .cpp file,
+    # added with the first whisper integration and never explained. They were
+    # wrong in principle -- %lld -> %llu flips signed to unsigned, and on
+    # Windows `long` is 32 bits, so %ld -> %llu makes printf read 64 bits for a
+    # 32-bit argument -- and they changed nothing that is built.
+    #
+    # They ran on Windows only (this block). In whisper.cpp v1.9.1 their matches
+    # are in examples/ and bindings/, which nothing here compiles (EXAMPLES,
+    # SERVER and TESTS are off below), and in seven ggml backend sources:
+    # hexagon, metal, openvino, virtgpu and zdnn. None of those backends is
+    # built on Windows -- Metal is turned on for darwin-arm64 alone, and the
+    # other four default OFF and are never enabled in this script. So on the
+    # one platform the seds ran, they touched no file that was compiled.
+    #
+    # Removed rather than corrected, so that enabling one of those backends or
+    # the examples on Windows later does not quietly bring the undefined
+    # behaviour in with it. Checked against the full v1.9.1 tree from GitHub
+    # (394 .cpp files): an earlier, partial clone had missed the ggml backends
+    # entirely and suggested every match was under examples/.
 
     # mingw-w64's headers don't declare THREAD_POWER_THROTTLING_STATE, so ggml's
     # thread power-throttling block in ggml_thread_apply_priority() fails to build.

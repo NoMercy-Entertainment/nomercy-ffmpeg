@@ -220,6 +220,15 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=freebsd /output/ffmpeg-9.0-freebsd-x86_64.tar.gz /build/ffmpeg-9.0-freebsd-x86_64.tar.gz
+# The archive is named after ffmpeg_version in ffmpeg-base.dockerfile
+# (scripts/init/package.sh builds the name). It used to be spelled out
+# here as well, so a version bump that missed this line broke the build
+# at the very last step. The glob takes whatever version the build
+# produced. A wildcard COPY that matches nothing still succeeds, so the
+# RUN below insists on exactly one archive: none, or a stale second one
+# from another version, stops the build here.
+COPY --from=freebsd /output/ffmpeg-*-freebsd-x86_64.tar.gz /build/
+RUN set -- /build/ffmpeg-*-freebsd-x86_64.tar.gz && [ "$#" -eq 1 ] && [ -f "$1" ] \
+    || { echo "expected exactly one ffmpeg archive, found: $*" >&2; exit 1; }
 
-CMD ["cp", "/build/ffmpeg-9.0-freebsd-x86_64.tar.gz", "/output"]
+CMD ["sh", "-c", "cp /build/ffmpeg-*-freebsd-x86_64.tar.gz /output"]

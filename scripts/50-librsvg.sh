@@ -647,6 +647,26 @@ rm -rf /build/librsvg
 
 #region Add librsvg to FFmpeg configuration
 add_enable "--enable-librsvg"
+# This flag reaches the whole ffmpeg link, so it can hide a real clash
+# between any two libraries. The October 2026 audit (AUD-9127) asked
+# whether it could go. Measured on linux-x86_64 by linking ffmpeg without
+# it, and it cannot, for two separate reasons:
+#
+#  1. librsvg-2.a carries proxy-libintl, which defines _nl_msg_cat_cntr;
+#     glibc's libc.a defines it too. FFmpeg's configure then fails its
+#     librsvg link test ("librsvg-2.0 not found"), and the build stops.
+#  2. With that one symbol made weak, configure passes, but the real link
+#     of ffmpeg, ffprobe and ffplay fails with 744 multiple definitions,
+#     all Rust std (std::panicking, __rustc::__rdl_alloc, std::thread...):
+#     librav1e.a and librsvg-2.a are both Rust staticlibs, and each one
+#     ships its own copy of the Rust standard library.
+#
+# The linker keeps the first copy of each. That is safe only because both
+# Rust libraries are built by the same rustc in the same image, so their
+# std copies are identical. Building one of them with a different Rust
+# toolchain would make this flag mix two different std versions.
+# Removing the flag needs the Rust libraries linked as one staticlib, which
+# is a build restructure, not a flag change.
 add_ldflag "-Wl,--allow-multiple-definition"
 #endregion
 
