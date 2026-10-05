@@ -26,8 +26,20 @@ cd /build
 #region libjpeg-turbo
 cd /build/libjpeg-turbo
 mkdir build && cd build
+# darwin's CMAKE_COMMON_ARG has no CMAKE_SYSTEM_PROCESSOR, and
+# libjpeg-turbo needs it to pick its SIMD code: line 99 of its CMakeLists
+# lowercases it, and with it empty configure stops on "string no output
+# variable specified". That has happened on every darwin build. Until the
+# October 2026 audit the failure was silent, so libjpeg-turbo was never
+# installed there and darwin linked the IJG libjpeg 9f built above instead
+# (v1.0.44 darwin-x86_64 carries the IJG copyright; linux carries
+# libjpeg-turbo 3.1.0). Linux sets the processor in CMAKE_COMMON_ARG already.
+LIBJPEG_TURBO_EXTRA=""
+if [[ ${TARGET_OS} == "darwin" ]]; then
+    LIBJPEG_TURBO_EXTRA="-DCMAKE_SYSTEM_PROCESSOR=${ARCH}"
+fi
 cmake -S .. -B . \
-    ${CMAKE_COMMON_ARG}
+    ${CMAKE_COMMON_ARG} ${LIBJPEG_TURBO_EXTRA}
 make -j$(nproc) && make install || exit 1
 if [[ ${TARGET_OS} != "linux" ]]; then
     sed -i 's/^Libs: \(.*\)[\r|\n]/Libs: \1 -lz/' ${PREFIX}/lib/pkgconfig/libjpeg.pc
