@@ -89,29 +89,23 @@ if [[ ${TARGET_OS} != "windows" ]]; then
         exit 1
     }
 else
-    if [[ ${ARCH} == "aarch64" ]]; then
-        # giflib's Makefile links the shared libgif.so with -soname, an ELF-only
-        # flag. GNU ld only warns about it, so windows-x86_64 builds fine, but
-        # this target links with lld, which hard-errors:
-        #   lld: error: unknown argument: -soname
-        # make then dies before producing libgif.a. Only the static library and
-        # the header are consumed here, so build just the static target and skip
-        # `make install`, whose shared targets hit the same error. The
-        # gif_lib.h / libgif.a copies below install exactly what is needed.
-        make libgif.a || {
-            log "Error: giflib make failed."
-            exit 1
-        }
-    else
-        make || {
-            log "Error: giflib make failed."
-            exit 1
-        }
-        make install || {
-            log "Error: giflib install failed."
-            exit 1
-        }
-    fi
+    # Only the static library and the header are consumed here, so build just
+    # the static target and skip `make install`; the gif_lib.h / libgif.a
+    # copies below install exactly what is needed. A full `make` fails on
+    # both windows targets:
+    #   windows-aarch64 links with lld, which rejects the ELF-only -soname
+    #     flag on libgif.so ("lld: error: unknown argument: -soname"), and
+    #     make dies there, before it has written libgif.a.
+    #   windows-x86_64 gets past that (GNU ld only warns), writes libgif.a,
+    #     then fails on libutil.so, the helper library for giflib's own CLI
+    #     tools: a DLL must resolve every symbol, and it cannot find GifErrorString.
+    # The x86_64 failure was invisible until the October 2026 audit: the
+    # handler ran in a subshell, so the build carried on and the fallback
+    # copies below picked up the libgif.a that make had already written.
+    make libgif.a || {
+        log "Error: giflib make failed."
+        exit 1
+    }
     if [ ! -f ${PREFIX}/include/gif_lib.h ]; then
         if [ -f gif_lib.h ]; then
             cp gif_lib.h ${PREFIX}/include/gif_lib.h

@@ -156,6 +156,18 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     ${FFMPEG_ENABLES} \
     --enable-filter=all \
     --enable-runtime-cpudetect \
+    # The shader compiler, by path. FFmpeg 9.0 compiles its Vulkan shaders at
+    # build time with the first compiler on its list that runs, and if that one
+    # fails the check it disables spirv_compiler and every component that needs
+    # it: 19 *_vulkan filters, ffv1_vulkan and prores_ks_vulkan. v1.0.44 shipped
+    # linux-aarch64 without all 21. Measured on the base image, 2026-10-05:
+    #   ${PREFIX}/bin/glslc is shaderc built for the TARGET, an ARM binary; it
+    #     leads PATH, and only runs where the host emulates ARM.
+    #   /usr/bin/glslc (Ubuntu shaderc 2023.8) rejects --target-env=vulkan1.4,
+    #     which FFmpeg 9.0 asks for, so naming it disables all 21 too.
+    #   /usr/bin/glslang (glslang-tools 15.1.0) passes configure's own check.
+    # Naming glslang makes the result the same on every x86_64 host.
+    --glslc=/usr/bin/glslang \
     --extra-version="NoMercy-MediaServer" \
     --extra-cflags="-static -static-libgcc -static-libstdc++" \
     --extra-ldflags="-static -static-libgcc -static-libstdc++" \
