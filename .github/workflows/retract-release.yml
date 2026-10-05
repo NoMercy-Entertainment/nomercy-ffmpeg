@@ -37,9 +37,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # The tokens are not here. setup-node writes an .npmrc that reads
+    # ${NODE_AUTH_TOKEN} and, if that variable exists while it runs, exports
+    # it to every later step; at job level that put the npm token in every
+    # step, the gh step included. Each token is now set only on the steps
+    # that use it (audit AUD-9102).
+    #
+    # REASON is free text from whoever dispatches this. It is only ever read
+    # as "$REASON". Written as ${{ inputs.reason }} inside run:, it was
+    # pasted into the script before bash parsed it: a double quote ended the
+    # string and broke the step halfway through a retraction, and $(...) ran
+    # as a command with the tokens in the environment.
     env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REASON: ${{ inputs.reason }}
       VERSION: ${{ inputs.version }}
       ROLLBACK_TO: ${{ inputs.rollback_to }}
       DIST_TAG: ${{ inputs.dist_tag }}
@@ -52,6 +62,8 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Check token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "::error::NPM_TOKEN is not set. Publishing uses OIDC, which cannot deprecate or move a dist-tag — add NPM_TOKEN before this workflow can retract anything."
@@ -74,6 +86,8 @@ jobs:
 
       - name: Resolve package and verify both versions exist
         id: pkg
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # The package lives in clients/npm, not the repository root. Reading
           # ./package.json here failed with "Cannot find module" the first time
@@ -95,6 +109,8 @@ jobs:
           done
 
       - name: Move the dist-tag back
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           NAME='${{ steps.pkg.outputs.name }}'
           echo "${DIST_TAG}: $(npm view "${NAME}" "dist-tags.${DIST_TAG}") -> ${ROLLBACK_TO}"
@@ -105,9 +121,11 @@ jobs:
           fi
 
       - name: Deprecate the retracted version
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           NAME='${{ steps.pkg.outputs.name }}'
-          MSG="RETRACTED: ${{ inputs.reason }} Use ${ROLLBACK_TO} instead."
+          MSG="RETRACTED: ${REASON} Use ${ROLLBACK_TO} instead."
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "dry run: npm deprecate ${NAME}@${VERSION} \"$MSG\""
           else
@@ -115,6 +133,8 @@ jobs:
           fi
 
       - name: Mark the GitHub release as retracted
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="v${VERSION}"
           gh release view "$tag" >/dev/null 2>&1 || tag="${VERSION}"
@@ -123,7 +143,7 @@ jobs:
             exit 0
           fi
           notice=$(printf '> [!CAUTION]\n> **RETRACTED.** %s\n>\n> `%s` now points at %s.\n\n' \
-            "${{ inputs.reason }}" "$DIST_TAG" "$ROLLBACK_TO")
+            "$REASON" "$DIST_TAG" "$ROLLBACK_TO")
           body=$(gh release view "$tag" --json body --jq .body)
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "dry run: would prepend"

@@ -603,8 +603,13 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # Pinned to a commit, not @master: this step runs after the login above
+      # has written the DockerHub push credentials to the runner's docker
+      # config, so whatever code it runs can read them. A branch reference ran
+      # whatever that branch held that day (audit AUD-9100). Bump by changing
+      # the SHA and the version comment together.
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nomercyentertainment/ffmpeg-${{ matrix.platform }}:${{ github.sha }}
           format: sarif

@@ -48,6 +48,18 @@ jobs:
           node .github/scripts/sync-checklist.test.js
           node .github/scripts/check-checklist.test.js
 
+  # A third-party action referenced by branch runs whatever that branch holds
+  # on the day, unreviewed. Two did, one of them right after a DockerHub
+  # login (audit AUD-9100). Pin to a commit SHA, with the version as a
+  # comment. Runs for every base, like checklist-scripts.
+  action-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Refuse actions referenced by a branch
+        run: bash .github/scripts/check-action-pins.sh .github/workflows
+
   checklist-complete:
     if: github.base_ref == 'master'
     runs-on: ubuntu-latest
@@ -63,7 +75,7 @@ jobs:
   # checks so a failed/ skipped dependency reliably fails this job (a job
   # skipped via failed `needs` can otherwise be miscounted as passing).
   pr-validation:
-    needs: [guard-source-branch, checklist-complete, checklist-scripts]
+    needs: [guard-source-branch, checklist-complete, checklist-scripts, action-pins]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -72,11 +84,17 @@ jobs:
           guard='${{ needs.guard-source-branch.result }}'
           checklist='${{ needs.checklist-complete.result }}'
           scripts='${{ needs.checklist-scripts.result }}'
+          pins='${{ needs.action-pins.result }}'
           base='${{ github.base_ref }}'
 
           # Runs for every base, so it is never allowed to be skipped.
           if [[ "$scripts" != "success" ]]; then
             echo "❌ The checklist scripts' own tests did not pass (got '$scripts')."
+            exit 1
+          fi
+          # Also runs for every base.
+          if [[ "$pins" != "success" ]]; then
+            echo "❌ A workflow references an action by branch (got '$pins')."
             exit 1
           fi
 
