@@ -80,8 +80,17 @@ build_pcre2() {
     log "Building pcre2 ${PCRE2_VERSION}..."
     
     cd /build
+    # Every clone below goes through `retry` (installed by ffmpeg-base) and stops
+    # the script when it still fails. gitlab.gnome.org answers 503 now and then;
+    # on 2026-10-05 one did, the gdk-pixbuf clone produced nothing, `cd` failed
+    # silently and meson ran in the wrong directory, so the build died on
+    # "Neither directory '..' nor directory None contain a build file
+    # meson.build" instead of naming the download.
     if [[ ! -d pcre2 ]]; then
-        git clone --branch pcre2-${PCRE2_VERSION} --depth 1 https://github.com/PCRE2Project/pcre2.git pcre2 >/dev/null 2>&1
+        retry git clone --branch pcre2-${PCRE2_VERSION} --depth 1 https://github.com/PCRE2Project/pcre2.git pcre2 || {
+            log "pcre2: clone failed after retries"
+            exit 1
+        }
     fi
     cd pcre2
     
@@ -125,7 +134,10 @@ build_glib2() {
     
     cd /build
     if [[ ! -d glib ]]; then
-        git clone --branch ${GLIB_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/glib.git glib >/dev/null 2>&1
+        retry git clone --branch ${GLIB_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/glib.git glib || {
+            log "glib: clone failed after retries"
+            exit 1
+        }
     fi
     cd glib
 
@@ -206,7 +218,10 @@ build_pixman() {
     
     cd /build
     if [[ ! -d pixman ]]; then
-        git clone --branch pixman-${PIXMAN_VERSION} --depth 1 https://gitlab.freedesktop.org/pixman/pixman.git pixman >/dev/null 2>&1
+        retry git clone --branch pixman-${PIXMAN_VERSION} --depth 1 https://gitlab.freedesktop.org/pixman/pixman.git pixman || {
+            log "pixman: clone failed after retries"
+            exit 1
+        }
     fi
     cd pixman
 
@@ -261,7 +276,10 @@ build_cairo() {
     
     cd /build
     if [[ ! -d cairo ]]; then
-        git clone --branch ${CAIRO_VERSION} --depth 1 https://gitlab.freedesktop.org/cairo/cairo.git cairo >/dev/null 2>&1
+        retry git clone --branch ${CAIRO_VERSION} --depth 1 https://gitlab.freedesktop.org/cairo/cairo.git cairo || {
+            log "cairo: clone failed after retries"
+            exit 1
+        }
     fi
     cd cairo
 
@@ -351,7 +369,10 @@ build_pango() {
     
     cd /build
     if [[ ! -d pango ]]; then
-        git clone --branch ${PANGO_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/pango.git pango >/dev/null 2>&1
+        retry git clone --branch ${PANGO_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/pango.git pango || {
+            log "pango: clone failed after retries"
+            exit 1
+        }
     fi
     cd pango
 
@@ -423,7 +444,10 @@ build_gdk_pixbuf() {
     
     cd /build
     if [[ ! -d gdk-pixbuf ]]; then
-        git clone --branch ${GDK_PIXBUF_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/gdk-pixbuf.git gdk-pixbuf >/dev/null 2>&1
+        retry git clone --branch ${GDK_PIXBUF_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/gdk-pixbuf.git gdk-pixbuf || {
+            log "gdk-pixbuf: clone failed after retries"
+            exit 1
+        }
     fi
     cd gdk-pixbuf
 
@@ -514,7 +538,10 @@ build_librsvg() {
     
     cd /build
     if [[ ! -d librsvg ]]; then
-        git clone --branch ${LIBRSVG_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/librsvg.git librsvg >/dev/null 2>&1
+        retry git clone --branch ${LIBRSVG_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/librsvg.git librsvg || {
+            log "librsvg: clone failed after retries"
+            exit 1
+        }
     fi
     cd librsvg
 
