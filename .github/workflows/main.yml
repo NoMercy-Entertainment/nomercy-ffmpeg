@@ -87,6 +87,7 @@ jobs:
       # --pull in the reusable build, this guarantees the matrix never compiles
       # against a stale local base image on a beast-unit runner.
       base_tag: ${{ needs.detect-changes.outputs.base-changed == 'true' && github.sha || 'latest' }}
+      source_refs: ${{ needs.detect-changes.outputs.source-refs }}
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}

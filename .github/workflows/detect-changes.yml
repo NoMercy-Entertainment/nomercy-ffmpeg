@@ -27,6 +27,9 @@ on:
       all-platforms:
         description: 'Every supported platform, space-separated -- what a complete release must carry'
         value: ${{ jobs.detect-changes.outputs.all-platforms }}
+      source-refs:
+        description: 'BEATDETECT_TAG=.. KEYDETECT_TAG=.. STEMSPLIT_TAG=.. OMNIDRIVE_REF=.. -- resolved once, passed to every platform build'
+        value: ${{ jobs.detect-changes.outputs.source-refs }}
 
 # Single source of truth for the platform list. Anything that needs to know
 # about platforms (this workflow, the matrix in main.yml) reads it from here.
@@ -43,6 +46,7 @@ jobs:
       test-matrix: ${{ steps.detect.outputs.test-matrix }}
       any-changed: ${{ steps.detect.outputs.any-changed }}
       all-platforms: ${{ steps.detect.outputs.all-platforms }}
+      source-refs: ${{ steps.sources.outputs.source-refs }}
 
     steps:
       - name: Checkout
@@ -62,6 +66,43 @@ jobs:
           NEW_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Latest tag: ${LATEST_TAG} → next: ${NEW_VERSION}"
+
+      # Our own filters and omnidrive are fetched inside init.sh as "the
+      # newest". Resolved here once, every platform gets the same source, and
+      # the Dockerfile ARGs make a new release rerun init.sh rather than
+      # replay the cached download. Fails the run rather than letting a
+      # platform fall back to resolving on its own.
+      - name: Resolve our own sources
+        id: sources
+        run: |
+          api=https://forgejo.phillippepelzer.me/api/v1/repos/FiLL
+          refs=""
+          for pair in BEATDETECT_TAG:ffmpeg-beatdetect KEYDETECT_TAG:ffmpeg-keydetect STEMSPLIT_TAG:ffmpeg-stemsplit; do
+            var=${pair%%:*}; repo=${pair#*:}
+            tag=$(curl -fsSL --retry 3 --max-time 60 "${api}/${repo}/releases/latest" \
+              | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+            if ! [[ $tag =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::could not resolve the newest release of ${repo} (got '${tag}')"
+              exit 1
+            fi
+            echo "${repo}: ${tag}"
+            refs="${refs} ${var}=${tag}"
+          done
+          # omnidrive has no release yet; its default branch commit until it does.
+          # The API answers 404 while there is none, so this lookup may fail;
+          # `|| true` keeps that from ending the step when pipefail is on.
+          ref=$(curl -fsSL --retry 3 --max-time 60 "${api}/omnidrive/releases/latest" 2>/dev/null \
+            | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' || true)
+          if [ -z "$ref" ]; then
+            ref=$(git ls-remote https://forgejo.phillippepelzer.me/FiLL/omnidrive.git HEAD | cut -f1)
+          fi
+          if ! [[ $ref =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::could not resolve omnidrive (got '${ref}')"
+            exit 1
+          fi
+          echo "omnidrive: ${ref}"
+          refs="${refs} OMNIDRIVE_REF=${ref}"
+          echo "source-refs=${refs# }" >> "$GITHUB_OUTPUT"
 
       - name: Detect changed components
         id: detect

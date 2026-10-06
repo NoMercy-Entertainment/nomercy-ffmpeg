@@ -157,6 +157,18 @@ COPY ./scripts /scripts
 # Convert Windows line endings to Unix line endings
 RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} +
 
+# Which release of our own filters to build, and which omnidrive ref. CI
+# resolves them once per run (detect-changes) and passes the same values to
+# every platform. They sit right before init.sh on purpose: a changed value
+# reruns it, an unchanged one keeps the cache. Before, a new filter release
+# with nothing changed in scripts/ replayed the old download from the cache
+# of the last published image. Empty, as in a local build, means the
+# scripts resolve the newest themselves.
+ARG BEATDETECT_TAG=
+ARG KEYDETECT_TAG=
+ARG STEMSPLIT_TAG=
+ARG OMNIDRIVE_REF=
+
 # Initialize the build
 RUN touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_libflags.txt \
     && chmod +x /scripts/init/init.sh \

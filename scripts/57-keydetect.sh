@@ -34,15 +34,25 @@
 keydetect_api=https://forgejo.phillippepelzer.me/api/v1/repos/FiLL/ffmpeg-keydetect
 keydetect_dst=/build/ffmpeg/libavfilter/af_keydetect.c
 
-log "Step 0: Resolving the newest ffmpeg-keydetect release"
-keydetect_tag=$(curl -fsSL --retry 3 --max-time 60 "${keydetect_api}/releases/latest" 2>/dev/null \
-    | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+# CI resolves the newest tag once per run and passes it in as KEYDETECT_TAG, so
+# all seven platforms build the same release, and the Dockerfile ARG of
+# that name makes a new release rerun init.sh instead of replaying the
+# previous download from the build cache. A local build passes nothing
+# and resolves the newest release here, as it always did.
+if [ -n "${KEYDETECT_TAG}" ]; then
+    log "Step 0: Using ffmpeg-keydetect ${KEYDETECT_TAG}, chosen once for this build run"
+    keydetect_tag=${KEYDETECT_TAG}
+else
+    log "Step 0: Resolving the newest ffmpeg-keydetect release"
+    keydetect_tag=$(curl -fsSL --retry 3 --max-time 60 "${keydetect_api}/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+fi
 if [ -z "${keydetect_tag}" ]; then
     log "  ✗ ERROR: could not resolve the newest release from ${keydetect_api}/releases/latest"
     log "      (no tag_name in the response -- server unreachable, or no release published yet)"
     exit 1
 fi
-log "  ✓ newest release is ${keydetect_tag}"
+log "  ✓ building release ${keydetect_tag}"
 
 keydetect_url="https://forgejo.phillippepelzer.me/FiLL/ffmpeg-keydetect/raw/tag/${keydetect_tag}/src/af_keydetect.c"
 if ! curl -fsSL --retry 3 --max-time 120 -o "${keydetect_dst}" "${keydetect_url}"; then

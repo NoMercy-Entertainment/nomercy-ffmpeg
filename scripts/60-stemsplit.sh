@@ -39,15 +39,25 @@
 stemsplit_api=https://forgejo.phillippepelzer.me/api/v1/repos/FiLL/ffmpeg-stemsplit
 stemsplit_dst=/build/ffmpeg/libavfilter/af_stemsplit.c
 
-log "Step 0: Resolving the newest ffmpeg-stemsplit release"
-stemsplit_tag=$(curl -fsSL --retry 3 --max-time 60 "${stemsplit_api}/releases/latest" 2>/dev/null \
-    | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+# CI resolves the newest tag once per run and passes it in as STEMSPLIT_TAG, so
+# all seven platforms build the same release, and the Dockerfile ARG of
+# that name makes a new release rerun init.sh instead of replaying the
+# previous download from the build cache. A local build passes nothing
+# and resolves the newest release here, as it always did.
+if [ -n "${STEMSPLIT_TAG}" ]; then
+    log "Step 0: Using ffmpeg-stemsplit ${STEMSPLIT_TAG}, chosen once for this build run"
+    stemsplit_tag=${STEMSPLIT_TAG}
+else
+    log "Step 0: Resolving the newest ffmpeg-stemsplit release"
+    stemsplit_tag=$(curl -fsSL --retry 3 --max-time 60 "${stemsplit_api}/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+fi
 if [ -z "${stemsplit_tag}" ]; then
     log "  ✗ ERROR: could not resolve the newest release from ${stemsplit_api}/releases/latest"
     log "      (no tag_name in the response -- server unreachable, or no release published yet)"
     exit 1
 fi
-log "  ✓ newest release is ${stemsplit_tag}"
+log "  ✓ building release ${stemsplit_tag}"
 
 stemsplit_url="https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit/raw/tag/${stemsplit_tag}/src/af_stemsplit.c"
 if ! curl -fsSL --retry 3 --max-time 120 -o "${stemsplit_dst}" "${stemsplit_url}"; then

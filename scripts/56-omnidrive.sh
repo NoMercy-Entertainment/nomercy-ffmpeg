@@ -18,9 +18,22 @@ cd /build
 # traced to the exact source it used even while there is no tag to pin.
 omnidrive_repo=https://forgejo.phillippepelzer.me/FiLL/omnidrive.git
 omnidrive_api=https://forgejo.phillippepelzer.me/api/v1/repos/FiLL/omnidrive
-omnidrive_tag=$(curl -fsSL --retry 3 --max-time 60 "${omnidrive_api}/releases/latest" 2>/dev/null \
-    | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
-if [ -n "${omnidrive_tag}" ]; then
+#
+# CI resolves the ref once per run -- the newest release tag, or the default
+# branch's commit while there is none -- and passes it in as OMNIDRIVE_REF,
+# for the same two reasons as the filter scripts: every platform builds the
+# same source, and a new commit reruns init.sh instead of replaying the
+# previous clone from the build cache. A local build passes nothing.
+omnidrive_tag=""
+if [ -z "${OMNIDRIVE_REF}" ]; then
+    omnidrive_tag=$(curl -fsSL --retry 3 --max-time 60 "${omnidrive_api}/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+fi
+if [ -n "${OMNIDRIVE_REF}" ]; then
+    log "omnidrive: ${OMNIDRIVE_REF}, chosen once for this build run"
+    git clone "${omnidrive_repo}" || exit 1
+    git -C /build/omnidrive checkout --quiet "${OMNIDRIVE_REF}" || exit 1
+elif [ -n "${omnidrive_tag}" ]; then
     log "omnidrive: newest release ${omnidrive_tag}"
     git clone --branch "${omnidrive_tag}" "${omnidrive_repo}" || exit 1
 else
