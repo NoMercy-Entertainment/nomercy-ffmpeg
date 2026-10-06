@@ -6,49 +6,52 @@ fi
 
 cd /build
 
-# The newest release when there is one, otherwise the default branch. This is
-# the owner's own repository, and the rule for those is "always the latest" --
-# the same rule 49-beatdetect.sh, 57-keydetect.sh and 60-stemsplit.sh follow --
-# so it is deliberately not pinned to a fixed commit, even though the October
-# 2026 audit (AUD-9125) asked for one. omnidrive has no release yet, so today
-# this builds the default branch exactly as before; the first release makes it
-# reproducible per release without touching this script again.
+# Always the newest release of libomnidrive. This is the owner's own
+# repository, and the rule for those is "always the latest" -- the same rule
+# 49-beatdetect.sh, 57-keydetect.sh and 60-stemsplit.sh follow -- so it is
+# deliberately not pinned to a fixed commit, even though the October 2026
+# audit (AUD-9125) asked for one.
 #
-# Whatever is built, its commit goes into the log, so a build can always be
-# traced to the exact source it used even while there is no tag to pin.
+# Releases are the tags v<version> (v0.1.0 was the first, 2026-10-06). Until
+# then this built the default branch; now that releases exist, a failed lookup
+# stops the build instead of quietly building unreleased code.
+#
+# CI resolves the tag once per run and passes it in as OMNIDRIVE_REF, for the
+# same two reasons as the filter scripts: every platform builds the same
+# release, and a new release reruns init.sh instead of replaying the previous
+# clone from the build cache. A local build passes nothing and resolves the
+# newest release here.
 omnidrive_repo=https://forgejo.phillippepelzer.me/FiLL/omnidrive.git
 omnidrive_api=https://forgejo.phillippepelzer.me/api/v1/repos/FiLL/omnidrive
-#
-# CI resolves the ref once per run -- the newest release tag, or the default
-# branch's commit while there is none -- and passes it in as OMNIDRIVE_REF,
-# for the same two reasons as the filter scripts: every platform builds the
-# same source, and a new commit reruns init.sh instead of replaying the
-# previous clone from the build cache. A local build passes nothing.
-omnidrive_tag=""
-if [ -z "${OMNIDRIVE_REF}" ]; then
-    omnidrive_tag=$(curl -fsSL --retry 3 --max-time 60 "${omnidrive_api}/releases/latest" 2>/dev/null \
-        | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
-fi
 if [ -n "${OMNIDRIVE_REF}" ]; then
     log "omnidrive: ${OMNIDRIVE_REF}, chosen once for this build run"
-    git clone "${omnidrive_repo}" || exit 1
-    git -C /build/omnidrive checkout --quiet "${OMNIDRIVE_REF}" || exit 1
-elif [ -n "${omnidrive_tag}" ]; then
-    log "omnidrive: newest release ${omnidrive_tag}"
-    git clone --branch "${omnidrive_tag}" "${omnidrive_repo}" || exit 1
+    omnidrive_tag=${OMNIDRIVE_REF}
 else
-    log "omnidrive: no release published yet -- building the default branch"
-    git clone "${omnidrive_repo}" || exit 1
+    omnidrive_tag=$(curl -fsSL --retry 3 --max-time 60 "${omnidrive_api}/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+    if [ -z "${omnidrive_tag}" ]; then
+        log "omnidrive: could not resolve the newest release from ${omnidrive_api}/releases/latest"
+        exit 1
+    fi
+    log "omnidrive: newest release ${omnidrive_tag}"
 fi
-log "omnidrive: building commit $(git -C /build/omnidrive rev-parse HEAD)"
+git clone --branch "${omnidrive_tag}" --depth 1 "${omnidrive_repo}" || exit 1
 
 cd /build/omnidrive
+
+# The version lives in one place, OMNIDRIVE_VERSION in omnidrive.h; the
+# protocol also logs it on every open. Logged here so a build names it too.
+omnidrive_version=$(sed -n 's/^#define OMNIDRIVE_VERSION *"\([^"]*\)".*/\1/p' libomnidrive/include/omnidrive.h)
+log "omnidrive: building ${omnidrive_tag}, libomnidrive ${omnidrive_version:-<no OMNIDRIVE_VERSION>}, commit $(git rev-parse HEAD)"
 
 cmake -S libomnidrive -B libomnidrive/build ${CMAKE_COMMON_ARG} 2>&1 | log
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
-cmake --build libomnidrive/build || exit 1
+# The library alone. libomnidrive is static-only since v0.1.0, and its
+# CMakeLists always adds four test programs as well, which this build does
+# not need and would only cross-compile and link for nothing.
+cmake --build libomnidrive/build --target omnidrive || exit 1
 cmake --install libomnidrive/build || exit 1
 
 cp ./ffmpeg-integration/omnidrive.c /build/ffmpeg/libavformat/omnidrive.c || exit 1

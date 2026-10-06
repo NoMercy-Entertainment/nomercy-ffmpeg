@@ -77,7 +77,10 @@ jobs:
         run: |
           api=https://forgejo.phillippepelzer.me/api/v1/repos/FiLL
           refs=""
-          for pair in BEATDETECT_TAG:ffmpeg-beatdetect KEYDETECT_TAG:ffmpeg-keydetect STEMSPLIT_TAG:ffmpeg-stemsplit; do
+          # OMNIDRIVE_REF keeps its name (the Dockerfile ARG), but like the
+          # filters it is always a release tag: omnidrive has releases since
+          # v0.1.0, and no longer falls back to its default branch.
+          for pair in BEATDETECT_TAG:ffmpeg-beatdetect KEYDETECT_TAG:ffmpeg-keydetect STEMSPLIT_TAG:ffmpeg-stemsplit OMNIDRIVE_REF:omnidrive; do
             var=${pair%%:*}; repo=${pair#*:}
             tag=$(curl -fsSL --retry 3 --max-time 60 "${api}/${repo}/releases/latest" \
               | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
@@ -88,20 +91,6 @@ jobs:
             echo "${repo}: ${tag}"
             refs="${refs} ${var}=${tag}"
           done
-          # omnidrive has no release yet; its default branch commit until it does.
-          # The API answers 404 while there is none, so this lookup may fail;
-          # `|| true` keeps that from ending the step when pipefail is on.
-          ref=$(curl -fsSL --retry 3 --max-time 60 "${api}/omnidrive/releases/latest" 2>/dev/null \
-            | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' || true)
-          if [ -z "$ref" ]; then
-            ref=$(git ls-remote https://forgejo.phillippepelzer.me/FiLL/omnidrive.git HEAD | cut -f1)
-          fi
-          if ! [[ $ref =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "::error::could not resolve omnidrive (got '${ref}')"
-            exit 1
-          fi
-          echo "omnidrive: ${ref}"
-          refs="${refs} OMNIDRIVE_REF=${ref}"
           echo "source-refs=${refs# }" >> "$GITHUB_OUTPUT"
 
       - name: Detect changed components
