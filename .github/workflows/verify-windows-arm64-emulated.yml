@@ -95,7 +95,7 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.ready == 'true'
     runs-on: [self-hosted, Windows, ARM64, ffmpeg-emulated, windows-aarch64-tcg]
-    timeout-minutes: 360
+    timeout-minutes: 7200 # Five days: the GitHub self-hosted job execution limit.
     defaults:
       run:
         shell: C:\Tools\PowerShell-7.6.6-arm64\pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File {0}

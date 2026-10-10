@@ -1,7 +1,7 @@
 name: Probe Windows ARM64 runner
 
-# A few minutes on the self-hosted Windows ARM64 runner, to learn what the
-# guest has before the six-hour emulated test (verify-windows-arm64-emulated)
+# Inspect the self-hosted Windows ARM64 runner, to learn what the
+# guest has before the emulated test (verify-windows-arm64-emulated)
 # is pointed at it: architecture, PowerShell, memory, disk, tools. Changes
 # nothing on the runner.
 #
@@ -32,7 +32,7 @@ jobs:
     # The standard labels only. The runner was registered by hand, not by the
     # wsl-windows-arm package, so it carries none of the package's extra labels.
     runs-on: [self-hosted, Windows, ARM64]
-    timeout-minutes: 30
+    timeout-minutes: 7200 # Five days: the GitHub self-hosted job execution limit.
     defaults:
       run:
         shell: pwsh
