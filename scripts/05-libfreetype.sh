@@ -8,7 +8,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 rm -rf /build/freetype
 
 add_enable "--enable-libfreetype"

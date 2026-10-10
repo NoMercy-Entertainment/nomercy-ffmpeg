@@ -14,7 +14,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 rm -rf /build/libxml2
 
 add_enable "--enable-libxml2"

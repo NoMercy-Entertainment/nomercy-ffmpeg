@@ -49,6 +49,12 @@ ENV TARGET_OS=freebsd
 ENV PREFIX=/ffmpeg_build/freebsd
 ENV ARCH=x86_64
 ENV FREEBSD_VERSION=14.3
+# SHA-256 of that release's base.txz, from FreeBSD's own MANIFEST for
+# 14.3-RELEASE. The sysroot every freebsd binary links against was unpacked
+# with no check at all. Tied to FREEBSD_VERSION: bump both together, and a
+# bump without a new hash fails the build here instead of linking unverified
+# code. The archive mirror serves the same file, so one hash covers both URLs.
+ARG FREEBSD_BASE_SHA256=e38b5cf756d60086a6c2f736eff19cc7685f7e2313e31d14342fc8df57200a92
 ENV SYSROOT=/opt/freebsd-sysroot
 ENV CROSS_PREFIX=${ARCH}-unknown-freebsd14-
 ENV CC=${CROSS_PREFIX}gcc
@@ -79,6 +85,7 @@ RUN echo "------------------------------------------------------" \
     # mirror keeps it, so fall back there instead of failing the build.
     && (wget -O /tmp/base.txz https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1 \
         || wget -O /tmp/base.txz https://archive.freebsd.org/old-releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1) \
+    && echo "${FREEBSD_BASE_SHA256}  /tmp/base.txz" | sha256sum -c - \
     && tar -xJf /tmp/base.txz -C ${SYSROOT} ./lib ./usr/lib ./usr/include ./usr/libdata >/dev/null 2>&1 \
     && rm -f /tmp/base.txz \
     # -Qunused-arguments: -fuse-ld=lld is unused in compile-only invocations and
@@ -150,6 +157,18 @@ COPY ./scripts /scripts
 # Convert Windows line endings to Unix line endings
 RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} +
 
+# Which release of our own filters to build, and which omnidrive ref. CI
+# resolves them once per run (detect-changes) and passes the same values to
+# every platform. They sit right before init.sh on purpose: a changed value
+# reruns it, an unchanged one keeps the cache. Before, a new filter release
+# with nothing changed in scripts/ replayed the old download from the cache
+# of the last published image. Empty, as in a local build, means the
+# scripts resolve the newest themselves.
+ARG BEATDETECT_TAG=
+ARG KEYDETECT_TAG=
+ARG STEMSPLIT_TAG=
+ARG OMNIDRIVE_REF=
+
 # Initialize the build
 RUN touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_libflags.txt \
     && chmod +x /scripts/init/init.sh \
@@ -213,6 +232,15 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=freebsd /output/ffmpeg-9.0-freebsd-x86_64.tar.gz /build/ffmpeg-9.0-freebsd-x86_64.tar.gz
+# The archive is named after ffmpeg_version in ffmpeg-base.dockerfile
+# (scripts/init/package.sh builds the name). It used to be spelled out
+# here as well, so a version bump that missed this line broke the build
+# at the very last step. The glob takes whatever version the build
+# produced. A wildcard COPY that matches nothing still succeeds, so the
+# RUN below insists on exactly one archive: none, or a stale second one
+# from another version, stops the build here.
+COPY --from=freebsd /output/ffmpeg-*-freebsd-x86_64.tar.gz /build/
+RUN set -- /build/ffmpeg-*-freebsd-x86_64.tar.gz && [ "$#" -eq 1 ] && [ -f "$1" ] \
+    || { echo "expected exactly one ffmpeg archive, found: $*" >&2; exit 1; }
 
-CMD ["cp", "/build/ffmpeg-9.0-freebsd-x86_64.tar.gz", "/output"]
+CMD ["sh", "-c", "cp /build/ffmpeg-*-freebsd-x86_64.tar.gz /output"]

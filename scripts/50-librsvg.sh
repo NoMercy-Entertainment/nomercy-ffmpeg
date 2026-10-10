@@ -71,7 +71,35 @@ if [ ${TARGET_OS} == "windows" ]; then
 
 	#region gettext (required by glib for localization)
 	cd /build
-	wget https://ftp.gnu.org/pub/gnu/gettext/gettext-0.26.tar.gz
+	# Checked against a pinned SHA-256 before anything unpacks it. These two
+	# tarballs were fetched with wget and used unverified, so whatever the mirror
+	# served went into the Windows build. GNU and libexpat publish signatures but
+	# no SHA-256 for these releases, so the values below were computed from the
+	# downloads on 2026-10-04: they pin what was served that day and catch any
+	# later change, which is the guarantee that was missing. Bump them together
+	# with the version in the URL.
+	# ftp.gnu.org first, then a mirror. On 2026-10-06 ftp.gnu.org (and
+	# ftpmirror.gnu.org, on the same hosts) refused every connection and the
+	# windows-x86_64 build stopped here without a word in its log. The pinned
+	# SHA-256 is what makes a mirror safe: a tarball is used only if it is the
+	# exact file pinned above, wherever it came from. mirrors.kernel.org served
+	# that exact file the same day.
+	gettext_ok=0
+	for gettext_url in https://ftp.gnu.org/pub/gnu/gettext/gettext-0.26.tar.gz \
+		https://mirrors.kernel.org/gnu/gettext/gettext-0.26.tar.gz; do
+		rm -f gettext-0.26.tar.gz
+		if wget -q -T 60 -t 2 -O gettext-0.26.tar.gz "${gettext_url}" \
+			&& echo "39acf4b0371e9b110b60005562aace5b3631fed9b1bb9ecccfc7f56e58bb1d7f  gettext-0.26.tar.gz" | sha256sum -c - >/dev/null 2>&1; then
+			log "gettext: fetched and verified from ${gettext_url}"
+			gettext_ok=1
+			break
+		fi
+		log "gettext: ${gettext_url} failed, or did not match the pinned SHA-256"
+	done
+	if [ "${gettext_ok}" -ne 1 ]; then
+		log "gettext: no source served the pinned gettext-0.26.tar.gz"
+		exit 1
+	fi
 	tar -xzf gettext-0.26.tar.gz && rm gettext-0.26.tar.gz && mv gettext-0.26 gettext
 	cd gettext
 
@@ -112,7 +140,8 @@ if [ ${TARGET_OS} == "windows" ]; then
 	# not built anywhere else in the Windows pipeline, so provide it here, before
 	# cairo, so the subproject both compiles and links it.
 	cd /build
-	wget -O expat.tar.gz https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz
+	wget -O expat.tar.gz https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz || exit 1
+	echo "fd03b7172b3bd7427a3e7a812063f74754f24542429b634e0db6511b53fb2278  expat.tar.gz" | sha256sum -c - || exit 1
 	tar -xzf expat.tar.gz && rm expat.tar.gz && mv expat-2.6.4 expat
 	cd expat
 
@@ -235,7 +264,11 @@ if [[ ${TARGET_OS} == "windows" ]]; then
 		{
 			echo "[wrap-git]"
 			echo "url = https://github.com/frida/proxy-libintl.git"
-			echo "revision = head"
+			# A commit, not `head`. `head` took whatever the default branch held at
+			# build time. With depth = 1 meson fetches this exact commit shallowly,
+			# which GitHub permits and which was checked to resolve. This is the commit
+			# that was head on 2026-10-04.
+			echo "revision = 33934de09af6a6627eb44e310a8079df009abdbb"
 			echo "depth = 1"
 		}>./subprojects/proxy-libintl.wrap
 	fi
@@ -634,6 +667,26 @@ rm -rf /build/librsvg
 
 #region Add librsvg to FFmpeg configuration
 add_enable "--enable-librsvg"
+# This flag reaches the whole ffmpeg link, so it can hide a real clash
+# between any two libraries. The October 2026 audit (AUD-9127) asked
+# whether it could go. Measured on linux-x86_64 by linking ffmpeg without
+# it, and it cannot, for two separate reasons:
+#
+#  1. librsvg-2.a carries proxy-libintl, which defines _nl_msg_cat_cntr;
+#     glibc's libc.a defines it too. FFmpeg's configure then fails its
+#     librsvg link test ("librsvg-2.0 not found"), and the build stops.
+#  2. With that one symbol made weak, configure passes, but the real link
+#     of ffmpeg, ffprobe and ffplay fails with 744 multiple definitions,
+#     all Rust std (std::panicking, __rustc::__rdl_alloc, std::thread...):
+#     librav1e.a and librsvg-2.a are both Rust staticlibs, and each one
+#     ships its own copy of the Rust standard library.
+#
+# The linker keeps the first copy of each. That is safe only because both
+# Rust libraries are built by the same rustc in the same image, so their
+# std copies are identical. Building one of them with a different Rust
+# toolchain would make this flag mix two different std versions.
+# Removing the flag needs the Rust libraries linked as one staticlib, which
+# is a build restructure, not a flag change.
 add_ldflag "-Wl,--allow-multiple-definition"
 #endregion
 

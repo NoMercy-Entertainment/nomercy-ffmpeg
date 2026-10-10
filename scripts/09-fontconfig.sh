@@ -78,8 +78,21 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	exit 1
 fi
 
-make -j$(nproc) 2>&1 | log -a || { log "fontconfig build failed"; exit 1; }
+# Checked through PIPESTATUS, not `| log -a || exit`. Without pipefail -- and
+# nothing here sets it -- a pipeline's status is its LAST command, which is
+# log, which is tee, which succeeds. So `make | log -a || { ...; exit 1; }`
+# looked guarded and could never fire: a failed build was logged and then
+# carried on. PIPESTATUS[0] is the build's own status.
+make -j$(nproc) 2>&1 | log -a
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    log -a "fontconfig build failed"
+    exit 1
+fi
 make install 2>&1 | log -a
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    log -a "fontconfig install failed"
+    exit 1
+fi
 
 # Fix fontconfig.pc to include libxml2 in Libs.private for static linking
 if [ -f "${PREFIX}/lib/pkgconfig/fontconfig.pc" ]; then

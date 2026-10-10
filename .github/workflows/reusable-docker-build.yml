@@ -35,6 +35,14 @@ on:
         required: false
         type: boolean
         default: false
+      source_refs:
+        description: >-
+          Space-separated NAME=value build args naming the source of our own
+          filters and omnidrive, resolved once per run by detect-changes.
+          Empty for the base build, whose Dockerfile has none of them.
+        required: false
+        type: string
+        default: ''
       base_tag:
         description: >-
           Tag to pin the platform Dockerfile's FROM base to. Platform builds
@@ -75,7 +83,10 @@ jobs:
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.labels, 'beast-unit') }}
-        uses: jlumbroso/free-disk-space@main
+        # Pinned to the v2.0.0 commit, not @main. main is v2.0.0 plus a README
+        # change, so this runs exactly the code @main ran; it just stops
+        # running whatever lands there next.
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
         with:
           tool-cache: false
           android: true
@@ -170,6 +181,8 @@ jobs:
           rm -rf nomercy-ffmpeg-secrets
 
       - name: Build Docker Image with Retry
+        env:
+          SOURCE_REFS: ${{ inputs.source_refs }}
         run: |
           source error_handler.sh
           IMAGE="nomercyentertainment/ffmpeg-${{ inputs.platform }}"
@@ -197,6 +210,19 @@ jobs:
           # rebuilt this run (immutable; survives concurrent pipelines) or
           # BASE_TAG=latest when reusing the existing registry base. The base
           # build itself supplies nothing — its Dockerfile has no BASE_TAG arg.
+          # Our own filters and omnidrive, as detect-changes resolved them. Read
+          # from the environment, never pasted into the script, and each pair is
+          # checked against the four names it may carry.
+          SOURCE_REF_FLAGS=""
+          for kv in ${SOURCE_REFS}; do
+            if ! [[ $kv =~ ^(BEATDETECT_TAG|KEYDETECT_TAG|STEMSPLIT_TAG|OMNIDRIVE_REF)=[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::refusing source ref '${kv}'"
+              exit 1
+            fi
+            echo "📌 ${kv}"
+            SOURCE_REF_FLAGS="${SOURCE_REF_FLAGS} --build-arg ${kv}"
+          done
+
           BASE_TAG_FLAG=""
           if [[ -n "${{ inputs.base_tag }}" ]]; then
             echo "📌 Pinning FROM base to BASE_TAG=${{ inputs.base_tag }}"
@@ -230,6 +256,7 @@ jobs:
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             --build-arg BUILD_JOBS=${{ vars.FFMPEG_BUILD_JOBS || 12 }} \
             ${BASE_TAG_FLAG} \
+            ${SOURCE_REF_FLAGS} \
             --pull \
             --push \
             ${{ inputs.context }}"

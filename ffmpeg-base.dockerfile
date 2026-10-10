@@ -769,7 +769,13 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libplacebo" \
-    && retry git clone --branch release https://code.videolan.org/videolan/libplacebo.git libplacebo \
+    # The tag, not the moving `release` branch. libplacebo_version above was
+    # declared and never read, so every build took whatever `release` held that
+    # day. On 2026-10-04 that branch and tag v7.360.1 point at the same commit
+    # (cee9b076f2c6), so this changes nothing today and freezes it from here.
+    # A detached HEAD is fine: 45-vulkan.sh only runs `git submodule update
+    # --init --recursive`, which works from one, and never names the branch.
+    && retry git clone --branch v${libplacebo_version} https://code.videolan.org/videolan/libplacebo.git libplacebo \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
