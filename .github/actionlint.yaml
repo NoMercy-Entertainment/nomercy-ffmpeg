@@ -27,6 +27,3 @@ self-hosted-runner:
     - darwin-x86_64
     - darwin-arm64
     - freebsd-driver
-    # emulated Windows ARM64 guest (verify-windows-arm64-emulated.yml)
-    - ffmpeg-emulated
-    - windows-aarch64-tcg
