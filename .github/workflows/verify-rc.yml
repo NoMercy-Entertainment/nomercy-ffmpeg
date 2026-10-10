@@ -162,20 +162,25 @@ jobs:
             ext: zip
             labels: '["self-hosted","ffmpeg-verify","windows-x86_64"]'
             via: windows
-          # windows-aarch64 is built and released but is deliberately absent
-          # here: there is no Windows-on-ARM machine in the verify fleet, and an
-          # entry whose labels no runner carries does not fail — it queues until
-          # the job times out, holding up the whole RC verification.
+          # windows-aarch64 runs on github-windows-arm64-1, a Windows 11 ARM64
+          # guest under QEMU TCG on an x86 host (see
+          # verify-windows-arm64-emulated.yml for what the probe found). It was
+          # registered by hand with the standard labels only, so those are what
+          # this entry asks for; no other runner in the org carries Windows and
+          # ARM64 together. Until 2026-10-10 this platform had no runner, its box
+          # stayed unticked and a human tested it by hand.
           #
-          # The consequence is intended and visible: no verdict file is produced
-          # for windows-aarch64, so sync-checklist.js leaves its box unticked and
-          # the release PR stays blocked until a human tests it. That is the
-          # honest state, not a gap to paper over.
-          #
-          # To wire it up, add a runner labelled
-          #   ["self-hosted","ffmpeg-verify","windows-aarch64"]
-          # and add the matrix entry below with `via: windows`. tests/tests.ps1
-          # already runs there unchanged.
+          # `execution: qemu-tcg` goes into the verdict: the binary is the real
+          # ARM64 build, but the CPU running it is emulated, and the evidence the
+          # bot posts says so instead of claiming native hardware. The arch-mismatch
+          # rule verify-rc.sh uses cannot tell, because inside the guest the
+          # architecture is ARM64 either way. Expect hours, not minutes: the probe
+          # measured PowerShell at roughly 100x slower than native.
+          - platform: windows-aarch64
+            ext: zip
+            labels: '["self-hosted","Windows","ARM64"]'
+            via: windows
+            execution: qemu-tcg
     runs-on: ${{ fromJSON(matrix.labels) }}
     timeout-minutes: 7200
     steps:
@@ -337,7 +342,8 @@ jobs:
             -WorkDir "$env:RUNNER_TEMP\ffmpeg-${{ matrix.platform }}" `
             -Json "verdict-${{ matrix.platform }}.json" `
             -Tag '${{ needs.resolve.outputs.tag }}' `
-            -Commit '${{ needs.resolve.outputs.head-sha }}'
+            -Commit '${{ needs.resolve.outputs.head-sha }}' `
+            -Execution '${{ matrix.execution || 'native' }}'
 
       # always() so a failing platform still uploads its verdict — the evidence
       # comment needs to say WHICH test failed, not just that something did.
