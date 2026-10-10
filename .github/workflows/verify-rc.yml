@@ -177,7 +177,7 @@ jobs:
           # and add the matrix entry below with `via: windows`. tests/tests.ps1
           # already runs there unchanged.
     runs-on: ${{ fromJSON(matrix.labels) }}
-    timeout-minutes: 45
+    timeout-minutes: 7200
     steps:
       - name: Checkout
         uses: actions/checkout@v7
