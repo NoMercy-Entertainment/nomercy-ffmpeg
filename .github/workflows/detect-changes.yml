@@ -255,7 +255,7 @@ jobs:
           # falls through to WORKFLOW=true and rebuilds. Rebuilding when it was
           # not needed costs an hour; not rebuilding when it was needed ships
           # stale binaries, so the unknown case has to be the conservative one.
-          NON_BUILD_WORKFLOWS='^\.github/workflows/(delete-workflow-runs|fleet-health|mac-runner-check|npm-publish|pr-guards|retract-release|verify-rc|verify-windows-arm64-emulated)\.yml$'
+          NON_BUILD_WORKFLOWS='^\.github/workflows/(delete-workflow-runs|fleet-health|mac-runner-check|npm-publish|pr-guards|probe-windows-arm64-runner|retract-release|verify-rc|verify-windows-arm64-emulated)\.yml$'
           WORKFLOW=false
           if echo "${CHANGED_FILES}" \
                | grep -E "^\.github/workflows/" \
