@@ -257,7 +257,7 @@ RUN \
          || { echo "⚠️ savannah failed, fetching freetype from sourceforge" \
               && wget --tries=5 --waitretry=5 -O freetype.tar.gz https://downloads.sourceforge.net/freetype/freetype-$(echo ${freetype_version} | tr '-' '.').tar.gz >/dev/null 2>&1; }; } \
     && tar -xzf freetype.tar.gz >/dev/null 2>&1 && rm freetype.tar.gz && mv freetype-$(echo ${freetype_version} | tr '-' '.') freetype \
-    # && git clone --branch VER-${freetype_version} https://gitlab.freedesktop.org/freetype/freetype.git freetype >/dev/null 2>&1 \
+    # && git clone --branch VER-${freetype_version} https://github.com/NoMercy-CI-Mirrors/freetype.git freetype >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -290,7 +290,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading fontconfig" \
-    && retry git clone --branch ${fontconfig_version} https://gitlab.freedesktop.org/fontconfig/fontconfig.git fontconfig \
+    && retry git clone --branch ${fontconfig_version} https://github.com/NoMercy-CI-Mirrors/fontconfig.git fontconfig \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -298,7 +298,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libpciaccess" \
-    && retry git clone --branch libpciaccess-${libpciaccess_version} https://gitlab.freedesktop.org/xorg/lib/libpciaccess.git libpciaccess \
+    && retry git clone --branch libpciaccess-${libpciaccess_version} https://github.com/NoMercy-CI-Mirrors/libpciaccess.git libpciaccess \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -306,7 +306,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xcbproto" \
-    && retry git clone --branch xcb-proto-${xcbproto_version} https://gitlab.freedesktop.org/xorg/proto/xcbproto.git xcbproto \
+    && retry git clone --branch xcb-proto-${xcbproto_version} https://github.com/NoMercy-CI-Mirrors/xcbproto.git xcbproto \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -314,7 +314,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xproto" \
-    && retry git clone --branch xorgproto-${xorgproto_version} https://gitlab.freedesktop.org/xorg/proto/xorgproto.git xproto \
+    && retry git clone --branch xorgproto-${xorgproto_version} https://github.com/NoMercy-CI-Mirrors/xorgproto.git xproto \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -322,7 +322,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xtrans" \
-    && retry git clone --branch xtrans-${xtranx_version} https://gitlab.freedesktop.org/xorg/lib/libxtrans.git libxtrans \
+    && retry git clone --branch xtrans-${xtranx_version} https://github.com/NoMercy-CI-Mirrors/libxtrans.git libxtrans \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -330,7 +330,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libxcb" \
-    && retry git clone --branch libxcb-${libxcb_version} https://gitlab.freedesktop.org/xorg/lib/libxcb.git libxcb \
+    && retry git clone --branch libxcb-${libxcb_version} https://github.com/NoMercy-CI-Mirrors/libxcb.git libxcb \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -338,7 +338,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libx11" \
-    && retry git clone --branch libX11-${libx11_version} https://gitlab.freedesktop.org/xorg/lib/libx11.git libx11 \
+    && retry git clone --branch libX11-${libx11_version} https://github.com/NoMercy-CI-Mirrors/libx11.git libx11 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -346,7 +346,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libxfixes" \
-    && retry git clone --branch libXfixes-${libXfixed_version} https://gitlab.freedesktop.org/xorg/lib/libxfixes.git /build/libxfixes \
+    && retry git clone --branch libXfixes-${libXfixed_version} https://github.com/NoMercy-CI-Mirrors/libxfixes.git /build/libxfixes \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -354,7 +354,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libdrm" \
-    && retry git clone --branch libdrm-${libdrm_version} https://gitlab.freedesktop.org/mesa/drm.git libdrm \
+    && retry git clone --branch libdrm-${libdrm_version} https://github.com/NoMercy-CI-Mirrors/drm.git libdrm \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 

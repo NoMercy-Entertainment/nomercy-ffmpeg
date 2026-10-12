@@ -179,7 +179,7 @@ cd /build
 # Download pixman source code
 if [ ! -d "/build/pixman" ]; then
 	echo "Downloading pixman..."
-	git clone --branch pixman-${LIBPIXMAN_VERSION} https://gitlab.freedesktop.org/pixman/pixman.git pixman >/dev/null 2>&1
+	git clone --branch pixman-${LIBPIXMAN_VERSION} https://github.com/NoMercy-CI-Mirrors/pixman.git pixman >/dev/null 2>&1
 fi
 
 cd /build/pixman
@@ -224,7 +224,7 @@ cd /build
 # Download glib
 if [ ! -d "/build/glib" ]; then
 	echo "Downloading glib..."
-	git clone --branch ${LIBGLIB_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/glib.git /build/glib
+	git clone --branch ${LIBGLIB_VERSION} --depth 1 https://github.com/NoMercy-CI-Mirrors/glib.git /build/glib
 	# Pre-clone gvdb subproject — meson wrap-git fails inside Docker
 	if [ -f "/build/glib/subprojects/gvdb.wrap" ] && [ ! -d "/build/glib/subprojects/gvdb" ]; then
 		gvdb_url=$(grep 'url=' /build/glib/subprojects/gvdb.wrap | head -1 | cut -d= -f2)
@@ -324,7 +324,7 @@ cd /build
 
 if [ ! -d "/build/cairo" ]; then
 	echo "Downloading cairo..." > /ffmpeg_build.log
-	git clone --branch ${LIBCAIRO_VERSION} https://gitlab.freedesktop.org/cairo/cairo.git cairo >/dev/null 2>&1
+	git clone --branch ${LIBCAIRO_VERSION} https://github.com/NoMercy-CI-Mirrors/cairo.git cairo >/dev/null 2>&1
 fi
 
 cd /build/cairo
@@ -427,7 +427,7 @@ if [[ ${TARGET_OS} != "darwin" ]]; then
 
 	if [ ! -d "/build/gdk-pixbuf" ]; then
 		echo "Downloading gdk-pixbuf..."
-		git clone --branch ${LIBGDKPIXBUF_VERSION} https://gitlab.gnome.org/GNOME/gdk-pixbuf.git gdk-pixbuf >/dev/null 2>&1
+		git clone --branch ${LIBGDKPIXBUF_VERSION} https://github.com/NoMercy-CI-Mirrors/gdk-pixbuf.git gdk-pixbuf >/dev/null 2>&1
 	fi
 
 	cd /build/gdk-pixbuf
@@ -485,7 +485,7 @@ cd /build
 
 if [ ! -d "/build/pango" ]; then
 	echo "Downloading pango..."
-	git clone --branch ${LIBPANGO_VERSION} https://gitlab.gnome.org/GNOME/pango.git pango >/dev/null 2>&1
+	git clone --branch ${LIBPANGO_VERSION} https://github.com/NoMercy-CI-Mirrors/pango.git pango >/dev/null 2>&1
 fi
 
 cd /build/pango
@@ -560,7 +560,7 @@ cd /build
 
 if [ ! -d "/build/librsvg" ]; then
 	echo "Downloading librsvg..."
-	git clone --branch ${LIBRSVG_VERSION} https://gitlab.gnome.org/GNOME/librsvg.git librsvg >/dev/null 2>&1
+	git clone --branch ${LIBRSVG_VERSION} https://github.com/NoMercy-CI-Mirrors/librsvg.git librsvg >/dev/null 2>&1
 fi
 
 cd /build/librsvg
