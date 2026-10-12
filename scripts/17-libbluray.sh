@@ -259,6 +259,8 @@ else
     exit 1
 fi
 
+MESON_EXTRA_OPTS=""
+
 if [[ -f "/scripts/patches/libbluray/aacs_static.c" ]]; then
     mv meson.build meson.build.orig
     cp /scripts/patches/libbluray/meson.build meson.build
@@ -271,7 +273,10 @@ if [[ -f "/scripts/patches/libbluray/aacs_static.c" ]]; then
 
     mv src/libbluray/disc/aacs.c src/libbluray/disc/aacs.c.orig
     cp /scripts/patches/libbluray/aacs_static.c src/libbluray/disc/aacs.c
+
+	MESON_EXTRA_OPTS="-Dlibaacs=enabled -Dlibbdplus=enabled"
 fi
+
 # replace in all files "str_dup" with "bd_str_dup"
 find . -type f -exec sed -i 's/str_dup/libbluray_str_dup/g' {} \;
 find . -type f -exec sed -i 's/str_printf/libbluray_str_printf/g' {} \;
@@ -293,8 +298,7 @@ meson setup build \
     --libdir=lib \
     --buildtype=release \
     -Ddefault_library=static \
-    -Dlibaacs=enabled \
-    -Dlibbdplus=enabled \
+    ${MESON_EXTRA_OPTS} \
     -Dlibxml2=enabled \
     -Dbdj_jar=auto \
     -Denable_tools=false \
