@@ -162,25 +162,22 @@ jobs:
             ext: zip
             labels: '["self-hosted","ffmpeg-verify","windows-x86_64"]'
             via: windows
-          # windows-aarch64 runs on github-windows-arm64-1, a Windows 11 ARM64
-          # guest under QEMU TCG on an x86 host (see
-          # verify-windows-arm64-emulated.yml for what the probe found). It was
-          # registered by hand with the standard labels only, so those are what
-          # this entry asks for; no other runner in the org carries Windows and
-          # ARM64 together. Until 2026-10-10 this platform had no runner, its box
-          # stayed unticked and a human tested it by hand.
+          # windows-aarch64 is built and released but deliberately absent here,
+          # so no verdict is produced, sync-checklist.js leaves its box unticked
+          # and a human ticks it after testing by hand. That is the honest state.
           #
-          # `execution: qemu-tcg` goes into the verdict: the binary is the real
-          # ARM64 build, but the CPU running it is emulated, and the evidence the
-          # bot posts says so instead of claiming native hardware. The arch-mismatch
-          # rule verify-rc.sh uses cannot tell, because inside the guest the
-          # architecture is ARM64 either way. Expect hours, not minutes: the probe
-          # measured PowerShell at roughly 100x slower than native.
-          - platform: windows-aarch64
-            ext: zip
-            labels: '["self-hosted","Windows","ARM64"]'
-            via: windows
-            execution: qemu-tcg
+          # It was wired to github-windows-arm64-1 for two days in October 2026.
+          # That runner is a Windows 11 ARM64 guest under QEMU TCG on an x86 host,
+          # and the suite does not finish on it: sample generation took 870 s,
+          # the x264 test 234 s, and the x265 test was still running after
+          # eighteen hours (run 38056397474). An entry here would hold the RC
+          # verification for the five-day job limit and then fail. The owner's
+          # decision: hand-ticked until there is a real ARM64 Windows machine.
+          #
+          # When one exists, add it back with `via: windows` and, if it is not
+          # native hardware, `execution: <what it is>` -- verify-rc.ps1 writes that
+          # into the verdict so the bot's evidence never claims native hardware.
+          # tests/tests.ps1 runs there unchanged.
     runs-on: ${{ fromJSON(matrix.labels) }}
     timeout-minutes: 7200
     steps:
@@ -342,8 +339,7 @@ jobs:
             -WorkDir "$env:RUNNER_TEMP\ffmpeg-${{ matrix.platform }}" `
             -Json "verdict-${{ matrix.platform }}.json" `
             -Tag '${{ needs.resolve.outputs.tag }}' `
-            -Commit '${{ needs.resolve.outputs.head-sha }}' `
-            -Execution '${{ matrix.execution || 'native' }}'
+            -Commit '${{ needs.resolve.outputs.head-sha }}'
 
       # always() so a failing platform still uploads its verdict — the evidence
       # comment needs to say WHICH test failed, not just that something did.
