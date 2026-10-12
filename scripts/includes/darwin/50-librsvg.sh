@@ -134,7 +134,7 @@ build_glib2() {
     
     cd /build
     if [[ ! -d glib ]]; then
-        retry git clone --branch ${GLIB_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/glib.git glib || {
+        retry git clone --branch ${GLIB_VERSION} --depth 1 https://github.com/NoMercy-CI-Mirrors/glib.git glib || {
             log "glib: clone failed after retries"
             exit 1
         }
@@ -218,7 +218,7 @@ build_pixman() {
     
     cd /build
     if [[ ! -d pixman ]]; then
-        retry git clone --branch pixman-${PIXMAN_VERSION} --depth 1 https://gitlab.freedesktop.org/pixman/pixman.git pixman || {
+        retry git clone --branch pixman-${PIXMAN_VERSION} --depth 1 https://github.com/NoMercy-CI-Mirrors/pixman.git pixman || {
             log "pixman: clone failed after retries"
             exit 1
         }
@@ -276,7 +276,7 @@ build_cairo() {
     
     cd /build
     if [[ ! -d cairo ]]; then
-        retry git clone --branch ${CAIRO_VERSION} --depth 1 https://gitlab.freedesktop.org/cairo/cairo.git cairo || {
+        retry git clone --branch ${CAIRO_VERSION} --depth 1 https://github.com/NoMercy-CI-Mirrors/cairo.git cairo || {
             log "cairo: clone failed after retries"
             exit 1
         }
@@ -369,7 +369,7 @@ build_pango() {
     
     cd /build
     if [[ ! -d pango ]]; then
-        retry git clone --branch ${PANGO_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/pango.git pango || {
+        retry git clone --branch ${PANGO_VERSION} --depth 1 https://github.com/NoMercy-CI-Mirrors/pango.git pango || {
             log "pango: clone failed after retries"
             exit 1
         }
@@ -444,7 +444,7 @@ build_gdk_pixbuf() {
     
     cd /build
     if [[ ! -d gdk-pixbuf ]]; then
-        retry git clone --branch ${GDK_PIXBUF_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/gdk-pixbuf.git gdk-pixbuf || {
+        retry git clone --branch ${GDK_PIXBUF_VERSION} --depth 1 https://github.com/NoMercy-CI-Mirrors/gdk-pixbuf.git gdk-pixbuf || {
             log "gdk-pixbuf: clone failed after retries"
             exit 1
         }
@@ -538,7 +538,7 @@ build_librsvg() {
     
     cd /build
     if [[ ! -d librsvg ]]; then
-        retry git clone --branch ${LIBRSVG_VERSION} --depth 1 https://gitlab.gnome.org/GNOME/librsvg.git librsvg || {
+        retry git clone --branch ${LIBRSVG_VERSION} --depth 1 https://github.com/NoMercy-CI-Mirrors/librsvg.git librsvg || {
             log "librsvg: clone failed after retries"
             exit 1
         }
