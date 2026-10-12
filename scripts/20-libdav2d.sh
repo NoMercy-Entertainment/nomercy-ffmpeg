@@ -39,7 +39,7 @@ exit 255
 
 cd /build
 
-git clone https://code.videolan.org/videolan/dav2d.git
+git clone https://github.com/NoMercy-CI-Mirrors/dav2d.git
 
 cd /build/dav2d
 

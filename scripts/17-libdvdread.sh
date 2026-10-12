@@ -19,7 +19,7 @@ if [[ ${TARGET_OS} == "darwin" ]]; then
 fi
 
 #region libdvdcss
-clone_retry 1.4.3 https://code.videolan.org/videolan/libdvdcss.git /build/libdvdcss || exit 1
+clone_retry 1.4.3 https://github.com/NoMercy-CI-Mirrors/libdvdcss.git /build/libdvdcss || exit 1
 cd /build/libdvdcss
 
 autoreconf -i
@@ -35,7 +35,7 @@ rm -rf /build/libdvdcss && cd /build
 #endregion
 
 #region libdvdread
-clone_retry 6.1.3 https://code.videolan.org/videolan/libdvdread.git /build/libdvdread || exit 1
+clone_retry 6.1.3 https://github.com/NoMercy-CI-Mirrors/libdvdread.git /build/libdvdread || exit 1
 cd /build/libdvdread
 
 autoreconf -i
@@ -51,7 +51,7 @@ rm -rf /build/libdvdread && cd /build
 #endregion
 
 #region libdvdnav
-clone_retry 6.1.1 https://code.videolan.org/videolan/libdvdnav.git /build/libdvdnav || exit 1
+clone_retry 6.1.1 https://github.com/NoMercy-CI-Mirrors/libdvdnav.git /build/libdvdnav || exit 1
 cd /build/libdvdnav
 
 autoreconf -i

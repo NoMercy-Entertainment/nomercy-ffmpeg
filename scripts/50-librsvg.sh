@@ -78,15 +78,14 @@ if [ ${TARGET_OS} == "windows" ]; then
 	# downloads on 2026-10-04: they pin what was served that day and catch any
 	# later change, which is the guarantee that was missing. Bump them together
 	# with the version in the URL.
-	# ftp.gnu.org first, then a mirror. On 2026-10-06 ftp.gnu.org (and
-	# ftpmirror.gnu.org, on the same hosts) refused every connection and the
+	# From our own copy on GitHub (NoMercy-CI-Mirrors/sources, one release per
+	# file). On 2026-10-06 ftp.gnu.org refused every connection and the
 	# windows-x86_64 build stopped here without a word in its log. The pinned
-	# SHA-256 is what makes a mirror safe: a tarball is used only if it is the
-	# exact file pinned above, wherever it came from. mirrors.kernel.org served
-	# that exact file the same day.
+	# SHA-256 is what makes any source safe: the tarball is used only if it is
+	# the exact file pinned above. The loop stays so a second source can be
+	# added on one line.
 	gettext_ok=0
-	for gettext_url in https://ftp.gnu.org/pub/gnu/gettext/gettext-0.26.tar.gz \
-		https://mirrors.kernel.org/gnu/gettext/gettext-0.26.tar.gz; do
+	for gettext_url in https://github.com/NoMercy-CI-Mirrors/sources/releases/download/gettext-0.26/gettext-0.26.tar.gz; do
 		rm -f gettext-0.26.tar.gz
 		if wget -q -T 60 -t 2 -O gettext-0.26.tar.gz "${gettext_url}" \
 			&& echo "39acf4b0371e9b110b60005562aace5b3631fed9b1bb9ecccfc7f56e58bb1d7f  gettext-0.26.tar.gz" | sha256sum -c - >/dev/null 2>&1; then

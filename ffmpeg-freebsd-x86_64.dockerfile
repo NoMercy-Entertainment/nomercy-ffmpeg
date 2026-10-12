@@ -83,8 +83,7 @@ RUN echo "------------------------------------------------------" \
     && mkdir -p ${SYSROOT} \
     # download.freebsd.org drops a release once it goes end-of-life; the archive
     # mirror keeps it, so fall back there instead of failing the build.
-    && (wget -O /tmp/base.txz https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1 \
-        || wget -O /tmp/base.txz https://archive.freebsd.org/old-releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz >/dev/null 2>&1) \
+    && wget -O /tmp/base.txz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/freebsd-base-${FREEBSD_VERSION}/base.txz >/dev/null 2>&1 \
     && echo "${FREEBSD_BASE_SHA256}  /tmp/base.txz" | sha256sum -c - \
     && tar -xJf /tmp/base.txz -C ${SYSROOT} ./lib ./usr/lib ./usr/include ./usr/libdata >/dev/null 2>&1 \
     && rm -f /tmp/base.txz \

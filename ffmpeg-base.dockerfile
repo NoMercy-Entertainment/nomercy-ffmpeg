@@ -210,9 +210,9 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading iconv" \
-    && retry wget -O libiconv.tar.gz http://ftp.gnu.org/gnu/libiconv/libiconv-${iconv_version}.tar.gz \
+    && retry wget -O libiconv.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/libiconv-${iconv_version}/libiconv-${iconv_version}.tar.gz \
     && tar -xvf libiconv.tar.gz >/dev/null 2>&1 && rm libiconv.tar.gz && mv libiconv-* iconv \
-    # && git clone --branch v${iconv_version} https://git.savannah.gnu.org/git/libiconv.git iconv >/dev/null 2>&1 \
+    # && git clone --branch v${iconv_version} https://github.com/NoMercy-CI-Mirrors/libiconv.git iconv >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -236,7 +236,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading fftw3" \
-    && retry wget -O fftw3.tar.gz http://www.fftw.org/fftw-${fftw3_version}.tar.gz \
+    && retry wget -O fftw3.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/fftw-${fftw3_version}/fftw-${fftw3_version}.tar.gz \
     && tar -xvf fftw3.tar.gz >/dev/null 2>&1 && rm fftw3.tar.gz && mv fftw-${fftw3_version} fftw3 \
     # && git clone --branch fftw-${fftw3_version} https://github.com/FFTW/fftw3.git fftw3 >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
@@ -253,9 +253,7 @@ RUN \
     # the whole base build; each attempt re-follows the redirect afresh. When
     # the pool is down altogether (2026-09-06: every attempt failed within a
     # second, twice) the same tarball comes from SourceForge instead.
-    && { wget --tries=5 --waitretry=5 --retry-on-http-error=500,502,503,504 -O freetype.tar.gz https://download.savannah.gnu.org/releases/freetype/freetype-$(echo ${freetype_version} | tr '-' '.').tar.gz >/dev/null 2>&1 \
-         || { echo "⚠️ savannah failed, fetching freetype from sourceforge" \
-              && wget --tries=5 --waitretry=5 -O freetype.tar.gz https://downloads.sourceforge.net/freetype/freetype-$(echo ${freetype_version} | tr '-' '.').tar.gz >/dev/null 2>&1; }; } \
+    && retry wget -O freetype.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/freetype-$(echo ${freetype_version} | tr '-' '.')/freetype-$(echo ${freetype_version} | tr '-' '.').tar.gz \
     && tar -xzf freetype.tar.gz >/dev/null 2>&1 && rm freetype.tar.gz && mv freetype-$(echo ${freetype_version} | tr '-' '.') freetype \
     # && git clone --branch VER-${freetype_version} https://github.com/NoMercy-CI-Mirrors/freetype.git freetype >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
@@ -378,7 +376,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libudfread" \
-    && retry git clone --branch ${libudfread_version} https://code.videolan.org/videolan/libudfread libudfread \
+    && retry git clone --branch ${libudfread_version} https://github.com/NoMercy-CI-Mirrors/libudfread.git libudfread \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -458,7 +456,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libbdplus" \
-    && retry git clone --branch ${libbdplus_version} https://code.videolan.org/videolan/libbdplus.git libbdplus \
+    && retry git clone --branch ${libbdplus_version} https://github.com/NoMercy-CI-Mirrors/libbdplus.git libbdplus \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -466,7 +464,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libaacs" \
-    && retry git clone --branch ${libaacs_version} https://code.videolan.org/videolan/libaacs.git libaacs \
+    && retry git clone --branch ${libaacs_version} https://github.com/NoMercy-CI-Mirrors/libaacs.git libaacs \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -474,7 +472,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libbluray" \
-    && retry git clone --branch ${libbluray_version} https://code.videolan.org/videolan/libbluray.git libbluray \
+    && retry git clone --branch ${libbluray_version} https://github.com/NoMercy-CI-Mirrors/libbluray.git libbluray \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -482,7 +480,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libcddb" \
-    && retry wget -O libcddb.tar.gz https://sourceforge.net/projects/libcddb/files/libcddb/${libcddb_version}/libcddb-${libcddb_version}.tar.gz/download \
+    && retry wget -O libcddb.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/libcddb-${libcddb_version}/libcddb-${libcddb_version}.tar.gz \
     && tar -xvf libcddb.tar.gz >/dev/null 2>&1 && rm libcddb.tar.gz \
     && mv libcddb-* libcddb \
     && echo "✅ Download completed successfully" \
@@ -508,7 +506,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading dav1d" \
-    && retry git clone --branch ${dav1d_version} https://code.videolan.org/videolan/dav1d.git libdav1d \
+    && retry git clone --branch ${dav1d_version} https://github.com/NoMercy-CI-Mirrors/dav1d.git libdav1d \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -548,7 +546,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading mp3lame" \
-    && retry wget -O mp3lame.tar.gz https://downloads.sourceforge.net/project/lame/lame/${mp3lame_version}/lame-${mp3lame_version}.tar.gz \
+    && retry wget -O mp3lame.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/lame-${mp3lame_version}/lame-${mp3lame_version}.tar.gz \
     && tar -xzf mp3lame.tar.gz >/dev/null 2>&1 && rm mp3lame.tar.gz && mv lame-${mp3lame_version} lame \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -574,7 +572,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libaom" \
-    && retry git clone --branch v${libaom_version} https://aomedia.googlesource.com/aom libaom \
+    && retry git clone --branch v${libaom_version} https://github.com/NoMercy-CI-Mirrors/aom.git libaom \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -590,7 +588,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libsvtav1" \
-    && retry git clone --branch v${libsvtav1_version} https://gitlab.com/AOMediaCodec/SVT-AV1.git libsvtav1 \
+    && retry git clone --branch v${libsvtav1_version} https://github.com/NoMercy-CI-Mirrors/SVT-AV1.git libsvtav1 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -598,7 +596,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libvpx" \
-    && retry git clone --branch v${libvpx_version} https://chromium.googlesource.com/webm/libvpx.git libvpx \
+    && retry git clone --branch v${libvpx_version} https://github.com/NoMercy-CI-Mirrors/libvpx.git libvpx \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -606,7 +604,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading x264" \
-    && retry git clone --branch ${x264_version} https://code.videolan.org/videolan/x264.git x264 \
+    && retry git clone --branch ${x264_version} https://github.com/NoMercy-CI-Mirrors/x264.git x264 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -614,7 +612,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading x265" \
-    && retry git clone --branch Release_${x265_version} https://bitbucket.org/multicoreware/x265_git.git x265 \
+    && retry git clone --branch Release_${x265_version} https://github.com/NoMercy-CI-Mirrors/x265_git.git x265 \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -630,7 +628,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading xvidcore" \
-    && retry wget -O xvidcore.tar.gz https://downloads.xvid.com/downloads/xvidcore-${xvid_version}.tar.gz \
+    && retry wget -O xvidcore.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/xvidcore-${xvid_version}/xvidcore-${xvid_version}.tar.gz \
     && tar -xzf xvidcore.tar.gz >/dev/null 2>&1 && rm xvidcore.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -639,7 +637,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libwebp" \
-    && retry wget -O libwebp.tar.gz https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-${libwebp_version}.tar.gz \
+    && retry wget -O libwebp.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/libwebp-${libwebp_version}/libwebp-${libwebp_version}.tar.gz \
     && tar -xzf libwebp.tar.gz >/dev/null 2>&1 && rm libwebp.tar.gz && mv libwebp-${libwebp_version} libwebp \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -653,7 +651,7 @@ RUN \
     && echo "------------------------------------------------------" \
     && echo "------------------------------------------------------" \
     && echo "🔄 Start downloading jpeg" \
-    && retry wget -O jpegsrc.v${jpegsrc_version}.tar.gz https://ijg.org/files/jpegsrc.v${jpegsrc_version}.tar.gz \
+    && retry wget -O jpegsrc.v${jpegsrc_version}.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/jpegsrc-v${jpegsrc_version}/jpegsrc.v${jpegsrc_version}.tar.gz \
     && tar -xzf jpegsrc.v${jpegsrc_version}.tar.gz >/dev/null 2>&1 && mv jpeg-${jpegsrc_version} jpeg && rm jpegsrc.v${jpegsrc_version}.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -702,7 +700,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading giflib" \
-    && retry wget -O giflib-5.2.2.tar.gz https://sourceforge.net/projects/giflib/files/giflib-5.2.2.tar.gz/download \
+    && retry wget -O giflib-5.2.2.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/giflib-5.2.2/giflib-5.2.2.tar.gz \
     && tar -xvzf giflib-5.2.2.tar.gz >/dev/null 2>&1 && mv giflib-5.2.2 giflib && rm giflib-5.2.2.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -711,7 +709,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libpng" \
-    && retry wget https://download.sourceforge.net/libpng/libpng-1.6.47.tar.gz \
+    && retry wget https://github.com/NoMercy-CI-Mirrors/sources/releases/download/libpng-1.6.47/libpng-1.6.47.tar.gz \
     && tar -xvf libpng-1.6.47.tar.gz >/dev/null 2>&1 && mv libpng-1.6.47 libpng && rm -f libpng-1.6.47.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
@@ -728,7 +726,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libtiff" \
-    && retry git clone --branch v4.7.0 https://gitlab.com/libtiff/libtiff.git /build/libtiff \
+    && retry git clone --branch v4.7.0 https://github.com/NoMercy-CI-Mirrors/libtiff.git /build/libtiff \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -775,7 +773,7 @@ RUN \
     # (cee9b076f2c6), so this changes nothing today and freezes it from here.
     # A detached HEAD is fine: 45-vulkan.sh only runs `git submodule update
     # --init --recursive`, which works from one, and never names the branch.
-    && retry git clone --branch v${libplacebo_version} https://code.videolan.org/videolan/libplacebo.git libplacebo \
+    && retry git clone --branch v${libplacebo_version} https://github.com/NoMercy-CI-Mirrors/libplacebo.git libplacebo \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -783,7 +781,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading FFmpeg" \
-    && retry wget -O ffmpeg.tar.bz2 https://ffmpeg.org/releases/ffmpeg-${ffmpeg_version}.tar.bz2 \
+    && retry wget -O ffmpeg.tar.bz2 https://github.com/NoMercy-CI-Mirrors/sources/releases/download/ffmpeg-${ffmpeg_version}/ffmpeg-${ffmpeg_version}.tar.bz2 \
     && tar -xjf ffmpeg.tar.bz2 >/dev/null 2>&1 && rm ffmpeg.tar.bz2 && mv ffmpeg-${ffmpeg_version} ffmpeg \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
