@@ -17,6 +17,13 @@ defaults:
   run:
     working-directory: clients/npm
 
+# Explicit and least-privilege: without this block every job gets the repo
+# default token, which is read/write. `check` reads releases and the jobs of
+# the triggering run (actions: read); publish-npm sets its own block for OIDC.
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   # The client version is not read from the repository: it is the release that
   # was just published. Keeping it in package.json meant remembering to bump

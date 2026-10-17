@@ -61,6 +61,12 @@ on:
       PAT_TOKEN:
         required: false
 
+# Read-only. A called workflow can only narrow what the caller grants, and
+# nothing here writes through the GitHub token: images go to Docker Hub with
+# its own credentials and the secrets repo is checked out with PAT_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   docker-build:
     # `inputs.labels` alone does not constrain the operating system, and callers

@@ -31,9 +31,12 @@ concurrency:
   group: verify-rc-${{ github.event.workflow_run.head_sha || inputs.pr }}
   cancel-in-progress: true
 
+# Read-only by default. Only sync-checklist writes (it edits the PR body and
+# its verdict comment), so pull-requests: write sits on that job alone and the
+# verify matrix on the self-hosted fleet never carries it (follow-up from #79).
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   # ── Work out which PR and which RC we are verifying ───────────────────────
@@ -357,6 +360,9 @@ jobs:
     needs: [resolve, verify]
     if: always() && needs.resolve.outputs.should-run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7

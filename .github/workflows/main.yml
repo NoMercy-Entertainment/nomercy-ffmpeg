@@ -22,6 +22,11 @@ on:
         type: boolean
         default: true
 
+# Explicit and least-privilege: without this block every job gets the repo
+# default token, which is read/write. Jobs that need more set their own.
+permissions:
+  contents: read
+
 jobs:
   # ── Detect which platforms need to (re)build ─────────────────────────────
   detect-changes:

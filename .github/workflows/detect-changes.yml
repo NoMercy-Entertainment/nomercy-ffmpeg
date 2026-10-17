@@ -36,6 +36,11 @@ on:
 env:
   ALL_PLATFORMS: "linux-x86_64 linux-aarch64 windows-x86_64 windows-aarch64 darwin-x86_64 darwin-arm64 freebsd-x86_64"
 
+# Explicit and least-privilege: without this block every job gets the repo
+# default token, which is read/write. Jobs that need more set their own.
+permissions:
+  contents: read
+
 jobs:
   detect-changes:
     runs-on: ubuntu-latest

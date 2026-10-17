@@ -16,6 +16,11 @@ concurrency:
   group: pr-guards-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Explicit and least-privilege: without this block every job gets the repo
+# default token, which is read/write. Jobs that need more set their own.
+permissions:
+  contents: read
+
 jobs:
   guard-source-branch:
     if: github.base_ref == 'master'
