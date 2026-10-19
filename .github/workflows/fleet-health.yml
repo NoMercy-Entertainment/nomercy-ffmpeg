@@ -26,9 +26,7 @@ jobs:
           - name: linux-x86_64
             labels: '["self-hosted","ffmpeg-verify","linux-x86_64"]'
             shell: bash
-          - name: darwin-arm64
-            labels: '["self-hosted","ffmpeg-verify","darwin-arm64"]'
-            shell: bash
+          # darwin-arm64 is disabled until the ARM runners are reworked; put it back with the REQUIRED entry below.
           - name: windows-x86_64
             labels: '["self-hosted","ffmpeg-verify","windows-x86_64"]'
             shell: pwsh
@@ -84,7 +82,8 @@ jobs:
           # no Windows-on-ARM machine is in the fleet, so listing it would
           # report the fleet permanently unhealthy for a runner nobody has.
           # Add it here at the same time as the verify-rc.yml matrix entry.
-          REQUIRED="linux-x86_64 linux-aarch64 windows-x86_64 darwin-x86_64 darwin-arm64 freebsd-driver"
+          # linux-aarch64 and darwin-arm64 are left out while the ARM runners need work; restore both together.
+          REQUIRED="linux-x86_64 windows-x86_64 darwin-x86_64 freebsd-driver"
 
           if ! gh api "orgs/${ORG}/actions/runners" --jq '.runners' > runners.json 2>/dev/null; then
             echo "::warning::Cannot read the org runner list with this token — skipping the registry check."
