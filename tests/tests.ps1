@@ -13,6 +13,7 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/capabilities.ps1"
 . "$HERE/lib/report.ps1"
 . "$HERE/lib/cpu-variant.ps1"
+. "$HERE/lib/whisper.ps1"
 
 Report-Init -Platform $Platform
 
@@ -321,6 +322,12 @@ run_test "stemsplit" "-hide_banner -filters | findstr stemsplit" "stemsplit"
 # available (see lib/cpu-variant.ps1) -- real CI has no model, so it SKIPs
 # with a reason there rather than faking a pass.
 run_custom_test "cpu_variant" { Test-CpuVariant -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+
+# whisper filter options (#112). Needs ggml-base.en.bin and jfk.wav (see
+# lib/whisper.ps1); without them both skip with a reason. The defaults check
+# also needs a v1.0.44 ffmpeg.exe in WHISPER_TEST_REFERENCE_FFMPEG.
+run_custom_test "whisper_options" { Test-WhisperOptions -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+run_custom_test "whisper_defaults" { Test-WhisperDefaultsUnchanged -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

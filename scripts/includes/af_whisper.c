@@ -36,9 +36,44 @@
 #include "libavutil/avstring.h"
 #include "libavutil/internal.h"
 #include "libavformat/avio.h"
+#include "libavutil/bprint.h"
 #include "libavutil/thread.h"
 
 #include "formats.h"
+
+// libavutil/internal.h poisons malloc and friends, so the shared header gets
+// FFmpeg's allocator. See nm_whisper_words.h for why it is a separate file.
+#define NM_WW_MALLOC(n)     av_malloc(n)
+#define NM_WW_REALLOC(p, n) av_realloc(p, n)
+#define NM_WW_FREE(p)       av_free(p)
+#include "nm_whisper_words.h"
+
+// whisper.cpp's enum values for the presets in nm_whisper_words.h, by index.
+// Listed by name rather than computed from the enum's order, so a reordering
+// upstream is a compile-visible change here, not a silent shift of presets.
+static const enum whisper_alignment_heads_preset nm_whisper_dtw_aheads[] = {
+    WHISPER_AHEADS_TINY_EN,
+    WHISPER_AHEADS_TINY,
+    WHISPER_AHEADS_BASE_EN,
+    WHISPER_AHEADS_BASE,
+    WHISPER_AHEADS_SMALL_EN,
+    WHISPER_AHEADS_SMALL,
+    WHISPER_AHEADS_MEDIUM_EN,
+    WHISPER_AHEADS_MEDIUM,
+    WHISPER_AHEADS_LARGE_V1,
+    WHISPER_AHEADS_LARGE_V2,
+    WHISPER_AHEADS_LARGE_V3,
+    WHISPER_AHEADS_LARGE_V3_TURBO,
+};
+
+// whisper.cpp refuses more than this many decoders (WHISPER_MAX_DECODERS in
+// whisper.cpp, not exported), and it refuses per window: whisper_full() fails
+// and the window's audio is dropped. Capping the options catches it at init.
+#define NM_WHISPER_MAX_DECODERS 8
+
+// A prompt longer than this is a mistake rather than a prompt: whisper keeps
+// only the last n_text_ctx/2 tokens (about 223) of it anyway.
+#define NM_WHISPER_MAX_PROMPT_FILE (1 << 20)
 
 typedef struct WhisperContext {
     const AVClass *class;
@@ -62,6 +97,19 @@ typedef struct WhisperContext {
     char *destination;
     char *format;
     int max_len;
+
+    char *dtw;
+    int word_timestamps;
+    char *prompt;
+    char *prompt_file;
+    int beam_size;
+    int best_of;
+    /* Index into nm_whisper_dtw_presets(), -1 when DTW is off. */
+    int dtw_preset;
+    /* The prompt handed to whisper_full(): prompt_file's contents, else the
+     * prompt option, else NULL. Owned when it came from the file. */
+    const char *initial_prompt;
+    char *prompt_file_text;
 
     struct whisper_context *ctx_wsp;
     struct whisper_vad_context *ctx_vad;
@@ -134,6 +182,96 @@ static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
     av_log(ctx, av_log_level, "%s", text);
 }
 
+/**
+ * Read prompt_file into wctx->prompt_file_text.
+ *
+ * Through avio rather than fopen, so the path behaves like every other path
+ * FFmpeg takes, UTF-8 on Windows included. A UTF-8 byte order mark and
+ * trailing whitespace are dropped: an editor's final newline is not part of
+ * the prompt. An empty file means no prompt.
+ */
+static int read_prompt_file(AVFilterContext *ctx)
+{
+    WhisperContext *wctx = ctx->priv;
+    AVIOContext *pb = NULL;
+    AVBPrint bp;
+    char *text;
+    size_t len;
+    int ret;
+
+    ret = avio_open(&pb, wctx->prompt_file, AVIO_FLAG_READ);
+    if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Could not read prompt_file %s: %s\n",
+               wctx->prompt_file, av_err2str(ret));
+        return ret;
+    }
+
+    av_bprint_init(&bp, 0, AV_BPRINT_SIZE_UNLIMITED);
+    ret = avio_read_to_bprint(pb, &bp, NM_WHISPER_MAX_PROMPT_FILE + 1);
+    avio_closep(&pb);
+    if (ret >= 0 && !av_bprint_is_complete(&bp))
+        ret = AVERROR(ENOMEM);
+    if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Could not read prompt_file %s: %s\n",
+               wctx->prompt_file, av_err2str(ret));
+        av_bprint_finalize(&bp, NULL);
+        return ret;
+    }
+    if (bp.len > NM_WHISPER_MAX_PROMPT_FILE) {
+        av_log(ctx, AV_LOG_ERROR, "prompt_file %s is larger than %d bytes.\n",
+               wctx->prompt_file, NM_WHISPER_MAX_PROMPT_FILE);
+        av_bprint_finalize(&bp, NULL);
+        return AVERROR(EINVAL);
+    }
+
+    ret = av_bprint_finalize(&bp, &text);
+    if (ret < 0)
+        return ret;
+
+    len = strlen(text);
+    while (len && av_isspace(text[len - 1]))
+        text[--len] = '\0';
+    if (len >= 3 && !memcmp(text, "\xEF\xBB\xBF", 3))
+        memmove(text, text + 3, len - 2);
+
+    if (!text[0]) {
+        av_free(text);
+        return 0;
+    }
+    wctx->prompt_file_text = text;
+    return 0;
+}
+
+/**
+ * Whether the loaded model is one the dtw preset was made for.
+ *
+ * whisper.cpp only rejects a preset whose alignment heads do not exist in
+ * the model. A preset for a model of the same shape - base on base.en, or
+ * tiny.en on a base.en file - loads without a word and produces wrong
+ * timings, so the filter checks the decoder shape itself and refuses.
+ */
+static int dtw_preset_fits(AVFilterContext *ctx, struct whisper_context *model, int preset)
+{
+    int n;
+    const NMWhisperDtwPreset *want = nm_whisper_dtw_presets(&n) + preset;
+    const int layers = whisper_model_n_text_layer(model);
+    const int heads = whisper_model_n_text_head(model);
+    const int multilingual = whisper_is_multilingual(model);
+    const int mels = whisper_model_n_mels(model);
+
+    if (nm_whisper_dtw_preset_matches(preset, layers, heads, multilingual, mels))
+        return 1;
+
+    av_log(ctx, AV_LOG_ERROR,
+           "dtw=%s does not match this model: it has %d text layers, %d heads, "
+           "%s, %d mel bins, and %s was made for %d layers, %d heads, %s. "
+           "Use the preset named after the model (ggml-base.en.bin is base.en).\n",
+           want->name, layers, heads, multilingual ? "multilingual" : "English-only",
+           mels, want->name, want->n_text_layer, want->n_text_head,
+           want->multilingual ? "multilingual" : "English-only");
+    return 0;
+}
+
 static int init(AVFilterContext *ctx)
 {
     WhisperContext *wctx = ctx->priv;
@@ -181,6 +319,35 @@ static int init(AVFilterContext *ctx)
         return AVERROR(EINVAL);
     }
 
+    // The options that do not need the model are checked before loading it,
+    // so a typo fails in milliseconds rather than after a model load.
+    wctx->dtw_preset = -1;
+    if (wctx->dtw && wctx->dtw[0]) {
+        wctx->dtw_preset = nm_whisper_dtw_preset_find(wctx->dtw);
+        if (wctx->dtw_preset < 0 || wctx->dtw_preset >= (int) FF_ARRAY_ELEMS(nm_whisper_dtw_aheads)) {
+            av_log(ctx, AV_LOG_ERROR, "Unknown dtw preset '%s'. Valid presets: %s.\n",
+                   wctx->dtw, nm_whisper_dtw_preset_list());
+            return AVERROR(EINVAL);
+        }
+    }
+
+    if (wctx->word_timestamps && av_strcasecmp(wctx->format, "json")) {
+        av_log(ctx, AV_LOG_WARNING,
+               "word_timestamps only applies to format=json; ignored for format=%s.\n",
+               wctx->format);
+        wctx->word_timestamps = 0;
+    }
+
+    if (wctx->prompt_file && wctx->prompt_file[0]) {
+        int ret = read_prompt_file(ctx);
+        if (ret < 0)
+            return ret;
+        if (wctx->prompt && wctx->prompt[0])
+            av_log(ctx, AV_LOG_WARNING, "Both prompt and prompt_file are set; using prompt_file.\n");
+        wctx->initial_prompt = wctx->prompt_file_text;
+    } else if (wctx->prompt && wctx->prompt[0])
+        wctx->initial_prompt = wctx->prompt;
+
     struct whisper_context_params params = whisper_context_default_params();
     // whisper.cpp picks its own backend from this flag - it is never handed
     // one - so the decision has to be made here. nm_ggml_gpu_usable() refuses
@@ -190,13 +357,49 @@ static int init(AVFilterContext *ctx)
     params.use_gpu = wctx->gpu_active;
     params.gpu_device = wctx->gpu_device;
 
+    // DTW token timestamps. flash_attn defaults to true in whisper.cpp, and
+    // whisper_init_with_params_no_state() then switches DTW off again with
+    // only a warning (whisper.cpp v1.9.1, src/whisper.cpp:3708). Turning DTW
+    // on therefore has to turn flash attention off, or the option would be
+    // accepted and do nothing.
+    if (wctx->dtw_preset >= 0) {
+        params.dtw_token_timestamps = true;
+        params.dtw_aheads_preset = nm_whisper_dtw_aheads[wctx->dtw_preset];
+        params.flash_attn = false;
+    }
+
     // Cleared here, read immediately after the call below: that pair is what
     // makes the process-wide flag above safe to attribute to this filter.
     nm_whisper_saw_no_gpu = 0;
     wctx->ctx_wsp = whisper_init_from_file_with_params(wctx->model_path, params);
     if (wctx->ctx_wsp == NULL) {
+        // A preset naming a layer or head the model does not have makes
+        // whisper.cpp fail the whole load with a log line about alignment
+        // heads. Say which option caused it: load the model once more without
+        // DTW (and without any compute state) just to read its shape.
+        if (wctx->dtw_preset >= 0) {
+            struct whisper_context_params probe = params;
+            struct whisper_context *model;
+
+            probe.dtw_token_timestamps = false;
+            probe.use_gpu = false;
+            model = whisper_init_from_file_with_params_no_state(wctx->model_path, probe);
+            if (model) {
+                const int fits = dtw_preset_fits(ctx, model, wctx->dtw_preset);
+                whisper_free(model);
+                if (!fits)
+                    return AVERROR(EINVAL);
+            }
+        }
         av_log(ctx, AV_LOG_ERROR, "Failed to initialize whisper context from model: %s\n", wctx->model_path);
         return AVERROR(EIO);
+    }
+
+    if (wctx->dtw_preset >= 0) {
+        if (!dtw_preset_fits(ctx, wctx->ctx_wsp, wctx->dtw_preset))
+            return AVERROR(EINVAL);
+        av_log(ctx, AV_LOG_INFO, "whisper: DTW on (preset %s); flash attention turned off.\n",
+               nm_whisper_dtw_preset_name(wctx->dtw_preset));
     }
 
     // What whisper.cpp ACTUALLY got, which is not always what it was asked
@@ -310,6 +513,8 @@ static void uninit(AVFilterContext *ctx)
     }
 
     av_freep(&wctx->audio_buffer);
+    av_freep(&wctx->prompt_file_text);
+    wctx->initial_prompt = NULL;
 
     if (wctx->avio_context)
         avio_closep(&wctx->avio_context);
@@ -343,67 +548,6 @@ static void uninit(AVFilterContext *ctx)
 // value is reported with confidence 1.0; with 'auto' the detection reuses the
 // mel spectrogram of the whisper_full() call that produced the current window,
 // costing one extra encoder pass exactly once per filter instance.
-/**
- * Escape a string as the contents of a JSON string literal (RFC 8259, 7).
- *
- * The json destination used to insert text with a plain %s. Whisper output
- * containing a double quote, a backslash or a control character therefore
- * produced a line no JSON parser accepts -- and a transcript quoting someone
- * is exactly where a double quote turns up. The language field had the same
- * hole and a worse source: it can be the user's own language= option, not
- * only one of whisper.cpp's fixed codes.
- *
- * Bytes from 0x80 up are copied as they are, since JSON is UTF-8 and the
- * transcript is too. Returns a newly allocated string, or NULL when
- * allocation fails; the caller frees it.
- */
-static char *json_escape(const char *s)
-{
-    static const char hex[] = "0123456789abcdef";
-    const unsigned char *p;
-    size_t n = 0;
-    char *out, *o;
-
-    for (p = (const unsigned char *) s; *p; p++) {
-        switch (*p) {
-        case '"': case '\\': case '\b': case '\f':
-        case '\n': case '\r': case '\t':
-            n += 2;
-            break;
-        default:
-            n += *p < 0x20 ? 6 : 1;
-        }
-    }
-
-    out = av_malloc(n + 1);
-    if (!out)
-        return NULL;
-
-    for (p = (const unsigned char *) s, o = out; *p; p++) {
-        switch (*p) {
-        case '"':  *o++ = '\\'; *o++ = '"';  break;
-        case '\\': *o++ = '\\'; *o++ = '\\'; break;
-        case '\b': *o++ = '\\'; *o++ = 'b';  break;
-        case '\f': *o++ = '\\'; *o++ = 'f';  break;
-        case '\n': *o++ = '\\'; *o++ = 'n';  break;
-        case '\r': *o++ = '\\'; *o++ = 'r';  break;
-        case '\t': *o++ = '\\'; *o++ = 't';  break;
-        default:
-            if (*p < 0x20) {
-                *o++ = '\\';
-                *o++ = 'u';
-                *o++ = '0';
-                *o++ = '0';
-                *o++ = hex[*p >> 4];
-                *o++ = hex[*p & 0xf];
-            } else
-                *o++ = (char) *p;
-        }
-    }
-    *o = '\0';
-    return out;
-}
-
 static void resolve_language(AVFilterContext *ctx)
 {
     WhisperContext *wctx = ctx->priv;
@@ -441,7 +585,7 @@ static void resolve_language(AVFilterContext *ctx)
            wctx->detected_language, wctx->language_confidence);
 
     if (wctx->avio_context && !av_strcasecmp(wctx->format, "json")) {
-        char *lang_json = json_escape(wctx->detected_language);
+        char *lang_json = nm_json_escape(wctx->detected_language);
         char *buf = lang_json
             ? av_asprintf("{\"detected_language\":\"%s\",\"language_confidence\":%.6f}\n",
                           lang_json, wctx->language_confidence)
@@ -478,6 +622,46 @@ static void consume_buffer(WhisperContext *wctx, int samples)
     wctx->audio_buffer_vad_size = wctx->audio_buffer_fill_size;
 }
 
+/**
+ * The "words" array for segment i of the last whisper_full() call, built by
+ * nm_whisper_build_words() from the segment's tokens. offset_ms is where the
+ * whisper_full() window started; seg_start/seg_end are the segment's absolute
+ * times as written in its JSON line. Returns NULL when allocation fails.
+ */
+static char *segment_words_json(AVFilterContext *ctx, int i, int64_t offset_ms,
+                                int64_t seg_start, int64_t seg_end)
+{
+    WhisperContext *wctx = ctx->priv;
+    const whisper_token eot = whisper_token_eot(wctx->ctx_wsp);
+    const int n_tok = whisper_full_n_tokens(wctx->ctx_wsp, i);
+    NMWhisperToken *tok = NULL;
+    NMWhisperWord *words = NULL;
+    int n_words = 0;
+    char *json = NULL;
+
+    if (n_tok > 0) {
+        tok = av_malloc_array(n_tok, sizeof(*tok));
+        if (!tok)
+            return NULL;
+    }
+    for (int j = 0; j < n_tok; j++) {
+        const whisper_token_data data = whisper_full_get_token_data(wctx->ctx_wsp, i, j);
+        tok[j].text = whisper_full_get_token_text(wctx->ctx_wsp, i, j);
+        tok[j].special = data.id >= eot;
+        tok[j].t0 = data.t0;
+        tok[j].t_dtw = data.t_dtw;
+        tok[j].p = data.p;
+    }
+
+    if (nm_whisper_build_words(tok, n_tok, offset_ms, seg_start, seg_end,
+                               wctx->dtw_preset >= 0, &words, &n_words) >= 0) {
+        json = nm_whisper_words_json(words, n_words);
+        nm_whisper_free_words(words, n_words);
+    }
+    av_free(tok);
+    return json;
+}
+
 static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
 {
     WhisperContext *wctx = ctx->priv;
@@ -493,7 +677,8 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
            "run transcription at %" PRId64 " ms, %d/%d samples (%.2f seconds)...\n",
            timestamp_ms, samples, wctx->audio_buffer_fill_size, duration);
 
-    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    struct whisper_full_params params = whisper_full_default_params(
+        wctx->beam_size > 0 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
     params.language = wctx->language;
     params.translate = wctx->translate;
     params.n_threads = ff_filter_get_nb_threads(ctx);
@@ -502,8 +687,19 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
     params.print_realtime = 0;
     params.print_timestamps = 0;
     params.max_len = wctx->max_len;
-    params.token_timestamps = (wctx->max_len > 0);
+    params.token_timestamps = (wctx->max_len > 0) || wctx->word_timestamps;
     params.split_on_word = (wctx->max_len > 0);
+    params.initial_prompt = wctx->initial_prompt;
+    if (wctx->beam_size > 0) {
+        params.beam_search.beam_size = wctx->beam_size;
+        // The beam-search defaults leave greedy.best_of at -1, which makes the
+        // temperature fallback decode with a single candidate. whisper-cli
+        // always passes the greedy default (5) along with a beam size; do the
+        // same, so beam_size=N here means what --beam-size N means there.
+        params.greedy.best_of = whisper_full_default_params(WHISPER_SAMPLING_GREEDY).greedy.best_of;
+    }
+    if (wctx->best_of > 0)
+        params.greedy.best_of = wctx->best_of;
 
     if (whisper_full(wctx->ctx_wsp, params, wctx->audio_buffer, samples) != 0) {
         av_log(ctx, AV_LOG_ERROR, "Failed to process audio with whisper.cpp\n");
@@ -574,8 +770,15 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
 
                 wctx->index++;
             } else if (!av_strcasecmp(wctx->format, "json")) {
-                char *text_json = json_escape(text_cleaned);
-                if (text_json)
+                char *text_json = nm_json_escape(text_cleaned);
+                if (text_json && wctx->word_timestamps) {
+                    char *words_json = segment_words_json(ctx, i, timestamp_ms, start_t, end_t);
+                    if (words_json)
+                        buf = av_asprintf("{\"start\":%" PRId64 ",\"end\":%" PRId64
+                                          ",\"text\":\"%s\",\"words\":%s}\n",
+                                          start_t, end_t, text_json, words_json);
+                    av_freep(&words_json);
+                } else if (text_json)
                     buf = av_asprintf("{\"start\":%" PRId64 ",\"end\":%" PRId64 ",\"text\":\"%s\"}\n",
                                       start_t, end_t, text_json);
                 av_freep(&text_json);
@@ -810,6 +1013,12 @@ static const AVOption whisper_options[] = {
     { "vad_threshold", "VAD threshold", OFFSET(vad_threshold), AV_OPT_TYPE_FLOAT, {.dbl = 0.5}, 0.0, 1.0, .flags = FLAGS },
     { "vad_min_speech_duration", "Minimum speech duration for VAD", OFFSET(vad_min_speech_duration), AV_OPT_TYPE_DURATION, {.i64 = 100000}, 20000, HOURS, .flags = FLAGS },
     { "vad_min_silence_duration", "Minimum silence duration for VAD", OFFSET(vad_min_silence_duration), AV_OPT_TYPE_DURATION, {.i64 = 500000}, 0, HOURS, .flags = FLAGS },
+    { "dtw", "DTW token timestamps with this alignment-heads preset (tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large.v1, large.v2, large.v3, large.v3.turbo); turns flash attention off", OFFSET(dtw), AV_OPT_TYPE_STRING, {.str = ""}, .flags = FLAGS },
+    { "word_timestamps", "Add a per-word 'words' array to each format=json segment", OFFSET(word_timestamps), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, .flags = FLAGS },
+    { "prompt", "Initial prompt for whisper (only its last ~223 tokens are used)", OFFSET(prompt), AV_OPT_TYPE_STRING, {.str = ""}, .flags = FLAGS },
+    { "prompt_file", "Read the initial prompt from this UTF-8 file; wins over prompt", OFFSET(prompt_file), AV_OPT_TYPE_STRING, {.str = ""}, .flags = FLAGS },
+    { "beam_size", "Beam search with this beam size (0 = greedy decoding)", OFFSET(beam_size), AV_OPT_TYPE_INT, {.i64 = 0}, 0, NM_WHISPER_MAX_DECODERS, .flags = FLAGS },
+    { "best_of", "Candidates for greedy decoding and the temperature fallback (0 = library default)", OFFSET(best_of), AV_OPT_TYPE_INT, {.i64 = 0}, 0, NM_WHISPER_MAX_DECODERS, .flags = FLAGS },
     { NULL }
 };
 

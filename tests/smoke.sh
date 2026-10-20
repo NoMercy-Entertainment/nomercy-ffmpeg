@@ -19,6 +19,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/cpu-variant.sh
 source "${HERE}/lib/cpu-variant.sh"
+# shellcheck source=lib/whisper.sh
+source "${HERE}/lib/whisper.sh"
 
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
@@ -295,4 +297,28 @@ ts_out=$("${ffmpeg_bin}" -hide_banner -nostats -f lavfi -i "sine=frequency=440:d
 [[ -n "${ts_out}" ]] || fail "trailingsilence: empty metadata extraction"
 [[ "${ts_out}" == "1" ]] || fail "trailingsilence did not detect the tail (got '${ts_out}')"
 ok "trailingsilence detected the padded tail (detected=${ts_out})"
+
+# whisper filter options (#112), with a real model. Only where the workflow
+# fetched one (the linux-x86_64 job); everywhere else they skip with a note.
+# That job also sets WHISPER_TEST_REQUIRED=1, which turns a skip into a
+# failure: a fetch step that quietly stopped supplying the model must not
+# leave these tests "passing" by never running.
+run_whisper_check() {  # name, function
+  local name="$1" func="$2" out rc
+  out="$(FFMPEG="${ffmpeg_bin}" Platform="${PLATFORM}" "${func}" 2>&1)"; rc=$?
+  case ${rc} in
+  0) echo "${out}" | sed 's/^/   /'
+     ok "${name}" ;;
+  2) if [[ "${WHISPER_TEST_REQUIRED:-0}" == "1" ]]; then
+       echo "${out}"
+       fail "${name}: skipped, but WHISPER_TEST_REQUIRED=1"
+     fi
+     note "${name}: $(echo "${out}" | sed -n 's/^SKIP: //p' | head -1)" ;;
+  *) echo "${out}"
+     fail "${name} (exit ${rc})" ;;
+  esac
+}
+run_whisper_check "whisper options (dtw, word_timestamps, prompt, beam search)" test_whisper_options
+run_whisper_check "whisper default output unchanged from the reference build" test_whisper_defaults_unchanged
+
 ok "Smoke test passed."

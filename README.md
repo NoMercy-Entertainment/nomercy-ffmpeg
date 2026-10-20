@@ -163,7 +163,15 @@ docker compose up ffmpeg-linux-x86_64
 
 # Smoke-test a packaged artifact
 ./tests/smoke.sh
+
+# Unit tests for the C headers in scripts/includes (no FFmpeg build needed)
+./tests/unit/run.sh
 ```
+
+The `whisper` option tests need `ggml-base.en.bin` and whisper.cpp's
+`jfk.wav`: set `WHISPER_TEST_MODEL` and `WHISPER_TEST_AUDIO`, or put both next
+to the binary. The default-output check also needs a v1.0.44 build in
+`WHISPER_TEST_REFERENCE_FFMPEG`. Without them those tests skip with a reason.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [UPDATE.md](UPDATE.md) for the dependency update process.
 
@@ -189,6 +197,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 | **Auto-create directories** | Core patch | Output muxers automatically create missing parent directories |
 | **HEVC alpha layer** | Decoder patch | Decodes the alpha channel of HEVC-with-alpha video from Apple VideoToolbox (single `hvc1` track, two-layer bitstream) instead of silently dropping it. Backports upstream `eedf8f0165fe` + `3befae81f1dc`, neither of which reached 8.1.x, plus a NoMercy change so `ffprobe` reports `yuva420p` at stream level and not just per frame ([ticket #7965](https://trac.ffmpeg.org/ticket/7965)) |
 | **`whisper` language detection** | Filter patch | The `whisper` filter exposes the auto-detected spoken language (`lavfi.whisper.language` + `lavfi.whisper.language_confidence` frame metadata, `detected_language` object in JSON output) |
+| **`whisper` word timestamps, prompt, beam search** | Filter patch | Per-word times in JSON output (DTW or token timing), an initial prompt (inline or from a file) and beam search; see the `whisper` section below |
 | **AACS/BD+ static keydb** | Patch | libaacs/libbluray patched for built-in Blu-ray decryption support |
 
 #### 🎤 **`stemsplit` — Music Source Separation**
@@ -658,6 +667,67 @@ consuming `recommended_end` blindly must check for.
 - Silence that sits in the middle of the stream but does not reach the end.
 - Live input: the report is produced at end-of-stream, which live input
   never reaches.
+
+#### 🗣️ **`whisper` — word timestamps, prompt and beam search**
+
+Upstream's `whisper` filter, plus the language detection above and six
+options for aligning known text to audio, such as lyrics to a vocal stem.
+**Every one defaults to the old behaviour:** without them, `format=json` and
+`format=srt` output is byte for byte what it was before (tested against
+v1.0.44).
+
+```bash
+# Word times with DTW, on the vocal stem, as JSON Lines on stdout
+ffmpeg -i vocals.flac -af "whisper=model=ggml-base.en.bin:format=json:destination=-:dtw=base.en:word_timestamps=1" -f null -
+
+# Steer the transcript with the known lyrics, from a file
+ffmpeg -i vocals.flac -af "whisper=model=ggml-base.en.bin:format=json:destination=-:prompt_file=lyrics.txt:beam_size=5" -f null -
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `dtw` | string | *(empty, off)* | DTW token timestamps with this alignment-heads preset: `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`, `medium.en`, `large.v1`, `large.v2`, `large.v3`, `large.v3.turbo` (the names `whisper-cli --dtw` takes). Use the one named after the model file. An unknown name, or a preset that does not fit the model, fails at start-up |
+| `word_timestamps` | bool | `0` | Adds a `words` array to each `format=json` segment. With `format=text` or `srt` it logs a warning and changes nothing |
+| `prompt` | string | *(empty)* | whisper's initial prompt |
+| `prompt_file` | string | *(empty)* | The same prompt, read from a UTF-8 file: for long prompts, and to avoid filtergraph escaping. Wins over `prompt` when both are set. A file that cannot be read fails at start-up, naming the path |
+| `beam_size` | int | `0` (greedy) | Beam search with this beam size, 1-8 |
+| `best_of` | int | `0` (library default, 5) | Candidates for greedy decoding and for the temperature fallback, 1-8 |
+
+**JSON output.** JSON Lines; the `detected_language` line comes first, as
+before. With `word_timestamps=1` a segment line looks like this (times are
+absolute milliseconds, like `start` and `end`):
+
+```json
+{"start":12340,"end":15020,"text":"…","words":[{"text":"hello","start":12340,"end":12710,"p":0.931}]}
+```
+
+- A word starts where its first token starts: the DTW time when `dtw` is set
+  and DTW placed that token, otherwise the token's own timestamp.
+- Starts are kept inside the segment and never go backwards. DTW can place a
+  token slightly outside its segment.
+- A word ends where the next one starts; the last word ends with its segment.
+- `p` is the mean probability of the word's tokens, between 0 and 1.
+- Text that whisper cut in the middle of a UTF-8 character comes out with
+  `�` (U+FFFD) in its place, so every line is valid JSON. Valid text is never
+  changed.
+
+**`dtw` turns flash attention off.** whisper.cpp v1.9.1 enables flash
+attention by default and then silently disables DTW when both are on. The
+filter therefore switches flash attention off whenever `dtw` is set, and logs
+it: `whisper: DTW on (preset base.en); flash attention turned off.`
+
+**A preset must fit the model.** whisper.cpp only refuses a preset that names
+a layer the model does not have; `base` on `ggml-base.en.bin` would load and
+give wrong times without a word. The filter compares the preset with the
+model's shape and refuses a mismatch.
+
+**Prompts are short.** whisper keeps only the last `n_text_ctx/2` tokens of
+the prompt, about 223 for the released models. The rest is dropped. The prompt
+applies to every transcription window (`queue`), not only the first.
+
+**Writing to stdout: use `destination=-`.** `-` means `pipe:1`. Written out,
+`pipe:1` needs its colon escaped inside a filtergraph (`destination='pipe\:1'`),
+which is easy to get wrong.
 
 #### 🤖 **AI & Analysis**
 - **OpenAI Whisper Integration**: Built-in speech-to-text via whisper.cpp (`--enable-whisper`)

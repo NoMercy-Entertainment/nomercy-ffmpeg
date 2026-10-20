@@ -14,6 +14,8 @@ source "${HERE}/lib/capabilities.sh"
 source "${HERE}/lib/report.sh"
 # shellcheck source=lib/cpu-variant.sh
 source "${HERE}/lib/cpu-variant.sh"
+# shellcheck source=lib/whisper.sh
+source "${HERE}/lib/whisper.sh"
 
 Workspace="$1"
 shift 2>/dev/null || true
@@ -386,6 +388,13 @@ run_test "stemsplit" "-hide_banner -filters | grep stemsplit" "stemsplit"
 # available (see lib/cpu-variant.sh) -- real CI has no model, so it SKIPs
 # with a reason there rather than faking a pass.
 run_custom_test "cpu_variant" "test_cpu_variant"
+
+# whisper filter options (#112): dtw, word_timestamps, prompt, prompt_file,
+# beam_size, best_of. Needs ggml-base.en.bin and jfk.wav (see lib/whisper.sh);
+# without them both SKIP with a reason. The defaults check also needs a
+# v1.0.44 reference binary in WHISPER_TEST_REFERENCE_FFMPEG.
+run_custom_test "whisper_options" "test_whisper_options"
+run_custom_test "whisper_defaults" "test_whisper_defaults_unchanged"
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

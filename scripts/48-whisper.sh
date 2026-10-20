@@ -793,6 +793,11 @@ lib_private_flags="Libs.private: -lstdc++"
 if [[ -f /scripts/includes/af_whisper.c ]]; then
     cp /scripts/includes/af_whisper.c /build/ffmpeg/libavfilter/af_whisper.c
     log "Applied af_whisper.c language-detection patch"
+    # The JSON escaping and word-timing code af_whisper.c includes (#112). A
+    # missing header would only surface as a compile error deep in the FFmpeg
+    # build, so fail here, where the cause is obvious.
+    cp /scripts/includes/nm_whisper_words.h /build/ffmpeg/libavfilter/nm_whisper_words.h \
+        || { log "Error: copying nm_whisper_words.h next to af_whisper.c failed"; exit 1; }
 fi
 
 add_enable "--enable-whisper"

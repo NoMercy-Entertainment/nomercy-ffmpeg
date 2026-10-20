@@ -206,6 +206,46 @@ jobs:
             zip)    unzip -o "${archive}" ;;
           esac
 
+      # The whisper option tests (#112) need a real model, a clip, and the
+      # v1.0.44 binary that default output must stay byte-identical to. Only
+      # for linux-x86_64: the one platform whose smoke runner can execute its
+      # own binary and has a reference build of the same platform. All three
+      # are pinned by digest; a download that is not what was pinned fails the
+      # job instead of quietly testing something else. WHISPER_TEST_REQUIRED
+      # makes smoke.sh fail rather than skip if these ever stop arriving.
+      - name: Fetch whisper test assets (linux-x86_64)
+        if: matrix.platform == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          A="${RUNNER_TEMP}/whisper-assets"
+          mkdir -p "${A}/ref"
+          fetch() {  # fetch <url> <out> <sha256>
+            curl -fsSL --retry 3 -o "$2" "$1" || { echo "::error::download failed: $1"; return 1; }
+            local got
+            got="$(sha256sum "$2" | cut -d' ' -f1)"
+            [[ "${got}" == "$3" ]] || { echo "::error::$(basename "$2"): expected $3, got ${got}"; return 1; }
+            echo "fetched: $(basename "$2")"
+          }
+          fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" \
+                "${A}/ggml-base.en.bin" \
+                "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+          fetch "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav" \
+                "${A}/jfk.wav" \
+                "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"
+          fetch "https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/v1.0.44/ffmpeg-9.0-linux-x86_64-v1.0.44.tar.gz" \
+                "${A}/ref.tar.gz" \
+                "191d9ef68a43b2756b973cb5ca1c6563b876750bfa582ea06271a4977e19008b"
+          tar -xzf "${A}/ref.tar.gz" -C "${A}/ref" ./ffmpeg
+          rm -f "${A}/ref.tar.gz"
+          chmod +x "${A}/ref/ffmpeg"
+          {
+            echo "WHISPER_TEST_MODEL=${A}/ggml-base.en.bin"
+            echo "WHISPER_TEST_AUDIO=${A}/jfk.wav"
+            echo "WHISPER_TEST_REFERENCE_FFMPEG=${A}/ref/ffmpeg"
+            echo "WHISPER_TEST_REQUIRED=1"
+          } >> "$GITHUB_ENV"
+
       - name: Smoke test (unix)
         if: matrix.kind == 'unix'
         shell: bash
@@ -413,13 +453,14 @@ jobs:
   # a guarantee from another job's condition is the kind of coincidence that
   # stops being true the moment that job is refactored.
   publish-rc:
-    needs: [detect-changes, export-artifacts, smoke-test]
+    needs: [detect-changes, export-artifacts, smoke-test, unit-tests]
     if: |
       github.event_name == 'pull_request'
       && github.head_ref == 'dev'
       && github.event.pull_request.head.repo.full_name == github.repository
       && needs.export-artifacts.result == 'success'
       && needs.smoke-test.result == 'success'
+      && needs.unit-tests.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -549,11 +590,23 @@ jobs:
             `manifest.json` lists all assets with SHA-256 digests; `manifest.json.sig`
             is a detached ASCII-armored GPG signature over `manifest.json`.
 
+  # ── Unit tests for the headers in scripts/includes ──────────────────────
+  # Plain C against the same headers the filters compile, so it needs no
+  # FFmpeg build and runs on a hosted runner in seconds (#112).
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run tests/unit
+        run: bash tests/unit/run.sh
+
   # ── Single required status context for the PR build path ─────────────────
   # always() so it always reports; explicit result checks so any failed
   # dependency reliably fails the gate. PR-only (skipped on master pushes).
   pr-build:
-    needs: [detect-changes, build-base, build-platforms, export-artifacts, smoke-test]
+    needs: [detect-changes, build-base, build-platforms, export-artifacts, smoke-test, unit-tests]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -565,7 +618,8 @@ jobs:
           platforms='${{ needs.build-platforms.result }}'
           export='${{ needs.export-artifacts.result }}'
           smoke='${{ needs.smoke-test.result }}'
-          echo "base=$base platforms=$platforms export=$export smoke=$smoke"
+          unit='${{ needs.unit-tests.result }}'
+          echo "base=$base platforms=$platforms export=$export smoke=$smoke unit=$unit"
 
           # A fork PR skips the three self-hosted jobs by design, so every check
           # below would report 'skipped' and read as a broken build. Say what
@@ -585,6 +639,7 @@ jobs:
           if [[ "$platforms" != "success" ]]; then echo "❌ build-platforms: $platforms"; exit 1; fi
           if [[ "$export" != "success" ]]; then echo "❌ export-artifacts: $export"; exit 1; fi
           if [[ "$smoke" != "success" ]]; then echo "❌ smoke-test: $smoke"; exit 1; fi
+          if [[ "$unit" != "success" ]]; then echo "❌ unit-tests: $unit"; exit 1; fi
           echo "✅ PR build path passed."
 
   # ── Vulnerability scan the freshly-built images ─────────────────────────
@@ -634,11 +689,12 @@ jobs:
   # Master push only, after the whole pipeline is green. Uses the version
   # computed once by detect-changes.
   release:
-    needs: [detect-changes, export-artifacts, smoke-test]
+    needs: [detect-changes, export-artifacts, smoke-test, unit-tests]
     if: |
       github.event_name == 'push' && github.ref == 'refs/heads/master'
       && needs.export-artifacts.result == 'success'
       && needs.smoke-test.result == 'success'
+      && needs.unit-tests.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
