@@ -328,6 +328,12 @@ run_custom_test "cpu_variant" { Test-CpuVariant -FFmpegExe "$Workspace\ffmpeg.ex
 # also needs a v1.0.44 ffmpeg.exe in WHISPER_TEST_REFERENCE_FFMPEG.
 run_custom_test "whisper_options" { Test-WhisperOptions -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 run_custom_test "whisper_defaults" { Test-WhisperDefaultsUnchanged -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+# #113 dtw on very short windows, #114 one model load per run, #115 VAD
+# threads (the last also needs ggml-silero-v5.1.2.bin in WHISPER_TEST_VAD_MODEL).
+run_custom_test "whisper_dtw_short" { Test-WhisperDtwShortWindow -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+run_custom_test "whisper_load_once" { Test-WhisperModelLoadedOnce -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+run_custom_test "whisper_threads" { Test-WhisperDefaultThreads -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+run_custom_test "whisper_vad_threads" { Test-WhisperVadThreads -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

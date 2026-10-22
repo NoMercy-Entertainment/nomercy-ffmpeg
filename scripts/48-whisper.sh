@@ -12,6 +12,20 @@ git clone --branch v${whisper_version} https://github.com/ggml-org/whisper.cpp.g
 
 rm -rf build
 
+# DTW on a decode window shorter than ~160 ms aborts the whole ffmpeg process
+# in v1.9.1 (WHISPER_ASSERT in the DTW median filter, #113). Upstream fixed it
+# in a46fadb, which no release contains yet; the patch file says when to drop
+# it. git apply refuses a patch whose context no longer matches, and the grep
+# confirms the new code is really there, so a whisper.cpp bump cannot lose
+# this fix silently.
+git apply /scripts/includes/whisper-dtw-median-filter.patch \
+    || { log "Error: whisper-dtw-median-filter.patch does not apply to whisper.cpp v${whisper_version}"; exit 1; }
+if [[ $(grep -c 'narrow the filter instead of aborting' src/whisper.cpp) -ne 1 ]]; then
+    log "Error: the DTW median-filter fix is not in src/whisper.cpp after applying the patch"
+    exit 1
+fi
+log "Applied whisper.cpp DTW median-filter backport (a46fadb)"
+
 # chmod +x ./models/download-ggml-model.sh
 # ./models/download-ggml-model.sh base
 

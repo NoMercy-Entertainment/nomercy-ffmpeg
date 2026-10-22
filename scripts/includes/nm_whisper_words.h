@@ -473,4 +473,57 @@ static inline int nm_whisper_dtw_preset_matches(int idx, int n_text_layer, int n
            p->multilingual == !!multilingual && (!p->n_mels || p->n_mels == n_mels);
 }
 
+/* ---------------------------------------------------------------------------
+ * Model shape from the file header
+ * ------------------------------------------------------------------------- */
+
+/*
+ * A whisper.cpp ggml model starts with the magic 0x67676d6c ("ggml") and then
+ * eleven little-endian int32 hyperparameters, in this order: n_vocab,
+ * n_audio_ctx, n_audio_state, n_audio_head, n_audio_layer, n_text_ctx,
+ * n_text_state, n_text_head, n_text_layer, n_mels, ftype (whisper_model_load,
+ * v1.9.1). Reading those 48 bytes is enough to check a DTW preset against the
+ * model before whisper.cpp is ever asked to load it. That matters beyond
+ * speed: when whisper.cpp itself rejects a preset, its cleanup frees a
+ * half-built state, and that crashed ffmpeg on Windows (#114 follow-up).
+ */
+typedef struct NMWhisperModelShape {
+    int n_vocab;
+    int n_text_head;
+    int n_text_layer;
+    int n_mels;
+} NMWhisperModelShape;
+
+static inline int32_t nm_ww_le32(const unsigned char *p)
+{
+    return (int32_t) ((uint32_t) p[0] | ((uint32_t) p[1] << 8) |
+                      ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24));
+}
+
+/* 0 and *out filled when buf holds a plausible header, -1 otherwise. */
+static inline int nm_whisper_parse_model_header(const unsigned char *buf, size_t len,
+                                                NMWhisperModelShape *out)
+{
+    int32_t v[11];
+
+    if (len < 48 || (uint32_t) nm_ww_le32(buf) != 0x67676d6cu)
+        return -1;
+    for (int i = 0; i < 11; i++) {
+        v[i] = nm_ww_le32(buf + 4 + 4 * i);
+        if (v[i] < 0)
+            return -1;
+    }
+    out->n_vocab = v[0];
+    out->n_text_head = v[7];
+    out->n_text_layer = v[8];
+    out->n_mels = v[9];
+    return 0;
+}
+
+/* whisper.cpp's own rule (whisper_vocab::is_multilingual). */
+static inline int nm_whisper_model_multilingual(const NMWhisperModelShape *s)
+{
+    return s->n_vocab >= 51865;
+}
+
 #endif /* NM_WHISPER_WORDS_H */

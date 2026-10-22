@@ -374,6 +374,48 @@ static void test_dtw_presets(void)
     CHECK(!nm_whisper_dtw_preset_matches(-1, 6, 8, 0, 80));
 }
 
+static void test_model_header(void)
+{
+    /* The first 48 bytes of the real ggml-base.en.bin and ggml-large-v3.bin. */
+    static const unsigned char base_en[48] = {
+        0x6c, 0x6d, 0x67, 0x67, 0x98, 0xca, 0x00, 0x00, 0xdc, 0x05, 0x00, 0x00,
+        0x00, 0x02, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
+        0xc0, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+        0x06, 0x00, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    };
+    static const unsigned char large_v3[48] = {
+        0x6c, 0x6d, 0x67, 0x67, 0x9a, 0xca, 0x00, 0x00, 0xdc, 0x05, 0x00, 0x00,
+        0x00, 0x05, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+        0xc0, 0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+        0x20, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    };
+    unsigned char bad[48];
+    NMWhisperModelShape s;
+
+    CHECK(nm_whisper_parse_model_header(base_en, sizeof(base_en), &s) == 0);
+    CHECK(s.n_vocab == 51864 && s.n_text_layer == 6 && s.n_text_head == 8 && s.n_mels == 80);
+    CHECK(!nm_whisper_model_multilingual(&s));
+    CHECK(nm_whisper_dtw_preset_matches(nm_whisper_dtw_preset_find("base.en"), s.n_text_layer,
+                                        s.n_text_head, nm_whisper_model_multilingual(&s), s.n_mels));
+    CHECK(!nm_whisper_dtw_preset_matches(nm_whisper_dtw_preset_find("large.v3"), s.n_text_layer,
+                                         s.n_text_head, nm_whisper_model_multilingual(&s), s.n_mels));
+
+    CHECK(nm_whisper_parse_model_header(large_v3, sizeof(large_v3), &s) == 0);
+    CHECK(s.n_vocab == 51866 && s.n_text_layer == 32 && s.n_text_head == 20 && s.n_mels == 128);
+    CHECK(nm_whisper_model_multilingual(&s));
+    CHECK(nm_whisper_dtw_preset_matches(nm_whisper_dtw_preset_find("large.v3"), s.n_text_layer,
+                                        s.n_text_head, nm_whisper_model_multilingual(&s), s.n_mels));
+
+    /* Too short, or not a ggml file: rejected, never guessed at. */
+    CHECK(nm_whisper_parse_model_header(base_en, 47, &s) < 0);
+    memcpy(bad, base_en, sizeof(bad));
+    bad[0] = 'G';
+    CHECK(nm_whisper_parse_model_header(bad, sizeof(bad), &s) < 0);
+    memcpy(bad, base_en, sizeof(bad));
+    bad[23] = 0x80;                  /* n_audio_layer negative */
+    CHECK(nm_whisper_parse_model_header(bad, sizeof(bad), &s) < 0);
+}
+
 int main(void)
 {
     test_escape_unchanged_for_valid_input();
@@ -388,6 +430,7 @@ int main(void)
     test_words_no_text_tokens();
     test_words_json();
     test_dtw_presets();
+    test_model_header();
 
     if (failures) {
         fprintf(stderr, "%d of %d checks failed\n", failures, checks);

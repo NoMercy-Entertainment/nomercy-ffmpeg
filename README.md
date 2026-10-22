@@ -725,6 +725,27 @@ model's shape and refuses a mismatch.
 the prompt, about 223 for the released models. The rest is dropped. The prompt
 applies to every transcription window (`queue`), not only the first.
 
+**DTW on very short windows no longer aborts.** whisper.cpp v1.9.1 asserted
+when a DTW window was shorter than about 160 ms and killed the whole ffmpeg
+process (exit 3 on Windows). The build carries upstream's fix (whisper.cpp
+`a46fadb`) until a release has it (#113).
+
+**Threads.** By default whisper uses half the physical cores, the same rule
+as `stemsplit`: a media server transcribes while it also serves and
+transcodes, so the filter never takes the whole machine. `-filter_threads N`
+is followed exactly (never above the CPUs the process may use), and the VAD
+context gets at most whisper.cpp's own default of 4. The log says what was
+chosen: `whisper: 4 threads.` ffmpeg's own default (`threads=auto`) is one
+thread more than there are cores, and with ggml's busy-waiting thread pool
+that made CPU transcription up to 16x slower and `vad_model` practically
+unusable (#115). The thread count does not change the output.
+
+**The model loads once per run.** The ffmpeg CLI builds every filtergraph
+twice and throws the first one away; the model is loaded when the graph is
+configured, which only the real graph is. Option mistakes still fail at
+start-up; a missing model fails when the graph is configured, before any
+output (#114).
+
 **Writing to stdout: use `destination=-`.** `-` means `pipe:1`. Written out,
 `pipe:1` needs its colon escaped inside a filtergraph (`destination='pipe\:1'`),
 which is easy to get wrong.

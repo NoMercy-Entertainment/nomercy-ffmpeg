@@ -61,9 +61,14 @@ _whisper_test_workdir() {
 # the defaults check needs both builds on the same variant. The options checks
 # leave it empty, because the baseline (no SIMD at all) is several times
 # slower and those checks compare runs of one binary.
+#
+# WT_FILTER_THREADS overrides the thread count; set it to an empty string to
+# leave ffmpeg's default (every logical core), which is what #115 is about.
+# WT_LOGLEVEL, when set, is passed as -loglevel.
 _whisper_run() {
-	local bin="$1" out="$2" err="$3" opts="$4"
-	(cd "${WT_DIR}" && env ${WT_BASELINE:+NOMERCY_GGML_CPU="${WT_BASELINE}"} "${bin}" -hide_banner -nostdin -nostats -filter_threads 1 \
+	local bin="$1" out="$2" err="$3" opts="$4" threads="${WT_FILTER_THREADS-1}"
+	(cd "${WT_DIR}" && env ${WT_BASELINE:+NOMERCY_GGML_CPU="${WT_BASELINE}"} "${bin}" -hide_banner -nostdin -nostats \
+		${threads:+-filter_threads "${threads}"} ${WT_LOGLEVEL:+-loglevel "${WT_LOGLEVEL}"} \
 		-i "${WT_AUDIO}" -af "whisper=model=model.bin:use_gpu=0:${opts}" -f null - >"${out}" 2>"${err}" </dev/null)
 }
 
@@ -255,6 +260,205 @@ test_whisper_options() {
 	echo "destination=- and destination=pipe\\:1 give the same bytes"
 
 	echo "all whisper option checks passed"
+	return 0
+}
+
+# #113: with dtw set, a window shorter than ~160 ms used to abort the whole
+# process (WHISPER_ASSERT filter_width < a->ne[2] in whisper.cpp's DTW median
+# filter, exit 3). A 0.12 s cut of speech is enough to hit it.
+test_whisper_dtw_short_window() {
+	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
+	local d rc
+
+	_whisper_test_inputs || return 2
+	WT_BASELINE=""
+	_whisper_test_workdir
+	d="${WT_DIR}"
+	# shellcheck disable=SC2064
+	trap "rm -rf '${d}'" RETURN
+
+	# Four 0.12 s cuts, each of which aborted the unpatched build inside DTW
+	# (exit 134 on Linux, 3 on Windows). whisper keeps no segment for them -
+	# whisper-cli prints none either - so the proof that DTW really ran is that
+	# every cut was transcribed (the filter's "run transcription" line) with
+	# dtw on and the process survived. A cut that never reached whisper_full
+	# would pass without exercising the fix, so that is checked too.
+	local audio="${WT_AUDIO}" ss segments=0 n
+	for ss in 0.4 2.0 5.0 8.6; do
+		# The cut, as a file: -ss/-t are ffmpeg options, not filter options,
+		# so _whisper_run cannot take them. pcm_s16le like the source.
+		"${ffmpeg}" -hide_banner -nostdin -loglevel error -y -ss "${ss}" -t 0.12 -i "${audio}" \
+			-c:a pcm_s16le "${d}/short.wav" </dev/null \
+			|| { echo "FAIL: could not cut a 0.12 s clip at ${ss} s from ${audio}"; return 1; }
+		WT_AUDIO="${d}/short.wav"
+		_whisper_run "${ffmpeg}" "${d}/short.json" "${d}/short.err" "format=json:destination=-:dtw=base.en:word_timestamps=1:queue=30"
+		rc=$?
+		WT_AUDIO="${audio}"
+		if [[ ${rc} -ne 0 ]]; then
+			tail -3 "${d}/short.err"
+			echo "FAIL: dtw on the 0.12 s window at ${ss} s exited ${rc}"
+			return 1
+		fi
+		n=$(python3 - "${d}/short.json" <<'PY'
+import json, sys
+n = 0
+for i, line in enumerate(open(sys.argv[1], encoding="utf-8"), 1):
+    if line.strip():
+        try:
+            obj = json.loads(line)
+        except ValueError as e:
+            sys.exit(f"line {i} is not valid JSON ({e}): {line[:200]}")
+        n += "start" in obj
+print(n)
+PY
+		) || { echo "FAIL: ${n}"; return 1; }
+		grep -q "run transcription at 0 ms, 1920/1920 samples" "${d}/short.err" \
+			|| { tail -3 "${d}/short.err"; echo "FAIL: the cut at ${ss} s was never transcribed, so it proves nothing"; return 1; }
+		echo "cut at ${ss} s: transcribed with dtw, exit 0, ${n} segment(s)"
+		segments=$((segments + n))
+	done
+	echo "dtw on 0.12 s windows exits 0 and every line parses (${segments} segment(s) in total)"
+	return 0
+}
+
+# #114: the ffmpeg CLI runs every filter's init() twice (once on a throwaway
+# graph), so a model loaded in init() was loaded twice per run. Now it loads
+# when the input link is configured: exactly once. A bad model path must
+# still fail the run with a clear message.
+test_whisper_model_loaded_once() {
+	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
+	local d n rc
+
+	_whisper_test_inputs || return 2
+	WT_BASELINE=""
+	_whisper_test_workdir
+	d="${WT_DIR}"
+	# shellcheck disable=SC2064
+	trap "rm -rf '${d}'" RETURN
+
+	# whisper.cpp's "loading model from" line reaches av_log at debug level.
+	WT_LOGLEVEL=debug _whisper_run "${ffmpeg}" "${d}/once.json" "${d}/once.err" "format=json:destination=-" \
+		|| { tail -5 "${d}/once.err"; echo "FAIL: the debug-log run failed"; return 1; }
+	n=$(grep -c "loading model from" "${d}/once.err")
+	[[ ${n} -eq 1 ]] || { echo "FAIL: the model was loaded ${n} time(s) in one run, expected exactly 1"; return 1; }
+	_whisper_check_json "${d}/once.json" || return 1
+	echo "the model is loaded once per run"
+
+	(cd "${d}" && "${ffmpeg}" -hide_banner -nostdin -nostats -i "${WT_AUDIO}" \
+		-af "whisper=model=no-such-model.bin:use_gpu=0" -f null - >/dev/null 2>"${d}/bad.err" </dev/null)
+	rc=$?
+	[[ ${rc} -ne 0 ]] || { echo "FAIL: a missing model did not fail the run"; return 1; }
+	grep -q "Failed to initialize whisper context from model: no-such-model.bin" "${d}/bad.err" \
+		|| { tail -4 "${d}/bad.err"; echo "FAIL: a missing model does not fail with the model path in the message"; return 1; }
+	echo "a missing model still fails (exit ${rc}) and names the path"
+	return 0
+}
+
+# #115, the root cause: threads=auto gives a filter av_cpu_count() + 1
+# threads, and one thread more than there are cores made whisper on the CPU
+# about 16x slower (ggml busy-waits at every barrier). With the cap, the
+# default must be no slower than a single thread, and give the same output.
+test_whisper_default_threads() {
+	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
+	local d t1 tn s e
+
+	_whisper_test_inputs || return 2
+	WT_BASELINE=""
+	_whisper_test_workdir
+	d="${WT_DIR}"
+	# shellcheck disable=SC2064
+	trap "rm -rf '${d}'" RETURN
+
+	s=$(date +%s%N)
+	WT_FILTER_THREADS=1 _whisper_run "${ffmpeg}" "${d}/one.json" "${d}/one.err" "format=json:destination=-" \
+		|| { tail -5 "${d}/one.err"; echo "FAIL: the one-thread run failed"; return 1; }
+	e=$(date +%s%N); t1=$(( (e - s) / 1000000 ))
+	s=$(date +%s%N)
+	WT_FILTER_THREADS="" _whisper_run "${ffmpeg}" "${d}/auto.json" "${d}/auto.err" "format=json:destination=-" \
+		|| { tail -5 "${d}/auto.err"; echo "FAIL: the default-thread run failed"; return 1; }
+	e=$(date +%s%N); tn=$(( (e - s) / 1000000 ))
+	echo "one thread: ${t1} ms, default threads: ${tn} ms"
+	# A single-core runner gives the same time both ways; the margin keeps a
+	# noisy CI host from flaking. The bug made the default 5x slower than one
+	# thread here, not a few percent.
+	if (( tn > t1 * 3 / 2 + 2000 )); then
+		echo "FAIL: the default thread count is slower than one thread (${tn} ms vs ${t1} ms)"
+		return 1
+	fi
+	cmp -s "${d}/one.json" "${d}/auto.json" \
+		|| { diff "${d}/one.json" "${d}/auto.json" | head -6; echo "FAIL: the output depends on the thread count"; return 1; }
+	echo "the default thread count is not slower than one thread, and gives the same output"
+
+	# The rule itself: by default half the physical cores, so never more than
+	# half the logical CPUs (owner decision D16, as in stemsplit); a thread
+	# count set on purpose is followed exactly.
+	local cpus n
+	cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)
+	n=$(sed -n 's/.*whisper: \([0-9][0-9]*\) threads\..*/\1/p' "${d}/auto.err" | head -1)
+	[[ -n "${n}" ]] || { echo "FAIL: no 'whisper: N threads.' line in the log"; return 1; }
+	if (( n < 1 || (cpus >= 2 && n > cpus / 2) )); then
+		echo "FAIL: the default uses ${n} threads on ${cpus} CPUs; expected at most half"
+		return 1
+	fi
+	echo "default: ${n} thread(s) on ${cpus} CPU(s)"
+	if (( cpus >= 3 )); then
+		WT_FILTER_THREADS=3 _whisper_run "${ffmpeg}" "${d}/three.json" "${d}/three.err" "format=json:destination=-" \
+			|| { tail -5 "${d}/three.err"; echo "FAIL: the -filter_threads 3 run failed"; return 1; }
+		grep -q "whisper: 3 threads\." "${d}/three.err" \
+			|| { grep "threads\." "${d}/three.err"; echo "FAIL: -filter_threads 3 was not followed"; return 1; }
+		echo "-filter_threads 3 gives exactly 3 threads"
+	fi
+	return 0
+}
+
+# #115: with vad_model set, the VAD context used to get every logical core,
+# and 15 s of audio took over five minutes on a 16-thread machine. Needs the
+# Silero VAD model in WHISPER_TEST_VAD_MODEL (ggml-silero-v5.1.2.bin, sha256
+# 29940d98...ea2cf), or next to the binary; otherwise SKIP.
+test_whisper_vad_threads() {
+	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
+	local d vad t0 t1 s e
+
+	_whisper_test_inputs || return 2
+	vad="${WHISPER_TEST_VAD_MODEL:-}"
+	[[ -z "${vad}" && -f "$(dirname "${FFMPEG}")/ggml-silero-v5.1.2.bin" ]] && vad="$(dirname "${FFMPEG}")/ggml-silero-v5.1.2.bin"
+	if [[ -z "${vad}" || ! -f "${vad}" ]]; then
+		echo "SKIP: no VAD model in this environment (set WHISPER_TEST_VAD_MODEL to ggml-silero-v5.1.2.bin)"
+		return 2
+	fi
+	WT_BASELINE=""
+	_whisper_test_workdir
+	d="${WT_DIR}"
+	# shellcheck disable=SC2064
+	trap "rm -rf '${d}'" RETURN
+	cp "${vad}" "${d}/vad.bin"
+
+	# Default thread count on both sides: that is the case that was broken.
+	s=$(date +%s%N)
+	WT_FILTER_THREADS="" _whisper_run "${ffmpeg}" "${d}/novad.json" "${d}/novad.err" "format=json:destination=-" \
+		|| { tail -5 "${d}/novad.err"; echo "FAIL: the run without VAD failed"; return 1; }
+	e=$(date +%s%N); t0=$(( (e - s) / 1000000 ))
+	s=$(date +%s%N)
+	WT_FILTER_THREADS="" _whisper_run "${ffmpeg}" "${d}/vad.json" "${d}/vad.err" "format=json:destination=-:vad_model=vad.bin" \
+		|| { tail -5 "${d}/vad.err"; echo "FAIL: the run with vad_model failed"; return 1; }
+	e=$(date +%s%N); t1=$(( (e - s) / 1000000 ))
+	grep -q "VAD detected" "${d}/vad.err" \
+		|| { tail -5 "${d}/vad.err"; echo "FAIL: VAD never ran, so the timing proves nothing"; return 1; }
+	_whisper_check_json "${d}/vad.json" || return 1
+	echo "default threads: ${t0} ms without VAD, ${t1} ms with VAD"
+	# Generous on purpose so a busy CI runner does not flake; the bug was 50x.
+	if (( t1 > 3 * t0 + 5000 )); then
+		echo "FAIL: vad_model makes the run more than 3x slower (${t1} ms vs ${t0} ms)"
+		return 1
+	fi
+
+	# The thread count must not change what VAD finds, so the output with one
+	# filter thread is the output with the default.
+	WT_FILTER_THREADS=1 _whisper_run "${ffmpeg}" "${d}/vad1.json" "${d}/vad1.err" "format=json:destination=-:vad_model=vad.bin" \
+		|| { tail -5 "${d}/vad1.err"; echo "FAIL: the one-thread VAD run failed"; return 1; }
+	cmp -s "${d}/vad.json" "${d}/vad1.json" \
+		|| { diff "${d}/vad.json" "${d}/vad1.json" | head -6; echo "FAIL: VAD output depends on the thread count"; return 1; }
+	echo "VAD output is the same with one thread and with the default"
 	return 0
 }
 

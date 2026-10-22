@@ -395,6 +395,12 @@ run_custom_test "cpu_variant" "test_cpu_variant"
 # v1.0.44 reference binary in WHISPER_TEST_REFERENCE_FFMPEG.
 run_custom_test "whisper_options" "test_whisper_options"
 run_custom_test "whisper_defaults" "test_whisper_defaults_unchanged"
+# #113 dtw on very short windows, #114 one model load per run, #115 VAD
+# threads (the last also needs ggml-silero-v5.1.2.bin in WHISPER_TEST_VAD_MODEL).
+run_custom_test "whisper_dtw_short" "test_whisper_dtw_short_window"
+run_custom_test "whisper_load_once" "test_whisper_model_loaded_once"
+run_custom_test "whisper_threads" "test_whisper_default_threads"
+run_custom_test "whisper_vad_threads" "test_whisper_vad_threads"
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

@@ -89,7 +89,14 @@ function Invoke-WhisperRun {
         [string]$ErrFile,
         [string]$Options
     )
-    $arguments = ('-hide_banner -nostdin -nostats -filter_threads 1 -i "{0}" -af "whisper=model=model.bin:use_gpu=0:{1}" -f null -' -f $Ctx.Audio, $Options)
+    # $Ctx.Threads: '' leaves ffmpeg's default (every logical core, #115),
+    # anything else is passed to -filter_threads; unset means 1.
+    # $Ctx.LogLevel, when set, is passed as -loglevel.
+    $threads = if ($Ctx.ContainsKey('Threads')) { $Ctx.Threads } else { '1' }
+    $extra = ''
+    if ($threads) { $extra += " -filter_threads $threads" }
+    if ($Ctx.LogLevel) { $extra += " -loglevel $($Ctx.LogLevel)" }
+    $arguments = ('-hide_banner -nostdin -nostats{2} -i "{0}" -af "whisper=model=model.bin:use_gpu=0:{1}" -f null -' -f $Ctx.Audio, $Options, $extra)
     return (Invoke-NativeToFiles -Exe $Exe -Arguments $arguments -WorkDir $Ctx.Dir -OutFile $OutFile -ErrFile $ErrFile -Baseline $Ctx.Baseline)
 }
 
@@ -268,6 +275,197 @@ function Test-WhisperOptions {
         if (-not (Test-SameBytes (F 'plain.json') (F 'pipe.json'))) { return (Fail 'destination=- and pipe\:1 differ') }
         $lines.Add('destination=- and destination=pipe\:1 give the same bytes')
 
+        return @{ Status = 'Pass'; Reason = ''; Output = ($lines -join "`n") }
+    } finally {
+        Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
+    }
+}
+
+# #113: dtw on a window shorter than ~160 ms used to abort the process.
+function Test-WhisperDtwShortWindow {
+    param([string]$FFmpegExe, [string]$Platform)
+
+    $inputs = Get-WhisperTestInputs -FFmpegExe $FFmpegExe
+    if (-not $inputs) {
+        return @{ Status = 'Skip'; Reason = 'no whisper model and clip in this environment (set WHISPER_TEST_MODEL to ggml-base.en.bin and WHISPER_TEST_AUDIO to jfk.wav)'; Output = '' }
+    }
+    $dir = New-WhisperTestDir -Model $inputs.Model
+    $lines = New-Object System.Collections.Generic.List[string]
+    try {
+        # Same four cuts as whisper.sh; each aborted the unpatched build.
+        foreach ($ss in '0.4', '2.0', '5.0', '8.6') {
+            $short = Join-Path $dir 'short.wav'
+            $cut = ('-hide_banner -nostdin -loglevel error -y -ss {0} -t 0.12 -i "{1}" -c:a pcm_s16le "{2}"' -f $ss, $inputs.Audio, $short)
+            if ((Invoke-NativeToFiles -Exe $FFmpegExe -Arguments $cut -WorkDir $dir -OutFile (Join-Path $dir 'cut.out') -ErrFile (Join-Path $dir 'cut.err')) -ne 0) {
+                return @{ Status = 'Fail'; Reason = "could not cut a 0.12 s clip at $ss s"; Output = ($lines -join "`n") }
+            }
+            $ctx = @{ Dir = $dir; Audio = $short; Baseline = '' }
+            $out = Join-Path $dir 'short.json'
+            $err = Join-Path $dir 'short.err'
+            $code = Invoke-WhisperRun -Exe $FFmpegExe -Ctx $ctx -OutFile $out -ErrFile $err -Options 'format=json:destination=-:dtw=base.en:word_timestamps=1:queue=30'
+            if ($code -ne 0) {
+                return @{ Status = 'Fail'; Reason = "dtw on the 0.12 s window at $ss s exited $code"; Output = ($lines -join "`n") }
+            }
+            if ([System.IO.File]::ReadAllText($err) -notmatch 'run transcription at 0 ms, 1920/1920 samples') {
+                return @{ Status = 'Fail'; Reason = "the cut at $ss s was never transcribed, so it proves nothing"; Output = ($lines -join "`n") }
+            }
+            foreach ($line in [System.IO.File]::ReadAllLines($out)) {
+                if ($line.Trim()) {
+                    try { $null = $line | ConvertFrom-Json } catch {
+                        return @{ Status = 'Fail'; Reason = "cut at $ss s: a line is not valid JSON: $line"; Output = ($lines -join "`n") }
+                    }
+                }
+            }
+            $lines.Add("cut at $ss s: transcribed with dtw, exit 0")
+        }
+        return @{ Status = 'Pass'; Reason = ''; Output = ($lines -join "`n") }
+    } finally {
+        Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
+    }
+}
+
+# #114: the model is loaded once per run, and a missing model still fails.
+function Test-WhisperModelLoadedOnce {
+    param([string]$FFmpegExe, [string]$Platform)
+
+    $inputs = Get-WhisperTestInputs -FFmpegExe $FFmpegExe
+    if (-not $inputs) {
+        return @{ Status = 'Skip'; Reason = 'no whisper model and clip in this environment (set WHISPER_TEST_MODEL to ggml-base.en.bin and WHISPER_TEST_AUDIO to jfk.wav)'; Output = '' }
+    }
+    $dir = New-WhisperTestDir -Model $inputs.Model
+    try {
+        $ctx = @{ Dir = $dir; Audio = $inputs.Audio; Baseline = ''; LogLevel = 'debug' }
+        $out = Join-Path $dir 'once.json'
+        $err = Join-Path $dir 'once.err'
+        if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $ctx -OutFile $out -ErrFile $err -Options 'format=json:destination=-') -ne 0) {
+            return @{ Status = 'Fail'; Reason = 'the debug-log run failed'; Output = '' }
+        }
+        $n = ([regex]::Matches([System.IO.File]::ReadAllText($err), 'loading model from')).Count
+        if ($n -ne 1) {
+            return @{ Status = 'Fail'; Reason = "the model was loaded $n time(s) in one run, expected exactly 1"; Output = '' }
+        }
+        $why = Test-WhisperJson $out
+        if ($why) { return @{ Status = 'Fail'; Reason = $why; Output = '' } }
+
+        $bad = ('-hide_banner -nostdin -nostats -i "{0}" -af "whisper=model=no-such-model.bin:use_gpu=0" -f null -' -f $inputs.Audio)
+        $code = Invoke-NativeToFiles -Exe $FFmpegExe -Arguments $bad -WorkDir $dir -OutFile (Join-Path $dir 'bad.out') -ErrFile (Join-Path $dir 'bad.err')
+        if ($code -eq 0) { return @{ Status = 'Fail'; Reason = 'a missing model did not fail the run'; Output = '' } }
+        if ([System.IO.File]::ReadAllText((Join-Path $dir 'bad.err')) -notmatch 'Failed to initialize whisper context from model: no-such-model\.bin') {
+            return @{ Status = 'Fail'; Reason = 'a missing model does not fail with the model path in the message'; Output = '' }
+        }
+        return @{ Status = 'Pass'; Reason = ''; Output = "the model is loaded once per run; a missing model fails (exit $code) and names the path" }
+    } finally {
+        Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
+    }
+}
+
+# #115, the root cause: threads=auto gives av_cpu_count() + 1 threads and one
+# thread too many made whisper ~16x slower. The default must be no slower than
+# one thread, with the same output. See test_whisper_default_threads.
+function Test-WhisperDefaultThreads {
+    param([string]$FFmpegExe, [string]$Platform)
+
+    $inputs = Get-WhisperTestInputs -FFmpegExe $FFmpegExe
+    if (-not $inputs) {
+        return @{ Status = 'Skip'; Reason = 'no whisper model and clip in this environment (set WHISPER_TEST_MODEL to ggml-base.en.bin and WHISPER_TEST_AUDIO to jfk.wav)'; Output = '' }
+    }
+    $dir = New-WhisperTestDir -Model $inputs.Model
+    try {
+        $one = @{ Dir = $dir; Audio = $inputs.Audio; Baseline = ''; Threads = '1' }
+        $auto = @{ Dir = $dir; Audio = $inputs.Audio; Baseline = ''; Threads = '' }
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $one -OutFile (Join-Path $dir 'one.json') -ErrFile (Join-Path $dir 'one.err') -Options 'format=json:destination=-') -ne 0) {
+            return @{ Status = 'Fail'; Reason = 'the one-thread run failed'; Output = '' }
+        }
+        $t1 = $sw.ElapsedMilliseconds
+        $sw.Restart()
+        if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $auto -OutFile (Join-Path $dir 'auto.json') -ErrFile (Join-Path $dir 'auto.err') -Options 'format=json:destination=-') -ne 0) {
+            return @{ Status = 'Fail'; Reason = 'the default-thread run failed'; Output = '' }
+        }
+        $tn = $sw.ElapsedMilliseconds
+        $msg = "one thread: $t1 ms, default threads: $tn ms"
+        if ($tn -gt ([math]::Floor($t1 * 3 / 2) + 2000)) {
+            return @{ Status = 'Fail'; Reason = "the default thread count is slower than one thread ($tn ms vs $t1 ms)"; Output = $msg }
+        }
+        if (-not (Test-SameBytes (Join-Path $dir 'one.json') (Join-Path $dir 'auto.json'))) {
+            return @{ Status = 'Fail'; Reason = 'the output depends on the thread count'; Output = $msg }
+        }
+
+        # The rule: by default at most half the logical CPUs (half the
+        # physical cores, D16); a thread count set on purpose is followed.
+        $cpus = [Environment]::ProcessorCount
+        $m = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $dir 'auto.err')), 'whisper: (\d+) threads\.')
+        if (-not $m.Success) { return @{ Status = 'Fail'; Reason = "no 'whisper: N threads.' line in the log"; Output = $msg } }
+        $n = [int]$m.Groups[1].Value
+        if ($n -lt 1 -or ($cpus -ge 2 -and $n -gt [math]::Floor($cpus / 2))) {
+            return @{ Status = 'Fail'; Reason = "the default uses $n threads on $cpus CPUs; expected at most half"; Output = $msg }
+        }
+        $msg += "; default: $n thread(s) on $cpus CPU(s)"
+        if ($cpus -ge 3) {
+            $three = @{ Dir = $dir; Audio = $inputs.Audio; Baseline = ''; Threads = '3' }
+            if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $three -OutFile (Join-Path $dir 'three.json') -ErrFile (Join-Path $dir 'three.err') -Options 'format=json:destination=-') -ne 0) {
+                return @{ Status = 'Fail'; Reason = 'the -filter_threads 3 run failed'; Output = $msg }
+            }
+            if ([System.IO.File]::ReadAllText((Join-Path $dir 'three.err')) -notmatch 'whisper: 3 threads\.') {
+                return @{ Status = 'Fail'; Reason = '-filter_threads 3 was not followed'; Output = $msg }
+            }
+            $msg += '; -filter_threads 3 gives exactly 3'
+        }
+        return @{ Status = 'Pass'; Reason = ''; Output = $msg }
+    } finally {
+        Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
+    }
+}
+
+# #115: vad_model with the default thread count is not dramatically slower,
+# and VAD output does not depend on the thread count.
+function Test-WhisperVadThreads {
+    param([string]$FFmpegExe, [string]$Platform)
+
+    $inputs = Get-WhisperTestInputs -FFmpegExe $FFmpegExe
+    if (-not $inputs) {
+        return @{ Status = 'Skip'; Reason = 'no whisper model and clip in this environment (set WHISPER_TEST_MODEL to ggml-base.en.bin and WHISPER_TEST_AUDIO to jfk.wav)'; Output = '' }
+    }
+    $vad = $env:WHISPER_TEST_VAD_MODEL
+    $nextTo = Join-Path (Split-Path -Parent $FFmpegExe) 'ggml-silero-v5.1.2.bin'
+    if (-not $vad -and (Test-Path $nextTo)) { $vad = $nextTo }
+    if (-not $vad -or -not (Test-Path $vad)) {
+        return @{ Status = 'Skip'; Reason = 'no VAD model in this environment (set WHISPER_TEST_VAD_MODEL to ggml-silero-v5.1.2.bin)'; Output = '' }
+    }
+    $dir = New-WhisperTestDir -Model $inputs.Model
+    $lines = New-Object System.Collections.Generic.List[string]
+    try {
+        Copy-Item -Path $vad -Destination (Join-Path $dir 'vad.bin')
+        $default = @{ Dir = $dir; Audio = $inputs.Audio; Baseline = ''; Threads = '' }
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $default -OutFile (Join-Path $dir 'novad.json') -ErrFile (Join-Path $dir 'novad.err') -Options 'format=json:destination=-') -ne 0) {
+            return @{ Status = 'Fail'; Reason = 'the run without VAD failed'; Output = '' }
+        }
+        $t0 = $sw.ElapsedMilliseconds
+        $sw.Restart()
+        if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $default -OutFile (Join-Path $dir 'vad.json') -ErrFile (Join-Path $dir 'vad.err') -Options 'format=json:destination=-:vad_model=vad.bin') -ne 0) {
+            return @{ Status = 'Fail'; Reason = 'the run with vad_model failed'; Output = '' }
+        }
+        $t1 = $sw.ElapsedMilliseconds
+        if ([System.IO.File]::ReadAllText((Join-Path $dir 'vad.err')) -notmatch 'VAD detected') {
+            return @{ Status = 'Fail'; Reason = 'VAD never ran, so the timing proves nothing'; Output = '' }
+        }
+        $why = Test-WhisperJson (Join-Path $dir 'vad.json')
+        if ($why) { return @{ Status = 'Fail'; Reason = $why; Output = '' } }
+        $lines.Add("default threads: $t0 ms without VAD, $t1 ms with VAD")
+        if ($t1 -gt (3 * $t0 + 5000)) {
+            return @{ Status = 'Fail'; Reason = "vad_model makes the run more than 3x slower ($t1 ms vs $t0 ms)"; Output = ($lines -join "`n") }
+        }
+
+        $one = @{ Dir = $dir; Audio = $inputs.Audio; Baseline = ''; Threads = '1' }
+        if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $one -OutFile (Join-Path $dir 'vad1.json') -ErrFile (Join-Path $dir 'vad1.err') -Options 'format=json:destination=-:vad_model=vad.bin') -ne 0) {
+            return @{ Status = 'Fail'; Reason = 'the one-thread VAD run failed'; Output = ($lines -join "`n") }
+        }
+        if (-not (Test-SameBytes (Join-Path $dir 'vad.json') (Join-Path $dir 'vad1.json'))) {
+            return @{ Status = 'Fail'; Reason = 'VAD output depends on the thread count'; Output = ($lines -join "`n") }
+        }
+        $lines.Add('VAD output is the same with one thread and with the default')
         return @{ Status = 'Pass'; Reason = ''; Output = ($lines -join "`n") }
     } finally {
         Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue

@@ -18,10 +18,25 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+// sched_getaffinity() and the CPU_SET macros, for counting physical cores.
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>   // strstr, for reading whisper.cpp back-end report out of its log
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/param.h>
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <sched.h>
+#endif
 
 #include <whisper.h>
 #include "nm_ggml_cpu.h"
@@ -37,6 +52,7 @@
 #include "libavutil/internal.h"
 #include "libavformat/avio.h"
 #include "libavutil/bprint.h"
+#include "libavutil/cpu.h"
 #include "libavutil/thread.h"
 
 #include "formats.h"
@@ -106,6 +122,8 @@ typedef struct WhisperContext {
     int best_of;
     /* Index into nm_whisper_dtw_presets(), -1 when DTW is off. */
     int dtw_preset;
+    /* whisper.cpp threads, resolved once by config_input (nm_whisper_threads). */
+    int n_threads;
     /* The prompt handed to whisper_full(): prompt_file's contents, else the
      * prompt option, else NULL. Owned when it came from the file. */
     const char *initial_prompt;
@@ -183,6 +201,129 @@ static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
 }
 
 /**
+ * Physical cores this process may run on, or 0 when the platform cannot say.
+ *
+ * Only cores with at least one logical CPU in the process affinity count, so
+ * a pinned or cgroup-limited process is not told about cores it cannot use.
+ * The same count af_stemsplit.c uses for its thread default.
+ */
+static int nm_whisper_physical_cores(void)
+{
+#if defined(_WIN32)
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION *info;
+    DWORD_PTR proc_mask, sys_mask;
+    DWORD len = 0;
+    int i, n, cores = 0;
+
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask))
+        return 0;
+    GetLogicalProcessorInformation(NULL, &len);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || !len)
+        return 0;
+    info = av_malloc(len);
+    if (!info)
+        return 0;
+    if (GetLogicalProcessorInformation(info, &len)) {
+        n = len / sizeof(*info);
+        for (i = 0; i < n; i++)
+            if (info[i].Relationship == RelationProcessorCore &&
+                (info[i].ProcessorMask & proc_mask))
+                cores++;
+    }
+    av_free(info);
+    return cores;
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    int n = 0;
+    size_t size = sizeof(n);
+#if defined(__APPLE__)
+    const char *name = "hw.physicalcpu";
+#else
+    const char *name = "kern.smp.cores";
+#endif
+    return sysctlbyname(name, &n, &size, NULL, 0) == 0 && n > 0 ? n : 0;
+#elif defined(__linux__)
+    cpu_set_t set;
+    int cpu, cores = 0;
+
+    if (sched_getaffinity(0, sizeof(set), &set))
+        return 0;
+    // A core counts once: at the lowest of its hyperthreads that the
+    // affinity mask allows.
+    for (cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+        char path[96], list[256], *p;
+        int first = -1;
+        FILE *f;
+
+        if (!CPU_ISSET(cpu, &set))
+            continue;
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
+        f = fopen(path, "r");
+        if (!f)
+            return 0;
+        p = fgets(list, sizeof(list), f);
+        fclose(f);
+        if (!p)
+            return 0;
+        // "0,28" or "0-1": walk every sibling, ranges included
+        while (*p && first < 0) {
+            long lo = strtol(p, &p, 10), hi = lo, c;
+            if (*p == '-')
+                hi = strtol(p + 1, &p, 10);
+            for (c = lo; c <= hi && c < CPU_SETSIZE; c++)
+                if (CPU_ISSET(c, &set)) {
+                    first = c;
+                    break;
+                }
+            if (*p != ',')
+                break;
+            p++;
+        }
+        if (first == cpu)
+            cores++;
+    }
+    return cores;
+#else
+    return 0;
+#endif
+}
+
+/**
+ * Threads for whisper.cpp: half the physical cores, unless the graph's thread
+ * count was set on purpose.
+ *
+ * ggml's thread pool (no OpenMP, #64) busy-waits at every barrier, so a worker
+ * that has to share a core - with its hyperthread twin, with ffmpeg's own
+ * threads, with anything else the machine runs - stalls all the others. With
+ * ffmpeg's default (threads=auto, which libavfilter turns into
+ * min(cpus + 1, 16)) every whisper run on the CPU fell off that cliff: jfk.wav
+ * on base.en took 53.6 s with 7 threads on 6 cores against 3.3 s with 6, and
+ * 16.0 s with 16 threads on an 8-core/16-thread i7 against 5.0 s with 4. It
+ * is what made vad_model unusable at the default (#115).
+ *
+ * Half the physical cores is the rule af_stemsplit.c follows for the same
+ * reason (owner decision D16): a media server transcribes while it also
+ * serves and transcodes, so a filter never takes the whole machine. When the
+ * platform cannot count physical cores, half the logical CPUs.
+ *
+ * A graph thread count other than ffmpeg's automatic one was chosen on
+ * purpose (-filter_threads, or the filter's own threads option) and is
+ * followed, never above the CPUs this process may use. The thread count does
+ * not change the transcript.
+ */
+static int nm_whisper_threads(AVFilterContext *ctx)
+{
+    const int cpus = av_cpu_count();
+    const int graph = FFMAX(1, ff_filter_get_nb_threads(ctx));
+    const int automatic = cpus > 1 ? FFMIN(cpus + 1, 16) : 1;
+    const int cores = nm_whisper_physical_cores();
+
+    if (graph != automatic)
+        return FFMAX(1, FFMIN(graph, cpus));
+    return FFMAX(1, (cores > 0 ? cores : cpus) / 2);
+}
+
+/**
  * Read prompt_file into wctx->prompt_file_text.
  *
  * Through avio rather than fopen, so the path behaves like every other path
@@ -243,21 +384,18 @@ static int read_prompt_file(AVFilterContext *ctx)
 }
 
 /**
- * Whether the loaded model is one the dtw preset was made for.
+ * Whether a model of this shape is one the dtw preset was made for.
  *
  * whisper.cpp only rejects a preset whose alignment heads do not exist in
  * the model. A preset for a model of the same shape - base on base.en, or
  * tiny.en on a base.en file - loads without a word and produces wrong
  * timings, so the filter checks the decoder shape itself and refuses.
  */
-static int dtw_preset_fits(AVFilterContext *ctx, struct whisper_context *model, int preset)
+static int dtw_preset_fits(AVFilterContext *ctx, int preset, int layers, int heads,
+                           int multilingual, int mels)
 {
     int n;
     const NMWhisperDtwPreset *want = nm_whisper_dtw_presets(&n) + preset;
-    const int layers = whisper_model_n_text_layer(model);
-    const int heads = whisper_model_n_text_head(model);
-    const int multilingual = whisper_is_multilingual(model);
-    const int mels = whisper_model_n_mels(model);
 
     if (nm_whisper_dtw_preset_matches(preset, layers, heads, multilingual, mels))
         return 1;
@@ -272,11 +410,123 @@ static int dtw_preset_fits(AVFilterContext *ctx, struct whisper_context *model, 
     return 0;
 }
 
+/**
+ * Check the dtw preset against the model file's header, before any load.
+ *
+ * Returns 0 when it fits, or when the header cannot be read: a missing or
+ * broken model is reported by the real load, with its own message. Returns
+ * AVERROR(EINVAL) for a preset that does not fit.
+ *
+ * Done here, from 48 bytes of the file, rather than by letting whisper.cpp
+ * load the model with the wrong preset: whisper.cpp then rejects it in
+ * whisper_init_state(), and its cleanup frees a half-built state. That
+ * crashed ffmpeg on Windows (exit 139) once the load moved off the main
+ * thread (#114).
+ */
+static int check_dtw_preset_against_file(AVFilterContext *ctx)
+{
+    WhisperContext *wctx = ctx->priv;
+    AVIOContext *pb = NULL;
+    unsigned char head[48];
+    NMWhisperModelShape shape;
+    int got;
+
+    if (avio_open(&pb, wctx->model_path, AVIO_FLAG_READ) < 0)
+        return 0;
+    got = avio_read(pb, head, sizeof(head));
+    avio_closep(&pb);
+    if (got != (int) sizeof(head) || nm_whisper_parse_model_header(head, sizeof(head), &shape) < 0)
+        return 0;
+
+    if (!dtw_preset_fits(ctx, wctx->dtw_preset, shape.n_text_layer, shape.n_text_head,
+                         nm_whisper_model_multilingual(&shape), shape.n_mels))
+        return AVERROR(EINVAL);
+    return 0;
+}
+
 static int init(AVFilterContext *ctx)
 {
     WhisperContext *wctx = ctx->priv;
 
+    if (!wctx->model_path) {
+        av_log(ctx, AV_LOG_ERROR, "No whisper model path specified. Use the 'model' option.\n");
+        return AVERROR(EINVAL);
+    }
+
+    // The options that do not need the model are checked before loading it,
+    // so a typo fails in milliseconds rather than after a model load.
+    wctx->dtw_preset = -1;
+    if (wctx->dtw && wctx->dtw[0]) {
+        wctx->dtw_preset = nm_whisper_dtw_preset_find(wctx->dtw);
+        if (wctx->dtw_preset < 0 || wctx->dtw_preset >= (int) FF_ARRAY_ELEMS(nm_whisper_dtw_aheads)) {
+            av_log(ctx, AV_LOG_ERROR, "Unknown dtw preset '%s'. Valid presets: %s.\n",
+                   wctx->dtw, nm_whisper_dtw_preset_list());
+            return AVERROR(EINVAL);
+        }
+        int ret = check_dtw_preset_against_file(ctx);
+        if (ret < 0)
+            return ret;
+    }
+
+    if (wctx->word_timestamps && av_strcasecmp(wctx->format, "json")) {
+        av_log(ctx, AV_LOG_WARNING,
+               "word_timestamps only applies to format=json; ignored for format=%s.\n",
+               wctx->format);
+        wctx->word_timestamps = 0;
+    }
+
+    if (wctx->prompt_file && wctx->prompt_file[0]) {
+        int ret = read_prompt_file(ctx);
+        if (ret < 0)
+            return ret;
+        if (wctx->prompt && wctx->prompt[0])
+            av_log(ctx, AV_LOG_WARNING, "Both prompt and prompt_file are set; using prompt_file.\n");
+        wctx->initial_prompt = wctx->prompt_file_text;
+    } else if (wctx->prompt && wctx->prompt[0])
+        wctx->initial_prompt = wctx->prompt;
+
+    wctx->next_pts = AV_NOPTS_VALUE;
+
+    if (wctx->destination && strcmp("", wctx->destination)) {
+        const char *dst = wctx->destination;
+        if (!strcmp("-", dst))
+            dst = "pipe:1";
+        int ret = avio_open(&wctx->avio_context, dst, AVIO_FLAG_WRITE);
+
+        if (ret < 0) {
+            av_log(ctx, AV_LOG_ERROR, "Could not open %s: %s\n", wctx->destination, av_err2str(ret));
+            return ret;
+        }
+
+        wctx->avio_context->direct = AVIO_FLAG_DIRECT;
+    }
+
+    return 0;
+}
+
+/**
+ * Load the model, on the input link's configuration rather than in init().
+ *
+ * The ffmpeg CLI parses every filtergraph twice: fg_create() builds a
+ * throwaway graph only to learn its inputs and outputs, and that runs each
+ * filter's init() but is never configured. Loading here instead of in init()
+ * means that graph never loads the model, which used to cost a whole second
+ * load per run - about 2 s for large-v3 (#114). Everything that only checks
+ * options stays in init(), so a typo still fails before any model I/O.
+ *
+ * The GPU decision, the log-callback registration and the backend report move
+ * with the load: they belong to the whisper_init_*() call, not to init().
+ */
+static int config_input(AVFilterLink *inlink)
+{
+    AVFilterContext *ctx = inlink->dst;
+    WhisperContext *wctx = ctx->priv;
+
     static AVOnce init_static_once = AV_ONCE_INIT;
+
+    // A graph is configured once, but stay safe if a link is reconfigured.
+    if (wctx->ctx_wsp)
+        return 0;
 
     // Ask FIRST, before ggml_backend_load_all() or anything else can reach
     // ggml's backend registry. nm_ggml_gpu_usable()'s first call is what makes
@@ -313,40 +563,6 @@ static int init(AVFilterContext *ctx)
     whisper_log_set(cb_log, ctx);
     nm_whisper_log_owner = ctx;
 
-    // Init whisper context
-    if (!wctx->model_path) {
-        av_log(ctx, AV_LOG_ERROR, "No whisper model path specified. Use the 'model' option.\n");
-        return AVERROR(EINVAL);
-    }
-
-    // The options that do not need the model are checked before loading it,
-    // so a typo fails in milliseconds rather than after a model load.
-    wctx->dtw_preset = -1;
-    if (wctx->dtw && wctx->dtw[0]) {
-        wctx->dtw_preset = nm_whisper_dtw_preset_find(wctx->dtw);
-        if (wctx->dtw_preset < 0 || wctx->dtw_preset >= (int) FF_ARRAY_ELEMS(nm_whisper_dtw_aheads)) {
-            av_log(ctx, AV_LOG_ERROR, "Unknown dtw preset '%s'. Valid presets: %s.\n",
-                   wctx->dtw, nm_whisper_dtw_preset_list());
-            return AVERROR(EINVAL);
-        }
-    }
-
-    if (wctx->word_timestamps && av_strcasecmp(wctx->format, "json")) {
-        av_log(ctx, AV_LOG_WARNING,
-               "word_timestamps only applies to format=json; ignored for format=%s.\n",
-               wctx->format);
-        wctx->word_timestamps = 0;
-    }
-
-    if (wctx->prompt_file && wctx->prompt_file[0]) {
-        int ret = read_prompt_file(ctx);
-        if (ret < 0)
-            return ret;
-        if (wctx->prompt && wctx->prompt[0])
-            av_log(ctx, AV_LOG_WARNING, "Both prompt and prompt_file are set; using prompt_file.\n");
-        wctx->initial_prompt = wctx->prompt_file_text;
-    } else if (wctx->prompt && wctx->prompt[0])
-        wctx->initial_prompt = wctx->prompt;
 
     struct whisper_context_params params = whisper_context_default_params();
     // whisper.cpp picks its own backend from this flag - it is never handed
@@ -373,30 +589,18 @@ static int init(AVFilterContext *ctx)
     nm_whisper_saw_no_gpu = 0;
     wctx->ctx_wsp = whisper_init_from_file_with_params(wctx->model_path, params);
     if (wctx->ctx_wsp == NULL) {
-        // A preset naming a layer or head the model does not have makes
-        // whisper.cpp fail the whole load with a log line about alignment
-        // heads. Say which option caused it: load the model once more without
-        // DTW (and without any compute state) just to read its shape.
-        if (wctx->dtw_preset >= 0) {
-            struct whisper_context_params probe = params;
-            struct whisper_context *model;
-
-            probe.dtw_token_timestamps = false;
-            probe.use_gpu = false;
-            model = whisper_init_from_file_with_params_no_state(wctx->model_path, probe);
-            if (model) {
-                const int fits = dtw_preset_fits(ctx, model, wctx->dtw_preset);
-                whisper_free(model);
-                if (!fits)
-                    return AVERROR(EINVAL);
-            }
-        }
         av_log(ctx, AV_LOG_ERROR, "Failed to initialize whisper context from model: %s\n", wctx->model_path);
         return AVERROR(EIO);
     }
 
     if (wctx->dtw_preset >= 0) {
-        if (!dtw_preset_fits(ctx, wctx->ctx_wsp, wctx->dtw_preset))
+        // init() already checked the file header; this is the same check on
+        // what whisper.cpp actually loaded, for a header it could not read.
+        if (!dtw_preset_fits(ctx, wctx->dtw_preset,
+                             whisper_model_n_text_layer(wctx->ctx_wsp),
+                             whisper_model_n_text_head(wctx->ctx_wsp),
+                             whisper_is_multilingual(wctx->ctx_wsp),
+                             whisper_model_n_mels(wctx->ctx_wsp)))
             return AVERROR(EINVAL);
         av_log(ctx, AV_LOG_INFO, "whisper: DTW on (preset %s); flash attention turned off.\n",
                nm_whisper_dtw_preset_name(wctx->dtw_preset));
@@ -433,6 +637,9 @@ static int init(AVFilterContext *ctx)
            wctx->gpu_active ? nm_ggml_backend_device(wctx->gpu_device)
                             : nm_ggml_cpu_variant_name());
 
+    wctx->n_threads = nm_whisper_threads(ctx);
+    av_log(ctx, AV_LOG_INFO, "whisper: %d threads.\n", wctx->n_threads);
+
     // Init buffer
     wctx->audio_buffer_queue_size = av_rescale(wctx->queue, WHISPER_SAMPLE_RATE, AV_TIME_BASE);
     wctx->audio_buffer = av_malloc_array(wctx->audio_buffer_queue_size, sizeof(*wctx->audio_buffer));
@@ -442,7 +649,13 @@ static int init(AVFilterContext *ctx)
     // Init VAD model context
     if (wctx->vad_model_path) {
         struct whisper_vad_context_params ctx_params = whisper_vad_default_context_params();
-        ctx_params.n_threads = ff_filter_get_nb_threads(ctx);
+        // At most whisper.cpp's own VAD default (4 in v1.9.1), never every
+        // logical core. Silero is a tiny LSTM evaluated as one small ggml graph
+        // per 512-sample chunk; with 16 threads the synchronisation dwarfs the
+        // work, and 15 s of audio took over five minutes instead of 7 s (#115).
+        // Fewer threads only when the user asked for fewer with -filter_threads.
+        // The VAD result does not depend on the thread count.
+        ctx_params.n_threads = FFMIN(ctx_params.n_threads, wctx->n_threads);
         // ctx_params.use_gpu = wctx->use_gpu; TODO (see: whisper_vad_init_context)
         ctx_params.gpu_device = wctx->gpu_device;
         wctx->ctx_vad = whisper_vad_init_from_file_with_params(wctx->vad_model_path, ctx_params);
@@ -454,22 +667,6 @@ static int init(AVFilterContext *ctx)
         wctx->vad_params.max_speech_duration_s = av_rescale(wctx->queue, 1, AV_TIME_BASE);
         wctx->vad_params.speech_pad_ms = 0;
         wctx->vad_params.samples_overlap = 0;
-    }
-
-    wctx->next_pts = AV_NOPTS_VALUE;
-
-    if (wctx->destination && strcmp("", wctx->destination)) {
-        const char *dst = wctx->destination;
-        if (!strcmp("-", dst))
-            dst = "pipe:1";
-        int ret = avio_open(&wctx->avio_context, dst, AVIO_FLAG_WRITE);
-
-        if (ret < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Could not open %s: %s\n", wctx->destination, av_err2str(ret));
-            return ret;
-        }
-
-        wctx->avio_context->direct = AVIO_FLAG_DIRECT;
     }
 
     if (!whisper_is_multilingual(wctx->ctx_wsp)) {
@@ -570,7 +767,7 @@ static void resolve_language(AVFilterContext *ctx)
         if (!lang_probs)
             return;
 
-        lang_id = whisper_lang_auto_detect(wctx->ctx_wsp, 0, ff_filter_get_nb_threads(ctx), lang_probs);
+        lang_id = whisper_lang_auto_detect(wctx->ctx_wsp, 0, wctx->n_threads, lang_probs);
         if (lang_id >= 0 && lang_id <= max_id) {
             wctx->detected_language = whisper_lang_str(lang_id);
             wctx->language_confidence = lang_probs[lang_id];
@@ -681,7 +878,7 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
         wctx->beam_size > 0 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
     params.language = wctx->language;
     params.translate = wctx->translate;
-    params.n_threads = ff_filter_get_nb_threads(ctx);
+    params.n_threads = wctx->n_threads;
     params.print_special = 0;
     params.print_progress = 0;
     params.print_realtime = 0;
@@ -1029,6 +1226,14 @@ static const AVClass whisper_class = {
     .version = LIBAVUTIL_VERSION_INT,
 };
 
+static const AVFilterPad whisper_inputs[] = {
+    {
+        .name         = "default",
+        .type         = AVMEDIA_TYPE_AUDIO,
+        .config_props = config_input,
+    },
+};
+
 const FFFilter ff_af_whisper = {
     .p.name = "whisper",
     .p.description = NULL_IF_CONFIG_SMALL("Transcribe audio using whisper.cpp."),
@@ -1038,7 +1243,7 @@ const FFFilter ff_af_whisper = {
     .uninit = uninit,
     .activate = activate,
     .priv_size = sizeof(WhisperContext),
-    FILTER_INPUTS(ff_audio_default_filterpad),
+    FILTER_INPUTS(whisper_inputs),
     FILTER_OUTPUTS(ff_audio_default_filterpad),
     FILTER_QUERY_FUNC2(query_formats),
 };

@@ -233,6 +233,9 @@ jobs:
           fetch "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav" \
                 "${A}/jfk.wav" \
                 "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"
+          fetch "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin" \
+                "${A}/ggml-silero-v5.1.2.bin" \
+                "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
           fetch "https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/v1.0.44/ffmpeg-9.0-linux-x86_64-v1.0.44.tar.gz" \
                 "${A}/ref.tar.gz" \
                 "191d9ef68a43b2756b973cb5ca1c6563b876750bfa582ea06271a4977e19008b"
@@ -242,6 +245,7 @@ jobs:
           {
             echo "WHISPER_TEST_MODEL=${A}/ggml-base.en.bin"
             echo "WHISPER_TEST_AUDIO=${A}/jfk.wav"
+            echo "WHISPER_TEST_VAD_MODEL=${A}/ggml-silero-v5.1.2.bin"
             echo "WHISPER_TEST_REFERENCE_FFMPEG=${A}/ref/ffmpeg"
             echo "WHISPER_TEST_REQUIRED=1"
           } >> "$GITHUB_ENV"
