@@ -14,6 +14,8 @@ ensureFfmpeg()
 		process.stdout.write(`${path}\n`);
 	})
 	.catch((error: unknown) => {
-		process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+		process.stderr.write(`${error instanceof Error
+			? error.message
+			: String(error)}\n`);
 		process.exit(1);
 	});
