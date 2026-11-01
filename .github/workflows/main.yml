@@ -647,15 +647,25 @@ jobs:
           echo "✅ PR build path passed."
 
   # ── Vulnerability scan the freshly-built images ─────────────────────────
-  # Master-only — running Trivy on every PR adds 5-10 min for no marginal
-  # benefit; vulns appear when a base image is rebuilt, which only happens
-  # on master.
+  # Master pushes, and the dev->master release PR from this repository. It
+  # used to be master-only (Trivy on every PR adds 5-10 min for no marginal
+  # benefit), which meant no scan could ever be seen before a release: the
+  # tool-status page showed every Trivy category as "workflow runs failing"
+  # for a month because the last master run had concluded failure through
+  # an unrelated reporting job, and nothing could refresh it short of the next
+  # release. The release PR's images are pushed under the commit SHA exactly
+  # like master's (reusable-docker-build tags both), so the RC gets a fresh
+  # scan and the page is current before the release lands. Other PRs still
+  # skip it; the same-repo check keeps a fork's branch called `dev` out.
   security-scan:
     needs: [detect-changes, build-platforms]
     if: |
       always() && !cancelled()
-      && github.event_name == 'push' && github.ref == 'refs/heads/master'
       && needs.build-platforms.result == 'success'
+      && ((github.event_name == 'push' && github.ref == 'refs/heads/master')
+          || (github.event_name == 'pull_request'
+              && github.base_ref == 'master' && github.head_ref == 'dev'
+              && github.event.pull_request.head.repo.full_name == github.repository))
     strategy:
       fail-fast: false
       matrix:
