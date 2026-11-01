@@ -206,20 +206,51 @@ jobs:
             zip)    unzip -o "${archive}" ;;
           esac
 
+      # stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; design in
+      # docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md).
+      # The three checks in tests/lib/stemsplit.sh read the assets
+      # tests/lib/stemsplit-assets.sh fetches, every one pinned by digest: the
+      # stemsplit tag's own suite, its tiny RoFormer models, the Spleeter model
+      # and the previous release's binary for this platform. Only where this
+      # runner can execute the binary; the cross-exec platforms get the same
+      # checks from the manual suite on real hardware. STEMSPLIT_TEST_REQUIRED
+      # turns a skip into a failure, so a fetch that quietly stopped supplying
+      # an asset cannot leave the gates "passing" by never running. The suite
+      # and its corpus generator are Python with numpy; setup-python gives
+      # every runner the same interpreter, and the numpy version is the one
+      # the stemsplit converter's own lock file names.
+      - name: Set up Python for the stemsplit checks
+        if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Fetch stemsplit test assets
+        if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --disable-pip-version-check numpy==2.4.6
+          chmod +x tests/lib/stemsplit-assets.sh
+          tests/lib/stemsplit-assets.sh "${{ matrix.platform }}" "${RUNNER_TEMP}/stemsplit-assets" >> "$GITHUB_ENV"
+          echo "STEMSPLIT_TEST_REQUIRED=1" >> "$GITHUB_ENV"
+
       # The whisper option tests (#112) need a real model, a clip, and the
       # v1.0.44 binary that default output must stay byte-identical to. Only
       # for linux-x86_64: the one platform whose smoke runner can execute its
-      # own binary and has a reference build of the same platform. All three
-      # are pinned by digest; a download that is not what was pinned fails the
-      # job instead of quietly testing something else. WHISPER_TEST_REQUIRED
-      # makes smoke.sh fail rather than skip if these ever stop arriving.
+      # own binary and has a reference build of the same platform. The model
+      # and the clip are pinned by digest; a download that is not what was
+      # pinned fails the job instead of quietly testing something else. The
+      # reference binary is the one the stemsplit step above already fetched,
+      # also by digest. WHISPER_TEST_REQUIRED makes smoke.sh fail rather than
+      # skip if these ever stop arriving.
       - name: Fetch whisper test assets (linux-x86_64)
         if: matrix.platform == 'linux-x86_64'
         shell: bash
         run: |
           set -euo pipefail
           A="${RUNNER_TEMP}/whisper-assets"
-          mkdir -p "${A}/ref"
+          mkdir -p "${A}"
           fetch() {  # fetch <url> <out> <sha256>
             curl -fsSL --retry 3 -o "$2" "$1" || { echo "::error::download failed: $1"; return 1; }
             local got
@@ -236,17 +267,13 @@ jobs:
           fetch "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin" \
                 "${A}/ggml-silero-v5.1.2.bin" \
                 "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
-          fetch "https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/v1.0.44/ffmpeg-9.0-linux-x86_64-v1.0.44.tar.gz" \
-                "${A}/ref.tar.gz" \
-                "191d9ef68a43b2756b973cb5ca1c6563b876750bfa582ea06271a4977e19008b"
-          tar -xzf "${A}/ref.tar.gz" -C "${A}/ref" ./ffmpeg
-          rm -f "${A}/ref.tar.gz"
-          chmod +x "${A}/ref/ffmpeg"
+          ref="${STEMSPLIT_ASSETS_DIR:?the stemsplit asset step must run first}/ref/ffmpeg"
+          [[ -x "${ref}" ]] || { echo "::error::no reference build at ${ref}"; exit 1; }
           {
             echo "WHISPER_TEST_MODEL=${A}/ggml-base.en.bin"
             echo "WHISPER_TEST_AUDIO=${A}/jfk.wav"
             echo "WHISPER_TEST_VAD_MODEL=${A}/ggml-silero-v5.1.2.bin"
-            echo "WHISPER_TEST_REFERENCE_FFMPEG=${A}/ref/ffmpeg"
+            echo "WHISPER_TEST_REFERENCE_FFMPEG=${ref}"
             echo "WHISPER_TEST_REQUIRED=1"
           } >> "$GITHUB_ENV"
 

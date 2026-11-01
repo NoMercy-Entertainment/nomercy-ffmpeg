@@ -14,6 +14,7 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/report.ps1"
 . "$HERE/lib/cpu-variant.ps1"
 . "$HERE/lib/whisper.ps1"
+. "$HERE/lib/stemsplit.ps1"
 
 Report-Init -Platform $Platform
 
@@ -334,6 +335,17 @@ run_custom_test "whisper_dtw_short" { Test-WhisperDtwShortWindow -FFmpegExe "$Wo
 run_custom_test "whisper_load_once" { Test-WhisperModelLoadedOnce -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 run_custom_test "whisper_threads" { Test-WhisperDefaultThreads -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 run_custom_test "whisper_vad_threads" { Test-WhisperVadThreads -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+
+# stemsplit 1.1.0 release gates (lib/stemsplit.ps1, through Git Bash): the
+# stemsplit tag's own suite with the tiny RoFormer models, 20/20 clean exits,
+# and Spleeter stems byte-identical with the previous release. They need the
+# assets tests/lib/stemsplit-assets.sh fetches (STEMSPLIT_ASSETS_DIR, or a
+# stemsplit-assets\ directory next to the binary); without them, or without
+# Git Bash, all three skip with a reason. On windows-aarch64, which CI cannot
+# execute, this is where they run.
+run_custom_test "stemsplit_suite" { Test-StemsplitSuite -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+run_custom_test "stemsplit_clean_exit" { Test-StemsplitCleanExit -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+run_custom_test "stemsplit_spleeter_ab" { Test-StemsplitSpleeterAB -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

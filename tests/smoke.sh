@@ -21,6 +21,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/lib/cpu-variant.sh"
 # shellcheck source=lib/whisper.sh
 source "${HERE}/lib/whisper.sh"
+# shellcheck source=lib/stemsplit.sh
+source "${HERE}/lib/stemsplit.sh"
 
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
@@ -324,5 +326,30 @@ run_whisper_check "whisper dtw survives 0.12 s windows (#113)" test_whisper_dtw_
 run_whisper_check "whisper loads its model once per run (#114)" test_whisper_model_loaded_once
 run_whisper_check "whisper default thread count is not slower than one thread (#115)" test_whisper_default_threads
 run_whisper_check "whisper vad_model with the default thread count (#115)" test_whisper_vad_threads
+
+# stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; the design is
+# docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md). The
+# same shape as the whisper checks: they need the assets
+# tests/lib/stemsplit-assets.sh fetches, which the workflow provides on every
+# platform whose binary this runner can execute, and STEMSPLIT_TEST_REQUIRED=1
+# there turns a skip into a failure for the same reason as above.
+run_stemsplit_check() {  # name, function
+  local name="$1" func="$2" out rc
+  out="$(FFMPEG="${ffmpeg_bin}" Platform="${PLATFORM}" "${func}" 2>&1)"; rc=$?
+  case ${rc} in
+  0) echo "${out}" | sed 's/^/   /'
+     ok "${name}" ;;
+  2) if [[ "${STEMSPLIT_TEST_REQUIRED:-0}" == "1" ]]; then
+       echo "${out}"
+       fail "${name}: skipped, but STEMSPLIT_TEST_REQUIRED=1"
+     fi
+     note "${name}: $(echo "${out}" | sed -n 's/^SKIP: //p' | head -1)" ;;
+  *) echo "${out}"
+     fail "${name} (exit ${rc})" ;;
+  esac
+}
+run_stemsplit_check "stemsplit v1.1.0 suite with the tiny RoFormer models and Spleeter" test_stemsplit_suite
+run_stemsplit_check "stemsplit 20/20 clean exits, Spleeter and RoFormer" test_stemsplit_clean_exit
+run_stemsplit_check "stemsplit Spleeter stems byte-identical with the previous release" test_stemsplit_spleeter_ab
 
 ok "Smoke test passed."

@@ -16,6 +16,8 @@ source "${HERE}/lib/report.sh"
 source "${HERE}/lib/cpu-variant.sh"
 # shellcheck source=lib/whisper.sh
 source "${HERE}/lib/whisper.sh"
+# shellcheck source=lib/stemsplit.sh
+source "${HERE}/lib/stemsplit.sh"
 
 Workspace="$1"
 shift 2>/dev/null || true
@@ -401,6 +403,16 @@ run_custom_test "whisper_dtw_short" "test_whisper_dtw_short_window"
 run_custom_test "whisper_load_once" "test_whisper_model_loaded_once"
 run_custom_test "whisper_threads" "test_whisper_default_threads"
 run_custom_test "whisper_vad_threads" "test_whisper_vad_threads"
+
+# stemsplit 1.1.0 release gates (lib/stemsplit.sh): the stemsplit tag's own
+# suite with the tiny RoFormer models, 20/20 clean exits, and Spleeter stems
+# byte-identical with the previous release. They need the assets
+# tests/lib/stemsplit-assets.sh fetches (STEMSPLIT_ASSETS_DIR, or a
+# stemsplit-assets/ directory next to the binary); without them all three SKIP
+# with a reason. On the platforms CI cannot execute, this is where they run.
+run_custom_test "stemsplit_suite" "test_stemsplit_suite"
+run_custom_test "stemsplit_clean_exit" "test_stemsplit_clean_exit"
+run_custom_test "stemsplit_spleeter_ab" "test_stemsplit_spleeter_ab"
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

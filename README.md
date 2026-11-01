@@ -85,7 +85,7 @@ Capability differences from `windows-x86_64`, all deliberate:
 
 ### Build Features
 - 🔒 **Security Scanning**: Trivy vulnerability assessment on all platform images
-- 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection
+- 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection. On every platform the runner can execute, the smoke job also runs the stemsplit release gates: the filter's own test suite with its tiny RoFormer models, 20/20 clean exits, and Spleeter stems byte-identical with the previous release (`tests/lib/stemsplit.sh`; assets via `tests/lib/stemsplit-assets.sh`)
 - 📦 **Artifact Management**: Version-stamped archives with SHA-256 sidecars and a GPG-signed `manifest.json`
 - 🔄 **Smart Builds**: Change detection rebuilds only the platforms affected by a commit
 - 🚦 **RC Pipeline**: Every master build publishes a Release Candidate prerelease before promotion to a final release
