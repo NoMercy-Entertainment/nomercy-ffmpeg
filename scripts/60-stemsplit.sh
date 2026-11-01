@@ -76,7 +76,16 @@ if ! grep -q "ff_af_stemsplit" "${stemsplit_dst}" || ! grep -q "define SS_VERSIO
 fi
 
 stemsplit_declared=$(sed -n 's/^#define SS_VERSION *"\([^"]*\)".*/\1/p' "${stemsplit_dst}" | head -1)
-log "  ✓ af_stemsplit.c ${stemsplit_tag} (declares ${stemsplit_declared:-?}), $(wc -c < "${stemsplit_dst}") bytes, sha256 $(sha256sum "${stemsplit_dst}" | cut -d' ' -f1)"
+stemsplit_line="af_stemsplit.c ${stemsplit_tag} (declares ${stemsplit_declared:-?}), $(wc -c < "${stemsplit_dst}") bytes, sha256 $(sha256sum "${stemsplit_dst}" | cut -d' ' -f1)"
+log "  ✓ ${stemsplit_line}"
+# The traceability promised above is only worth something if the line can be
+# read. init.sh sends a component's stdout to /dev/null and shows its log on
+# failure only, so on every green build this line used to exist nowhere a
+# person could see it. Pinned lines go through a second file that init.sh
+# prints after the component succeeds, so the CI build log carries the tag
+# and the digest a release can be checked against (the stemsplit handover
+# asks exactly that: compare this digest with the one at the release commit).
+echo "${stemsplit_line}" >> /ffmpeg_build_pins.log
 
 # 1. Register the filter extern declaration in allfilters.c
 echo "Step 1: Adding extern declaration to allfilters.c" > /ffmpeg_build.log

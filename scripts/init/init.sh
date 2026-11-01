@@ -165,6 +165,19 @@ for i in /scripts/*.sh; do
         text_with_padding "➖ ${name} was skipped" ""
         skipped_count=$((skipped_count + 1))
     elif [ ${result} -eq 0 ]; then # This is success
+        # Lines a component pinned for the build log (see 60-stemsplit.sh):
+        # the source tag and digest it built from. Shown on every build, not
+        # only under DEBUG, because they are what a release is traced back
+        # with; the rest of the component's log stays behind as before.
+        if [[ -f /ffmpeg_build_pins.log ]]; then
+            while IFS= read -r pin; do
+                [[ -n "${pin}" ]] && printf "%s\n" "📌 ${pin}"
+            done < /ffmpeg_build_pins.log
+            if [[ ${DEBUG} == "true" ]]; then
+                { echo "Pinned by ${name}"; cat /ffmpeg_build_pins.log; echo ""; } >>/full_ffmpeg_build.log
+            fi
+            rm -f /ffmpeg_build_pins.log
+        fi
         if [[ ${DEBUG} == "true" ]]; then
             if [[ -f /ffmpeg_build.log ]]; then
                 logtext=$(clean_whitespace "$(cat /ffmpeg_build.log)")
