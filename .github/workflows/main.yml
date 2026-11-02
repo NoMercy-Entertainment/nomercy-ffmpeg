@@ -545,7 +545,7 @@ jobs:
           # bring partial releases back. It runs before anything is tagged.
           missing=""
           for platform in ${{ needs.detect-changes.outputs.all-platforms }}; do
-            n=$(find release/ -maxdepth 1 -name "ffmpeg-${FFMPEG_VERSION}-${platform}-${VERSION}.*" ! -name "*.sha256" | wc -l)
+            n=$(find release/ -maxdepth 1 -name "ffmpeg-${FFMPEG_VERSION}-${platform}-${VERSION}-rc.*" ! -name "*.sha256" | wc -l)
             if [[ "${n}" -ne 1 ]]; then
               missing="${missing} ${platform}(${n})"
             fi
