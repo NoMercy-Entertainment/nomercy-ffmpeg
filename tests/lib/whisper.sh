@@ -465,7 +465,7 @@ test_whisper_vad_threads() {
 test_whisper_defaults_unchanged() {
 	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
 	local ref="${WHISPER_TEST_REFERENCE_FFMPEG:-}"
-	local d fmt
+	local d fmt rc
 
 	_whisper_test_inputs || return 2
 	if [[ -z "${ref}" || ! -x "${ref}" ]]; then
@@ -482,8 +482,18 @@ test_whisper_defaults_unchanged() {
 	for fmt in json srt; do
 		_whisper_run "${ffmpeg}" "${d}/new.${fmt}" "${d}/new.err" "format=${fmt}:destination=-" \
 			|| { tail -5 "${d}/new.err"; echo "FAIL: format=${fmt} run of the build under test failed"; return 1; }
-		_whisper_run "${ref}" "${d}/ref.${fmt}" "${d}/ref.err" "format=${fmt}:destination=-" \
-			|| { tail -5 "${d}/ref.err"; echo "FAIL: format=${fmt} run of the reference failed"; return 1; }
+		_whisper_run "${ref}" "${d}/ref.${fmt}" "${d}/ref.err" "format=${fmt}:destination=-"
+		rc=$?
+		if [[ ${rc} -eq 136 ]]; then
+			# SIGFPE: the reference (v1.0.44) opens the host's Vulkan loader,
+			# which brings the host's glibc into it as a second libc, and dies
+			# when that glibc is not the 2.39 it was linked with (fixed in this
+			# build; design note 2026-11-02-vulkan-loader-glibc-guard). Nothing
+			# can be compared on such a host; CI compares on ubuntu-24.04.
+			echo "SKIP: the reference build dies on this host (SIGFPE: its Vulkan loader brings in a glibc other than its own 2.39); compare on a glibc-2.39 host"
+			return 2
+		fi
+		[[ ${rc} -eq 0 ]] || { tail -5 "${d}/ref.err"; echo "FAIL: format=${fmt} run of the reference failed (exit ${rc})"; return 1; }
 		# Two empty files compare equal; that must not count as a pass.
 		[[ -s "${d}/ref.${fmt}" ]] || { echo "FAIL: the reference wrote no ${fmt}"; return 1; }
 		cmp "${d}/new.${fmt}" "${d}/ref.${fmt}" \

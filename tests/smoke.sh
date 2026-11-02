@@ -186,7 +186,11 @@ assert_vulkan_startup() {  # bin, platform
   fi
   diag="$(vulkan_startup_ok "${bin}")"; rc=$?
   case ${rc} in
-  0) ok "vulkan: a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with either escape hatch set" ;;
+  0) if [[ -n "${WHISPER_TEST_MODEL:-}" && -f "${WHISPER_TEST_MODEL}" ]]; then
+       ok "vulkan: a ggml filter runs a whisper model to completion as the runner is, with no driver findable, with the loader pointed at nothing, and with either escape hatch set"
+     else
+       ok "vulkan: a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with either escape hatch set (no whisper model here, so a full run is not asserted)"
+     fi ;;
   1) echo "${diag}"
      fail "vulkan: the binary crashes initialising a ggml filter on a machine with no usable GPU driver" ;;
   *) echo "${diag}"

@@ -122,7 +122,15 @@ jobs:
           # execute an ARM64 PE any more than ubuntu can, so smoke.ps1 does the
           # same cross-exec downgrade and validates the PE header instead.
           declare -A OS=(
-            [linux-x86_64]=ubuntu-latest
+            # ubuntu-24.04 on purpose, not ubuntu-latest (26.04 since 2026-10):
+            # the smoke job runs the previous release's binary too (whisper
+            # defaults, stemsplit A/B), and a release before v1.0.45 dies on
+            # any host whose glibc is not the build's 2.39 when libvulkan1 is
+            # installed, which GitHub's images have. The build's glibc is the
+            # 24.04 one. The mismatch itself is covered by the foreign-glibc
+            # step, in containers. See
+            # docs/superpowers/specs/2026-11-02-vulkan-loader-glibc-guard-design.md.
+            [linux-x86_64]=ubuntu-24.04
             [linux-aarch64]=ubuntu-latest
             [windows-x86_64]=windows-latest
             [windows-aarch64]=windows-latest

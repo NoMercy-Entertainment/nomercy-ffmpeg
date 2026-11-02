@@ -286,6 +286,22 @@ jobs:
           chmod +x tests/smoke.sh
           tests/smoke.sh "${GITHUB_WORKSPACE}" "${FFMPEG_VERSION}" "${{ matrix.platform }}"
 
+      # The hosts this runner is not. The smoke job runs on the build's own
+      # glibc (ubuntu-24.04: the previous release's binary, which the whisper
+      # defaults and stemsplit A/B checks run, dies on any other, see
+      # detect-changes.yml). A statically linked binary that opens the host's
+      # Vulkan loader brings the host's libc in as a second libc and must stay
+      # on the CPU on every other glibc; this proves it does, on three of them
+      # and on the matching one with Mesa's drivers. tests/lib/foreign-glibc.sh
+      # is the same check for a developer's machine. Design:
+      # docs/superpowers/specs/2026-11-02-vulkan-loader-glibc-guard-design.md.
+      - name: Foreign glibc hosts (linux-x86_64)
+        if: matrix.platform == 'linux-x86_64'
+        shell: bash
+        run: |
+          chmod +x tests/lib/foreign-glibc.sh
+          tests/lib/foreign-glibc.sh ./ffmpeg "${WHISPER_TEST_MODEL:?}" "${WHISPER_TEST_AUDIO:?}"             "${STEMSPLIT_ASSETS_DIR:?}/spleeter-2stems-f16.gguf" "${STEMSPLIT_ASSETS_DIR:?}/audio/mix.wav"
+
       - name: Smoke test (windows)
         if: matrix.kind == 'windows'
         shell: pwsh

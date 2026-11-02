@@ -85,7 +85,7 @@ Capability differences from `windows-x86_64`, all deliberate:
 
 ### Build Features
 - 🔒 **Security Scanning**: Trivy vulnerability assessment on all platform images
-- 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection. On every platform the runner can execute, the smoke job also runs the stemsplit release gates: the filter's own test suite with its tiny RoFormer models, 20/20 clean exits, and Spleeter stems byte-identical with the previous release (`tests/lib/stemsplit.sh`; assets via `tests/lib/stemsplit-assets.sh`)
+- 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection. On every platform the runner can execute, the smoke job also runs the stemsplit release gates: the filter's own test suite with its tiny RoFormer models, 20/20 clean exits, and Spleeter stems byte-identical with the previous release (`tests/lib/stemsplit.sh`; assets via `tests/lib/stemsplit-assets.sh`). On linux-x86_64 the smoke job runs on ubuntu-24.04, the build's own glibc, and `tests/lib/foreign-glibc.sh` then runs the binary in Ubuntu 26.04, Ubuntu 22.04 and Debian 12 containers with the Vulkan loader installed, where it must stay on the CPU and say why
 - 📦 **Artifact Management**: Version-stamped archives with SHA-256 sidecars and a GPG-signed `manifest.json`
 - 🔄 **Smart Builds**: Change detection rebuilds only the platforms affected by a commit
 - 🚦 **RC Pipeline**: Every master build publishes a Release Candidate prerelease before promotion to a final release
@@ -498,6 +498,25 @@ knob if you see the "could not verify" message on a machine you know is fine.
 selector, not by the driver check. `NOMERCY_VK_ICD_GUARD` and
 `NOMERCY_VK_GUARD_MS` belong to the driver check, so they do nothing on Windows
 and macOS, which have none.
+
+**glibc.** On Linux the binary is statically linked, and the Vulkan loader it
+opens (`libvulkan.so.1`) is a shared library that brings the host's `libc.so.6`
+into the process as a second C library. glibc supports that only when the host's
+version is the one the binary was linked with: glibc 2.39, the Ubuntu 24.04 one,
+for the current builds (`strings ffmpeg | grep "GNU C Library"` prints it). On any
+other glibc the check reports
+
+```
+this machine's glibc is 2.43 and this binary was linked with glibc 2.39; a statically
+linked binary can open the vulkan loader only on the glibc it was linked with, so
+vulkan is off for this process and the filter runs on the CPU
+```
+
+and the loader is never opened. Releases before v1.0.45 did open it and died with
+a floating-point exception on the first whisper or stemsplit run on such a host,
+with or without a GPU driver installed and with `NOMERCY_GGML_GPU=0` too. Vulkan
+on Linux therefore needs a host whose glibc matches; a GPU-less host of any glibc
+runs the filters on the CPU as before.
 
 **Platforms.**
 

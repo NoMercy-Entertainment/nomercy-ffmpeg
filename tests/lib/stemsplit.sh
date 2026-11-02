@@ -335,7 +335,7 @@ _stemsplit_ab_run() {
 
 test_stemsplit_spleeter_ab() {
 	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
-	local variants variant ref i in opts label b w same f n pass=0 fail=0
+	local variants variant ref i in opts label b w same f n pass=0 fail=0 rc
 
 	_stemsplit_inputs || return 2
 	if [[ -z "${Platform:-}" ]]; then
@@ -375,8 +375,19 @@ test_stemsplit_spleeter_ab() {
 			i=$((i + 1))
 			label="${in}${opts:- (defaults)}"
 			b="work/ab/${variant}/${i}/ref"; w="work/ab/${variant}/${i}/new"
-			if ! _stemsplit_ab_run "${ref}" "${b}" "${in}" "${opts}" "${v}"; then
-				fail=$((fail + 1)); echo "  FAIL  ${label} (the reference binary failed)"; continue
+			_stemsplit_ab_run "${ref}" "${b}" "${in}" "${opts}" "${v}"
+			rc=$?
+			if [[ ${rc} -eq 136 ]]; then
+				# SIGFPE: the reference (v1.0.44) opens the host's Vulkan loader,
+				# which brings the host's glibc in as a second libc, and dies when
+				# that is not the 2.39 it was linked with (fixed in this build;
+				# design note 2026-11-02-vulkan-loader-glibc-guard). No A/B is
+				# possible on such a host; CI runs this gate on ubuntu-24.04.
+				echo "SKIP: the reference build dies on this host (SIGFPE: its Vulkan loader brings in a glibc other than its own 2.39); run the A/B gate on a glibc-2.39 host"
+				return 2
+			fi
+			if [[ ${rc} -ne 0 ]]; then
+				fail=$((fail + 1)); echo "  FAIL  ${label} (the reference binary failed, exit ${rc})"; continue
 			fi
 			if ! _stemsplit_ab_run "${SS_FFMPEG}" "${w}" "${in}" "${opts}" "${v}"; then
 				fail=$((fail + 1)); echo "  FAIL  ${label} (the binary under test failed)"; continue

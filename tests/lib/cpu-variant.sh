@@ -387,23 +387,46 @@ _vulkan_write_silence() {
 #       reason. Never reported as a pass.
 # $1 = ffmpeg, $2 = "lavfi" or a path to a wav.
 _vulkan_filter_probe() {
-	local ffmpeg="$1" input="$2" out code
+	local ffmpeg="$1" input="$2" out code filter="whisper" proof="No whisper model path specified"
+
+	# With a model (WHISPER_TEST_MODEL, as CI sets it on linux-x86_64) the
+	# probe transcribes, which is what reached the crash the model-less probe
+	# never did: a statically linked binary whose host glibc is not the one it
+	# was linked with dies on the first allocation from a thread inside the
+	# host libc the Vulkan loader brought in, well after ggml init returned
+	# (run 41368486061: SIGFPE on every run with a model; the model-less run
+	# "passed"). The proof is then a completed run, not the model rejection.
+	# The link is leaf-named inside a scratch directory because avfilter reads
+	# ':' as its option separator and the model may live on a path with one.
+	if [[ -n "${WHISPER_TEST_MODEL:-}" && -f "${WHISPER_TEST_MODEL}" ]]; then
+		local d
+		d="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/nm-vk-probe-$$")"
+		mkdir -p "${d}"
+		ln -s "$(cd "$(dirname "${WHISPER_TEST_MODEL}")" && pwd)/$(basename "${WHISPER_TEST_MODEL}")" "${d}/model.bin" 2>/dev/null \
+			|| cp "${WHISPER_TEST_MODEL}" "${d}/model.bin"
+		filter="whisper=model=${d}/model.bin:use_gpu=0:queue=1"
+		proof=""
+	fi
 	if [[ "${input}" == "lavfi" ]]; then
-		out=$("${ffmpeg}" -hide_banner -loglevel error -nostats \
-			-f lavfi -i "anullsrc=channel_layout=mono:sample_rate=16000" -t 0.1 \
-			-af whisper -f null - 2>&1)
+		out=$("${ffmpeg}" -hide_banner -loglevel error -nostats -nostdin \
+			-f lavfi -i "anullsrc=channel_layout=mono:sample_rate=16000" -t 1.5 \
+			-af "${filter}" -f null - 2>&1 </dev/null)
 	else
-		out=$("${ffmpeg}" -hide_banner -loglevel error -nostats \
-			-i "${input}" -t 0.1 -af whisper -f null - 2>&1)
+		out=$("${ffmpeg}" -hide_banner -loglevel error -nostats -nostdin \
+			-i "${input}" -t 1.5 -af "${filter}" -f null - 2>&1 </dev/null)
 	fi
 	code=$?
 
-	# Positive proof FIRST, and it is the real discriminator. af_whisper.c
-	# prints this only after nm_ggml_gpu_usable() and ggml_backend_load_all()
-	# have both returned (af_whisper.c:168-182), so seeing it means the
-	# process reached ggml init and came back. A crash during init means it
-	# never prints.
-	if echo "${out}" | grep -q "No whisper model path specified"; then
+	# Positive proof FIRST, and it is the real discriminator. Without a model,
+	# af_whisper.c prints the rejection only after nm_ggml_gpu_usable() and
+	# ggml_backend_load_all() have both returned (af_whisper.c:168-182), so
+	# seeing it means the process reached ggml init and came back. With a
+	# model, the proof is the run finishing with exit 0. A crash gets to
+	# neither.
+	if [[ -z "${proof}" && ${code} -eq 0 ]]; then
+		return 0
+	fi
+	if [[ -n "${proof}" ]] && echo "${out}" | grep -q "${proof}"; then
 		return 0
 	fi
 
