@@ -174,6 +174,13 @@ test_stemsplit_suite() {
 		grep -E '^ *FAIL ' "${SS_WORK}/suite.txt" | sed 's/^ */   /'
 		echo "--- last lines ---"
 		tail -20 "${SS_WORK}/suite.txt"
+		# What the filter itself said in the runs the suite kept. CI has no
+		# other way to see it, and a FAIL line alone can take a day to
+		# explain (the darwin-arm64 run of #122: "metadata: cpu, log: mtl"
+		# meant "Metal opened, then refused the graph's PAD op").
+		echo "--- warnings the filter logged in the suite's runs ---"
+		grep -hE 'stemsplit: .*(cannot run|falling back|using the CPU|running on the CPU|refus)' \
+			"${SS_WORK}"/suite/*.log 2>/dev/null | sed -E 's/^\[[^]]*\] //' | sort | uniq -c | sort -rn | head -10
 		echo "FAIL: ${failed} check(s) of the stemsplit v1.1.0 suite failed (full log: ${SS_WORK}/suite.log)"
 		return 1
 	fi

@@ -172,6 +172,24 @@ backend_of() {   # backend_of <log-text>   -> "mtl" / "cpu" / "" (grep, case-sen
     printf '%s\n' "$1" | grep -oE "backend '[a-z0-9_]+'" | head -1 | sed "s/backend '//;s/'//"
 }
 
+# backend_of() reads the filter's init line, which names the device that
+# OPENED. Whether that device can run the graph is only decided at the first
+# inference: ggml aborts on an op the backend lacks, so the filter asks first
+# and, when refused, logs "'Apple M4' cannot run 'PAD' (...); using the CPU
+# backend instead" and moves to the CPU. ggml-metal (whisper.cpp 1.9.1)
+# refuses GGML_OP_PAD with padding before the data, which Spleeter's
+# TensorFlow "SAME" padding needs, so stemsplit's Spleeter graph never runs
+# on Metal; whisper's does. The per-frame lavfi.stemsplit.backend metadata is
+# written after that decision, so it is what the gates below trust. Until
+# this was read, gates 4a and 4b compared the CPU with the CPU and reported
+# "bit-identical" and "ratio 1.001" as Metal results (run 41304346412).
+ran_on() {       # ran_on <log-text>      -> "mtl" / "cpu" / "" (lavfi.stemsplit.backend)
+    printf '%s\n' "$1" | grep -oE "lavfi\.stemsplit\.backend=[a-z0-9_]+" | head -1 | sed 's/.*=//'
+}
+refused_op() {   # refused_op <log-text>  -> the ggml op the device could not run, or ""
+    printf '%s\n' "$1" | grep -oE "cannot run '[A-Z0-9_]+'" | head -1 | sed "s/cannot run '//;s/'//"
+}
+
 # ---------------------------------------------------------- gate 1: MSL compiles
 
 hr
@@ -389,18 +407,33 @@ else
     CPU_WAV="${TMP}/g4_cpu.wav"
     MTL_WAV="${TMP}/g4_mtl.wav"
 
+    # ametadata prints lavfi.stemsplit.backend for every frame: what ran, not
+    # what opened (see ran_on). Metadata only, so the wav files are unchanged.
+    SS_TAP=",ametadata=mode=print:key=lavfi.stemsplit.backend"
     CPU_LOG="$("${FF}" -hide_banner -loglevel info -nostats -y -t 30 -i "${SS_INPUT_PATH}" -vn \
-        -af "stemsplit=model=${SS_MODEL_PATH}:stem=accompaniment:use_gpu=0" -f wav "${CPU_WAV}" 2>&1)"
+        -af "stemsplit=model=${SS_MODEL_PATH}:stem=accompaniment:use_gpu=0${SS_TAP}" -f wav "${CPU_WAV}" 2>&1)"
     MTL_LOG="$("${FF}" -hide_banner -loglevel info -nostats -y -t 30 -i "${SS_INPUT_PATH}" -vn \
-        -af "stemsplit=model=${SS_MODEL_PATH}:stem=accompaniment:use_gpu=1" -f wav "${MTL_WAV}" 2>&1)"
+        -af "stemsplit=model=${SS_MODEL_PATH}:stem=accompaniment:use_gpu=1${SS_TAP}" -f wav "${MTL_WAV}" 2>&1)"
 
     CPU_BACKEND="$(backend_of "${CPU_LOG}")"
     MTL_BACKEND="$(backend_of "${MTL_LOG}")"
-    echo "  cpu run backend: ${CPU_BACKEND:-<none>}   metal run backend: ${MTL_BACKEND:-<none>}"
+    MTL_RAN="$(ran_on "${MTL_LOG}")"
+    MTL_REFUSED="$(refused_op "${MTL_LOG}")"
+    echo "  cpu run backend: ${CPU_BACKEND:-<none>}   use_gpu=1 run: opened '${MTL_BACKEND:-<none>}', frames ran on '${MTL_RAN:-<none>}'${MTL_REFUSED:+ (the device cannot run ${MTL_REFUSED})}"
+    if [ "${MTL_RAN}" = "mtl" ]; then
+        SS_MODE="metal"
+    elif [ "${MTL_RAN}" = "cpu" ] && [ -n "${MTL_REFUSED}" ]; then
+        SS_MODE="fallback"
+    else
+        SS_MODE="unknown"
+    fi
 
     if [ "${MTL_BACKEND}" != "mtl" ]; then
         G4A_STATUS="FAIL"
         G4A_REASON="the use_gpu=1 run did not report backend='mtl' (got '${MTL_BACKEND:-<none>}') -- this comparison would prove nothing"
+    elif [ "${SS_MODE}" = "unknown" ]; then
+        G4A_STATUS="FAIL"
+        G4A_REASON="the use_gpu=1 run opened mtl but its frames report backend '${MTL_RAN:-<none>}' and no refusal is logged -- the filter's log and metadata disagree; investigate before trusting any comparison"
     elif [ ! -s "${CPU_WAV}" ] || [ ! -s "${MTL_WAV}" ]; then
         G4A_STATUS="FAIL"
         G4A_REASON="one of the two output files is empty -- a backend that produced no audio would trivially 'match' nothing, so this is a hard fail, not a pass by omission"
@@ -423,7 +456,13 @@ else
             # Cancelled to exact silence: the two outputs are bit-identical.
             G4A_STATUS="PASS"
             G4A_DB="-inf"
-            G4A_REASON="stemsplit: cpu and mtl output null to exact silence -- bit-identical, the strongest result this gate can report"
+            if [ "${SS_MODE}" = "metal" ]; then
+                G4A_REASON="stemsplit: cpu and mtl output null to exact silence -- bit-identical, the strongest result this gate can report"
+            else
+                # Identical because the same code ran twice. That proves the
+                # fallback is clean, and nothing about Metal.
+                G4A_REASON="stemsplit did not run on Metal: the device opened, refused the Spleeter graph (${MTL_REFUSED}), said so and ran on the CPU; that run nulls against the use_gpu=0 run to exact silence, so the fallback is clean. Metal evidence for stemsplit: none -- the whisper transcript is this gate's Metal proof"
+            fi
         elif [ "${SIG_DB}" = "-inf" ]; then
             # The reference is silent, so a null would mean nothing at all.
             G4A_STATUS="FAIL"
@@ -436,7 +475,10 @@ else
             G4A_DB="${REL_DB}"
             echo "  cpu signal: ${SIG_DB} dBFS   diff (cpu-metal): ${DIFF_DB} dBFS   relative: ${REL_DB} dB"
             THRESHOLD_OK="$(awk -v r="${REL_DB}" 'BEGIN{ print (r < -55) ? "1" : "0" }')"
-            if [ "${THRESHOLD_OK}" = "1" ]; then
+            if [ "${SS_MODE}" = "fallback" ]; then
+                G4A_STATUS="FAIL"
+                G4A_REASON="stemsplit ran on the CPU after Metal refused ${MTL_REFUSED}, yet its output differs from the use_gpu=0 run by ${REL_DB} dB -- a CPU fallback must be identical to the CPU run"
+            elif [ "${THRESHOLD_OK}" = "1" ]; then
                 G4A_STATUS="PASS"
                 G4A_REASON="stemsplit: ${REL_DB} dB relative difference, under the -55 dB bar the Vulkan work used"
             else
@@ -502,8 +544,12 @@ else
     # Warm up the Metal path first so the one-time shader compile (gate 2's
     # number) does not get charged to this comparison -- we want steady-state
     # throughput, not compile latency.
-    "${FF}" -hide_banner -loglevel error -nostats -t 1 -i "${SS_INPUT_PATH}" -vn \
-        -af "stemsplit=model=${SS_MODEL_PATH}:stem=accompaniment:use_gpu=1" -f null - >/dev/null 2>&1
+    # The warm-up also taps the per-frame backend (see ran_on): the timed
+    # runs below stay untapped so the printing cannot enter the timing.
+    G4B_WARM_LOG="$("${FF}" -hide_banner -loglevel info -nostats -t 1 -i "${SS_INPUT_PATH}" -vn \
+        -af "stemsplit=model=${SS_MODEL_PATH}:stem=accompaniment:use_gpu=1,ametadata=mode=print:key=lavfi.stemsplit.backend" -f null - 2>&1)"
+    G4B_RAN="$(ran_on "${G4B_WARM_LOG}")"
+    G4B_REFUSED="$(refused_op "${G4B_WARM_LOG}")"
 
     # Medians of paired runs, not one of each. Measured on an M4 over seven
     # pairs before this was written:
@@ -554,12 +600,15 @@ else
     CPU_BACKEND_SPEED="$(backend_of "$(cat "${SPEED_LOG_CPU}")")"
     MTL_BACKEND_SPEED="$(backend_of "$(cat "${SPEED_LOG_MTL}")")"
     echo "  ${G4B_RUNS} paired runs, alternating, 30s of audio each"
-    echo "  cpu   (backend=${CPU_BACKEND_SPEED:-<none>}): median ${G4B_CPU_T}s   spread $(g4b_spread "${G4B_CPU_F}")"
-    echo "  metal (backend=${MTL_BACKEND_SPEED:-<none>}): median ${G4B_METAL_T}s   spread $(g4b_spread "${G4B_MTL_F}")"
+    echo "  use_gpu=0 (backend=${CPU_BACKEND_SPEED:-<none>}): median ${G4B_CPU_T}s   spread $(g4b_spread "${G4B_CPU_F}")"
+    echo "  use_gpu=1 (opened '${MTL_BACKEND_SPEED:-<none>}', frames ran on '${G4B_RAN:-<none>}'${G4B_REFUSED:+, the device cannot run ${G4B_REFUSED}}): median ${G4B_METAL_T}s   spread $(g4b_spread "${G4B_MTL_F}")"
 
     if [ "${MTL_BACKEND_SPEED}" != "mtl" ]; then
         G4B_STATUS="FAIL"
         G4B_REASON="the timed use_gpu=1 runs did not report backend=mtl (got '${MTL_BACKEND_SPEED:-<none>}') -- no speed comparison is meaningful without it"
+    elif [ "${G4B_RAN}" != "mtl" ] && { [ "${G4B_RAN}" != "cpu" ] || [ -z "${G4B_REFUSED}" ]; }; then
+        G4B_STATUS="FAIL"
+        G4B_REASON="the use_gpu=1 run opened mtl but its frames report backend '${G4B_RAN:-<none>}' with no refusal logged -- log and metadata disagree; no timing is meaningful until that is understood"
     else
         G4B_RATIO="$(awk -v c="${G4B_CPU_T}" -v m="${G4B_METAL_T}" 'BEGIN{ if (c>0) printf "%.3f", m/c; else print "n/a" }')"
         # 1.15 is a REGRESSION bar, not a performance target. The measured
@@ -575,12 +624,20 @@ else
         # only and says nothing about whisper, which defaults to the GPU for
         # reasons measured elsewhere.
         G4B_SLOWER="$(awk -v r="${G4B_RATIO}" 'BEGIN{ print (r > 1.15) ? "1" : "0" }')"
+        if [ "${G4B_RAN}" = "cpu" ]; then
+            # Both sides ran on the CPU; the ratio is the cost of opening
+            # Metal, uploading the weights and falling back, which a Mac user
+            # with use_gpu=1 pays on every run. The same bar applies to it.
+            G4B_WHAT="use_gpu=1 (ran on the CPU: Metal refused ${G4B_REFUSED}) median ${G4B_METAL_T}s against use_gpu=0 median ${G4B_CPU_T}s, ratio ${G4B_RATIO} -- the cost of the fallback, not a Metal speed"
+        else
+            G4B_WHAT="metal median ${G4B_METAL_T}s against cpu median ${G4B_CPU_T}s, ratio ${G4B_RATIO}"
+        fi
         if [ "${G4B_SLOWER}" = "1" ]; then
             G4B_STATUS="FAIL"
-            G4B_REASON="metal median ${G4B_METAL_T}s is ${G4B_RATIO}x the cpu median ${G4B_CPU_T}s -- more than 15% slower, outside this machine's measured noise and a real regression"
+            G4B_REASON="${G4B_WHAT} -- more than 15% slower, outside this machine's measured noise and a real regression"
         else
             G4B_STATUS="PASS"
-            G4B_REASON="metal median ${G4B_METAL_T}s against cpu median ${G4B_CPU_T}s, ratio ${G4B_RATIO} (bar: not above 1.15)"
+            G4B_REASON="${G4B_WHAT} (bar: not above 1.15)"
         fi
     fi
 fi
@@ -609,8 +666,8 @@ echo "Gate 4b (Metal not materially slower):  ${G4B_STATUS} -- ${G4B_REASON}"
 echo "---"
 fmt_s() { [ -n "${1:-}" ] && printf '%ss' "$1" || printf 'n/a'; }
 echo "timings: baseline=$(fmt_s "${T1_VERSION:-}")  stemsplit#1=$(fmt_s "${T2_STEMSPLIT1:-}")  stemsplit#2=$(fmt_s "${T3_STEMSPLIT2:-}")  subtraction=$(fmt_s "${SUBTRACTION:-}")"
-echo "stemsplit cpu=$(fmt_s "${G4B_CPU_T:-}")  metal=$(fmt_s "${G4B_METAL_T:-}")  (medians, 30s of audio)"
-echo "audio relative dB (stemsplit, cpu vs metal): ${G4A_DB:-n/a}"
+echo "stemsplit use_gpu=0=$(fmt_s "${G4B_CPU_T:-}")  use_gpu=1=$(fmt_s "${G4B_METAL_T:-}") ran on '${G4B_RAN:-?}'  (medians, 30s of audio)"
+echo "audio relative dB (stemsplit, use_gpu=0 vs use_gpu=1, which ran on '${MTL_RAN:-?}'): ${G4A_DB:-n/a}"
 echo "---"
 echo "OVERALL: ${OVERALL}"
 echo "=== END SUMMARY ==="

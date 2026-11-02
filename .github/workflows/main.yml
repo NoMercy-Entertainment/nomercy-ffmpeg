@@ -267,7 +267,9 @@ jobs:
           fetch "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin" \
                 "${A}/ggml-silero-v5.1.2.bin" \
                 "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
-          ref="${STEMSPLIT_ASSETS_DIR:?the stemsplit asset step must run first}/ref/ffmpeg"
+          # stemsplit-assets.sh keeps one reference build per platform under
+          # ref/<platform>/, so one machine can hold several platforms' assets.
+          ref="${STEMSPLIT_ASSETS_DIR:?the stemsplit asset step must run first}/ref/${{ matrix.platform }}/ffmpeg"
           [[ -x "${ref}" ]] || { echo "::error::no reference build at ${ref}"; exit 1; }
           {
             echo "WHISPER_TEST_MODEL=${A}/ggml-base.en.bin"
