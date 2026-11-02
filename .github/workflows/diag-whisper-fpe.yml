@@ -1,0 +1,102 @@
+name: Diagnose whisper SIGFPE on ubuntu-latest
+
+# Temporary. The linux-x86_64 smoke job of the v1.0.45 release candidate
+# (run 41368486061) dies with SIGFPE in the first whisper run, before the
+# filter logs anything. The same binary runs clean on an Intel host, with and
+# without Mesa's software Vulkan driver; GitHub's runners are AMD EPYC. This
+# workflow reruns that command on a runner under gdb, with the CPU variant and
+# the GPU path switched off one at a time, and runs the v1.0.44 release the
+# same way, so the crash site and the first bad version are known before the
+# fix is written. Delete it once the cause is in the main pipeline's tests.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: pipeline run whose build-artifacts hold the linux-x86_64 tarball
+        required: true
+        default: "41368486061"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Machine
+        run: |
+          set -x
+          lscpu | sed -n '1,30p'
+          nproc
+          for c in 0 1 2 3; do cat /sys/devices/system/cpu/cpu$c/topology/thread_siblings_list 2>/dev/null || true; done
+          ls /usr/share/vulkan/icd.d/ 2>/dev/null || echo "no ICDs"
+          dpkg -l | grep -iE 'mesa-vulkan|libvulkan' || true
+          which gdb && gdb --version | head -1
+
+      - name: Binaries and assets
+        run: |
+          set -euo pipefail
+          mkdir -p w && cd w
+          gh run download "${{ github.event.inputs.run_id }}" -R "${GITHUB_REPOSITORY}" -n build-artifacts -D art
+          tar xzf art/ffmpeg-9.0-linux-x86_64.tar.gz
+          find . -name ffmpeg -type f
+          cp "$(find . -name ffmpeg -type f | head -1)" ffmpeg-rc && chmod +x ffmpeg-rc
+          curl -fsSL --retry 3 -o ref.tar.gz "https://github.com/${GITHUB_REPOSITORY}/releases/download/v1.0.44/ffmpeg-9.0-linux-x86_64-v1.0.44.tar.gz"
+          mkdir ref && tar xzf ref.tar.gz -C ref && cp "$(find ref -name ffmpeg -type f | head -1)" ffmpeg-ref && chmod +x ffmpeg-ref
+          fetch() { curl -fsSL --retry 3 -o "$2" "$1"; echo "$3  $2" | sha256sum -c -; }
+          fetch https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin model.bin a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
+          fetch https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav jfk.wav 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e
+          sha256sum ffmpeg-rc ffmpeg-ref
+
+      - name: Run matrix (exit codes only)
+        run: |
+          cd w
+          run() {  # run <label> <binary> [env...]
+            local label="$1" bin="$2"; shift 2
+            env "$@" "./${bin}" -hide_banner -nostdin -nostats -filter_threads 1 -i jfk.wav \
+              -af "whisper=model=model.bin:use_gpu=0:format=json:destination=-" -f null - >"out-${label}.json" 2>"err-${label}.txt" </dev/null
+            local rc=$?
+            echo "=== ${label}: exit ${rc} ($(wc -l <"out-${label}.json") json lines)"
+            grep -E 'whisper:|Floating|dumped' "err-${label}.txt" | head -6 || true
+            return 0
+          }
+          run rc            ffmpeg-rc
+          run rc-baseline   ffmpeg-rc  NOMERCY_GGML_CPU=x64
+          run rc-sse42      ffmpeg-rc  NOMERCY_GGML_CPU=sse42
+          run rc-ivybridge  ffmpeg-rc  NOMERCY_GGML_CPU=ivybridge
+          run rc-nogpu      ffmpeg-rc  NOMERCY_GGML_GPU=0
+          run rc-noicd      ffmpeg-rc  VK_ICD_FILENAMES=/nonexistent.json VK_DRIVER_FILES=/nonexistent.json
+          run ref           ffmpeg-ref
+          run ref-baseline  ffmpeg-ref NOMERCY_GGML_CPU=x64
+          echo "=== rc, ffmpeg's default filter thread count"
+          ./ffmpeg-rc -hide_banner -nostdin -nostats -i jfk.wav \
+            -af "whisper=model=model.bin:use_gpu=0:format=json:destination=-" -f null - >out-rc-defthreads.json 2>err-rc-defthreads.txt </dev/null
+          echo "exit $? ($(wc -l <out-rc-defthreads.json) json lines)"; grep -E 'whisper:' err-rc-defthreads.txt | head -4 || true
+
+      - name: Backtrace under gdb (rc binary, as the smoke test runs it)
+        if: always()
+        run: |
+          cd w
+          gdb -q -batch \
+            -ex "handle SIGFPE stop print" \
+            -ex "run" \
+            -ex "echo \n=== bt ===\n" -ex "bt 30" \
+            -ex "echo \n=== registers ===\n" -ex "info registers" \
+            -ex "echo \n=== code ===\n" -ex "x/16i \$pc-32" \
+            -ex "echo \n=== threads ===\n" -ex "info threads" \
+            --args ./ffmpeg-rc -hide_banner -nostdin -nostats -filter_threads 1 -i jfk.wav \
+              -af "whisper=model=model.bin:use_gpu=0:format=json:destination=-" -f null - 2>&1 | tail -120
+
+      - name: Backtrace under gdb (rc binary, baseline variant)
+        if: always()
+        run: |
+          cd w
+          NOMERCY_GGML_CPU=x64 gdb -q -batch \
+            -ex "run" -ex "bt 30" -ex "info registers rip rax rcx rdx" -ex "x/8i \$pc-16" \
+            --args ./ffmpeg-rc -hide_banner -nostdin -nostats -filter_threads 1 -i jfk.wav \
+              -af "whisper=model=model.bin:use_gpu=0:format=json:destination=-" -f null - 2>&1 | tail -60
