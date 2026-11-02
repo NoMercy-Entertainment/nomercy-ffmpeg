@@ -330,6 +330,7 @@ run_whisper_check "whisper dtw survives 0.12 s windows (#113)" test_whisper_dtw_
 run_whisper_check "whisper loads its model once per run (#114)" test_whisper_model_loaded_once
 run_whisper_check "whisper default thread count is not slower than one thread (#115)" test_whisper_default_threads
 run_whisper_check "whisper vad_model with the default thread count (#115)" test_whisper_vad_threads
+run_whisper_check "whisper segments end inside the window that produced them (#119)" test_whisper_segment_ends
 
 # stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; the design is
 # docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md). The

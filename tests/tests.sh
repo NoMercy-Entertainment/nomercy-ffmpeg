@@ -403,6 +403,8 @@ run_custom_test "whisper_dtw_short" "test_whisper_dtw_short_window"
 run_custom_test "whisper_load_once" "test_whisper_model_loaded_once"
 run_custom_test "whisper_threads" "test_whisper_default_threads"
 run_custom_test "whisper_vad_threads" "test_whisper_vad_threads"
+# #119 segments and words end inside their window (also needs the VAD model).
+run_custom_test "whisper_segment_ends" "test_whisper_segment_ends"
 
 # stemsplit 1.1.0 release gates (lib/stemsplit.sh): the stemsplit tag's own
 # suite with the tiny RoFormer models, 20/20 clean exits, and Spleeter stems

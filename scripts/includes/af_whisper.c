@@ -911,6 +911,11 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
     }
 
     const int n_segments = whisper_full_n_segments(wctx->ctx_wsp);
+    // The audio this window held, in ms. whisper padded it to 30 s, and a
+    // segment's times can land in that padding (#119). Truncated like the
+    // start-time advance in consume_buffer(), so a bounded end never passes
+    // the next window's start.
+    const int64_t window_ms = (int64_t) samples * 1000 / WHISPER_SAMPLE_RATE;
     char *segments_text = NULL;
 
     for (int i = 0; i < n_segments; ++i) {
@@ -932,14 +937,29 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
             continue;
         }
 
+        int64_t t0_ms = whisper_full_get_segment_t0(wctx->ctx_wsp, i) * 10;
+        int64_t t1_ms = whisper_full_get_segment_t1(wctx->ctx_wsp, i) * 10;
+
+        // A segment without a closing timestamp token ends where whisper's
+        // 30 s padding ends, not where this window's audio does, so with a
+        // VAD cut or at the end of the stream it ran past the window and
+        // overlapped the next one (#119). Bound it to the audio; a segment
+        // that starts in the padding came from nothing in the audio and is
+        // dropped, before it can count as speech for the language.
+        if (!nm_whisper_segment_in_window(window_ms, &t0_ms, &t1_ms)) {
+            av_log(ctx, AV_LOG_DEBUG,
+                   "  dropped a segment at %" PRId64 " ms, past this window's %" PRId64 " ms of audio: \"%s\"\n",
+                   timestamp_ms + t0_ms, window_ms, text_cleaned);
+            av_freep(&text_cleaned);
+            continue;
+        }
+
         // Real speech in this window: resolve the language before the first
         // segment is written so a JSON destination gets a leading detection
         // object. No-op once resolved; never reached for blank-only windows.
         resolve_language(ctx);
 
         const bool turn = whisper_full_get_segment_speaker_turn_next(wctx->ctx_wsp, i);
-        const int64_t t0_ms = whisper_full_get_segment_t0(wctx->ctx_wsp, i) * 10;
-        const int64_t t1_ms = whisper_full_get_segment_t1(wctx->ctx_wsp, i) * 10;
 
         av_log(ctx, AV_LOG_DEBUG, "  [%" PRId64 "-%" PRId64 "%s]: \"%s\"\n",
                timestamp_ms + t0_ms, timestamp_ms + t1_ms, turn ? " (turn)" : "", text_cleaned);

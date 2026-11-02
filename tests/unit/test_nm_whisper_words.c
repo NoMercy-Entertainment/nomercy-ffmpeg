@@ -416,6 +416,36 @@ static void test_model_header(void)
     CHECK(nm_whisper_parse_model_header(bad, sizeof(bad), &s) < 0);
 }
 
+/* #119: a segment is bounded to the audio its window held. */
+static void test_segment_in_window(void)
+{
+    int64_t t0, t1;
+
+    /* Inside the window: untouched. */
+    t0 = 100; t1 = 900;
+    CHECK(nm_whisper_segment_in_window(1380, &t0, &t1) == 1 && t0 == 100 && t1 == 900);
+    /* Ends exactly at the window: untouched. */
+    t0 = 0; t1 = 1380;
+    CHECK(nm_whisper_segment_in_window(1380, &t0, &t1) == 1 && t0 == 0 && t1 == 1380);
+    /* No closing timestamp token: the end lies in the padding, bounded. */
+    t0 = 340; t1 = 2000;
+    CHECK(nm_whisper_segment_in_window(1380, &t0, &t1) == 1 && t0 == 340 && t1 == 1380);
+    /* jfk.wav at the default queue: 47104 samples = 2944 ms, end token at 3000. */
+    t0 = 0; t1 = 3000;
+    CHECK(nm_whisper_segment_in_window(2944, &t0, &t1) == 1 && t0 == 0 && t1 == 2944);
+    /* Starts at or past the window's end: lies in the padding, dropped. */
+    t0 = 1380; t1 = 3000;
+    CHECK(nm_whisper_segment_in_window(1380, &t0, &t1) == 0);
+    t0 = 2000; t1 = 3000;
+    CHECK(nm_whisper_segment_in_window(1380, &t0, &t1) == 0);
+    /* A negative start is not a time; it becomes the window's start. */
+    t0 = -20; t1 = 500;
+    CHECK(nm_whisper_segment_in_window(1380, &t0, &t1) == 1 && t0 == 0 && t1 == 500);
+    /* An end before the start collapses onto the start, never before it. */
+    t0 = 500; t1 = 100;
+    CHECK(nm_whisper_segment_in_window(1380, &t0, &t1) == 1 && t0 == 500 && t1 == 500);
+}
+
 int main(void)
 {
     test_escape_unchanged_for_valid_input();
@@ -428,6 +458,7 @@ int main(void)
     test_words_unknown_times();
     test_words_blank_audio_and_empty();
     test_words_no_text_tokens();
+    test_segment_in_window();
     test_words_json();
     test_dtw_presets();
     test_model_header();

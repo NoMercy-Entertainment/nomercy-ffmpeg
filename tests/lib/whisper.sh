@@ -6,8 +6,12 @@
 # tests.sh: 0 pass, 2 skip (reason on a "SKIP: " line), anything else fail.
 #
 #   test_whisper_options            the new options do what they say
-#   test_whisper_defaults_unchanged without them, output is byte-identical to
-#                                   a reference build (v1.0.44)
+#   test_whisper_defaults_unchanged without them, output is that of a
+#                                   reference build (v1.0.44), byte for byte
+#                                   once its segment ends are bounded to
+#                                   their window (#119)
+#   test_whisper_segment_ends       segments and words end inside the window
+#                                   that produced them (#119)
 #
 # They need a model and a clip, which no platform archive ships:
 #
@@ -462,6 +466,173 @@ test_whisper_vad_threads() {
 	return 0
 }
 
+# _whisper_check_segment_ends <json> <err>
+# #119: every segment, and every word in it, ends inside the window that
+# produced it. The windows come from the "run transcription at X ms, N/M
+# samples" lines ffmpeg logs at the default level: X is where the window
+# started and N the samples it held. A segment belongs to the last window
+# that starts at or before it. Since the windows are back to back, an end
+# inside the window is also before the next window's start and before the
+# clip's end, which is what the overlaps of #119 violated. Refuses to pass
+# when no window is shorter than 30 s: nothing could run past one then.
+_whisper_check_segment_ends() {
+	python3 - "$@" <<'PY'
+import json, re, sys
+
+jpath, epath = sys.argv[1:3]
+text = open(epath, encoding="utf-8", errors="replace").read()
+win = [(int(m.group(1)), int(m.group(1)) + int(m.group(2)) * 1000 // 16000)
+       for m in re.finditer(r"run transcription at (\d+) ms, (\d+)/\d+ samples", text)]
+if not win:
+    sys.exit(f"{epath}: no 'run transcription' lines, so the windows are unknown")
+shortest = min(e - s for s, e in win)
+if shortest >= 30000:
+    sys.exit(f"{epath}: every window is 30 s or longer; nothing here can show a segment running past its window")
+with open(jpath, encoding="utf-8") as f:
+    segs = [json.loads(l) for l in f.read().split("\n") if l][1:]
+if not segs:
+    sys.exit(f"{jpath}: no segments")
+
+prev_end = None
+at_edge = 0
+for n, s in enumerate(segs, 1):
+    w = [x for x in win if x[0] <= s["start"]]
+    if not w:
+        sys.exit(f"{jpath}: segment {n} starts at {s['start']} ms, before the first window")
+    ws, we = w[-1]
+    if s["end"] > we:
+        sys.exit(f"{jpath}: segment {n} ends at {s['end']} ms, past its window [{ws}, {we}] (#119): {s['text']!r}")
+    if prev_end is not None and s["start"] < prev_end:
+        sys.exit(f"{jpath}: segment {n} starts at {s['start']} ms, before the previous one ended at {prev_end}: the segments overlap (#119)")
+    for x in s.get("words", []):
+        if x["end"] > we:
+            sys.exit(f"{jpath}: segment {n}: word {x['text']!r} ends at {x['end']} ms, past the window's end {we} (#119)")
+    if s["end"] == we:
+        at_edge += 1
+    prev_end = s["end"]
+print(f"{jpath}: {len(segs)} segment(s) inside their {len(win)} window(s) (shortest {shortest} ms), {at_edge} ending exactly at a window's end")
+PY
+}
+
+# _whisper_bound_reference <ref output> <json|srt> <new.err> <ref.err> <out>
+# The reference build (v1.0.44) lets a segment run past its window's audio
+# (#119); this build bounds it. For the defaults comparison the reference's
+# output is bounded the same way, from the windows the run under test
+# logged: each segment's end becomes the end of its window when it lay past
+# it, and a segment that starts in the padding is left out (this build drops
+# it). Everything else is kept byte for byte. Both builds must have cut the
+# same windows, or there is nothing to compare.
+_whisper_bound_reference() {
+	python3 - "$@" <<'PY'
+import re, sys
+
+src, fmt, new_err, ref_err, dst = sys.argv[1:6]
+
+def windows(path):
+    text = open(path, encoding="utf-8", errors="replace").read()
+    return [(int(m.group(1)), int(m.group(1)) + int(m.group(2)) * 1000 // 16000)
+            for m in re.finditer(r"run transcription at (\d+) ms, (\d+)/\d+ samples", text)]
+
+win = windows(new_err)
+if not win:
+    sys.exit(f"{new_err}: no 'run transcription' lines, so the windows are unknown")
+ref_win = windows(ref_err)
+if ref_win != win:
+    sys.exit(f"the two builds cut different windows: {win} under test, {ref_win} in the reference")
+
+def bound(start, end):
+    w = [x for x in win if x[0] <= start]
+    if not w or start >= w[-1][1]:
+        return None
+    return min(end, w[-1][1])
+
+with open(src, "rb") as f:
+    data = f.read().decode("utf-8", "surrogateescape")
+out, changed, dropped = [], 0, 0
+if fmt == "json":
+    for line in data.split("\n"):
+        m = re.match(r'(\{"start":(\d+),"end":)(\d+)(,.*)$', line)
+        if not m:
+            out.append(line)
+            continue
+        e = bound(int(m.group(2)), int(m.group(3)))
+        if e is None:
+            dropped += 1
+            continue
+        if e != int(m.group(3)):
+            changed += 1
+        out.append(f"{m.group(1)}{e}{m.group(4)}")
+    result = "\n".join(out)
+elif fmt == "srt":
+    def ms(h, mi, s, ml):
+        return ((int(h) * 60 + int(mi)) * 60 + int(s)) * 1000 + int(ml)
+    def stamp(t):
+        return "%02d:%02d:%02d,%03d" % (t // 3600000, t // 60000 % 60, t // 1000 % 60, t % 1000)
+    n = 0  # the filter numbers cues from 0
+    for block in data.split("\n\n"):
+        lines = block.split("\n")
+        m = re.fullmatch(r"(\d\d):(\d\d):(\d\d),(\d\d\d) --> (\d\d):(\d\d):(\d\d),(\d\d\d)", lines[1]) if len(lines) > 1 and re.fullmatch(r"\d+", lines[0]) else None
+        if not m:
+            out.append(block)
+            continue
+        start, end = ms(*m.groups()[:4]), ms(*m.groups()[4:])
+        e = bound(start, end)
+        if e is None:
+            dropped += 1
+            continue
+        if e != end:
+            changed += 1
+        out.append("\n".join([str(n), f"{stamp(start)} --> {stamp(e)}"] + lines[2:]))
+        n += 1
+    result = "\n\n".join(out)
+else:
+    sys.exit(f"unknown format {fmt}")
+with open(dst, "wb") as f:
+    f.write(result.encode("utf-8", "surrogateescape"))
+print(f"reference {fmt}: {changed} segment end(s) bounded to their window, {dropped} segment(s) in the padding left out")
+PY
+}
+
+# #119: whisper pads every window to 30 s, and a segment without a closing
+# timestamp token ended where that padding ends, not where the window's
+# audio does. With vad_model the windows are cut at speech, so segments ran
+# up to 30 s past them and overlapped their successors; even at the default
+# queue, jfk.wav's 2944 ms windows ended at 3000 ms. Both runs are checked
+# with _whisper_check_segment_ends. Needs the Silero model like
+# test_whisper_vad_threads; otherwise SKIP.
+test_whisper_segment_ends() {
+	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
+	local d vad mode opts
+
+	_whisper_test_inputs || return 2
+	vad="${WHISPER_TEST_VAD_MODEL:-}"
+	[[ -z "${vad}" && -f "$(dirname "${FFMPEG}")/ggml-silero-v5.1.2.bin" ]] && vad="$(dirname "${FFMPEG}")/ggml-silero-v5.1.2.bin"
+	if [[ -z "${vad}" || ! -f "${vad}" ]]; then
+		echo "SKIP: no VAD model in this environment (set WHISPER_TEST_VAD_MODEL to ggml-silero-v5.1.2.bin)"
+		return 2
+	fi
+	WT_BASELINE=""
+	_whisper_test_workdir
+	d="${WT_DIR}"
+	# shellcheck disable=SC2064
+	trap "rm -rf '${d}'" RETURN
+	cp "${vad}" "${d}/vad.bin"
+
+	for mode in queue vad; do
+		opts="format=json:destination=-:word_timestamps=1"
+		[[ "${mode}" == vad ]] && opts="${opts}:vad_model=vad.bin"
+		_whisper_run "${ffmpeg}" "${d}/${mode}.json" "${d}/${mode}.err" "${opts}" \
+			|| { tail -5 "${d}/${mode}.err"; echo "FAIL: the ${mode} run failed"; return 1; }
+		if [[ "${mode}" == vad ]] && ! grep -q "VAD detected" "${d}/vad.err"; then
+			echo "FAIL: VAD never cut a window, so no window shorter than the queue was transcribed"
+			return 1
+		fi
+		_whisper_check_json "${d}/${mode}.json" words || return 1
+		_whisper_check_segment_ends "${d}/${mode}.json" "${d}/${mode}.err" || return 1
+	done
+	return 0
+}
+
 test_whisper_defaults_unchanged() {
 	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
 	local ref="${WHISPER_TEST_REFERENCE_FFMPEG:-}"
@@ -496,9 +667,16 @@ test_whisper_defaults_unchanged() {
 		[[ ${rc} -eq 0 ]] || { tail -5 "${d}/ref.err"; echo "FAIL: format=${fmt} run of the reference failed (exit ${rc})"; return 1; }
 		# Two empty files compare equal; that must not count as a pass.
 		[[ -s "${d}/ref.${fmt}" ]] || { echo "FAIL: the reference wrote no ${fmt}"; return 1; }
-		cmp "${d}/new.${fmt}" "${d}/ref.${fmt}" \
-			|| { diff "${d}/new.${fmt}" "${d}/ref.${fmt}" | head -8; echo "FAIL: default format=${fmt} output differs from the reference"; return 1; }
-		echo "format=${fmt}: byte-identical to the reference ($(wc -c <"${d}/new.${fmt}") bytes)"
+		# #119: the reference lets a segment run past its window's audio
+		# (jfk.wav at the default queue: 2944 ms windows, ends at 3000 ms).
+		# This build bounds those ends; everything else must still match
+		# byte for byte, so the reference's output is bounded the same way
+		# first, from the windows this run logged.
+		_whisper_bound_reference "${d}/ref.${fmt}" "${fmt}" "${d}/new.err" "${d}/ref.err" "${d}/bounded.${fmt}" \
+			|| { echo "FAIL: could not bound the reference's ${fmt} output to its windows"; return 1; }
+		cmp "${d}/new.${fmt}" "${d}/bounded.${fmt}" \
+			|| { diff "${d}/new.${fmt}" "${d}/bounded.${fmt}" | head -8; echo "FAIL: default format=${fmt} output differs from the reference beyond the segment ends bounded to their window (#119)"; return 1; }
+		echo "format=${fmt}: identical to the reference with its segment ends bounded to their window ($(wc -c <"${d}/new.${fmt}") bytes)"
 	done
 	return 0
 }

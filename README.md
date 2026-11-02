@@ -725,6 +725,12 @@ absolute milliseconds, like `start` and `end`):
 - Starts are kept inside the segment and never go backwards. DTW can place a
   token slightly outside its segment.
 - A word ends where the next one starts; the last word ends with its segment.
+- A segment, and so its last word, ends inside the audio its window held.
+  whisper pads every window to 30 s, and a segment without a closing
+  timestamp token used to end where that padding ends: with `vad_model`,
+  up to 30 s past the speech and overlapping the next segment; at the
+  default `queue`, a few ms past the window. A segment that starts in the
+  padding came from nothing in the audio and is not written.
 - `p` is the mean probability of the word's tokens, between 0 and 1.
 - Text that whisper cut in the middle of a UTF-8 character comes out with
   `�` (U+FFFD) in its place, so every line is valid JSON. Valid text is never

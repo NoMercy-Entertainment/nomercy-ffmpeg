@@ -3,8 +3,11 @@
 # reasoning behind each one. Kept in lockstep with the bash version.
 #
 #   Test-WhisperOptions          the new options do what they say
-#   Test-WhisperDefaultsUnchanged without them, output is byte-identical to
-#                                 a reference build (v1.0.44)
+#   Test-WhisperDefaultsUnchanged without them, output is that of a reference
+#                                 build (v1.0.44), byte for byte once its
+#                                 segment ends are bounded to their window (#119)
+#   Test-WhisperSegmentEnds      segments and words end inside the window
+#                                 that produced them (#119)
 #
 # Inputs: WHISPER_TEST_MODEL (ggml-base.en.bin), WHISPER_TEST_AUDIO (jfk.wav)
 # and, for the defaults check, WHISPER_TEST_REFERENCE_FFMPEG (a v1.0.44
@@ -472,6 +475,167 @@ function Test-WhisperVadThreads {
     }
 }
 
+# The windows a run transcribed, from the "run transcription at X ms, N/M
+# samples" lines ffmpeg logs at the default level: X is where the window
+# started and N the samples it held. In order, as @{ Start; End } in ms.
+function Get-WhisperWindows {
+    param([string]$ErrFile)
+    $text = [System.IO.File]::ReadAllText($ErrFile)
+    $wins = New-Object System.Collections.Generic.List[object]
+    foreach ($m in [regex]::Matches($text, 'run transcription at (\d+) ms, (\d+)/\d+ samples')) {
+        $s = [int64]$m.Groups[1].Value
+        $wins.Add(@{ Start = $s; End = $s + [int64][math]::Floor([int64]$m.Groups[2].Value * 1000 / 16000) })
+    }
+    return ,$wins
+}
+
+# #119: every segment, and every word in it, ends inside the window that
+# produced it (the last window starting at or before it). The windows are
+# back to back, so this also puts the end before the next window's start and
+# before the clip's end. Refuses to pass when no window is shorter than 30 s.
+# Returns '' or the reason.
+function Test-WhisperSegmentsInWindows {
+    param([string]$JsonPath, [string]$ErrFile)
+    $wins = Get-WhisperWindows -ErrFile $ErrFile
+    if ($wins.Count -eq 0) { return "$ErrFile has no 'run transcription' lines, so the windows are unknown" }
+    $shortest = ($wins | ForEach-Object { $_.End - $_.Start } | Measure-Object -Minimum).Minimum
+    if ($shortest -ge 30000) { return 'every window is 30 s or longer; nothing here can show a segment running past its window' }
+    $lines = @([System.IO.File]::ReadAllText($JsonPath) -split "`n" | Where-Object { $_ })
+    $segs = @($lines | Select-Object -Skip 1 | ForEach-Object { $_ | ConvertFrom-Json })
+    if ($segs.Count -eq 0) { return "$JsonPath has no segments" }
+    $prevEnd = $null
+    $atEdge = 0
+    $n = 0
+    foreach ($s in $segs) {
+        $n++
+        $w = @($wins | Where-Object { $_.Start -le $s.start })
+        if ($w.Count -eq 0) { return "segment $n starts at $($s.start) ms, before the first window" }
+        $ws = $w[-1].Start
+        $we = $w[-1].End
+        if ($s.end -gt $we) { return "segment $n ends at $($s.end) ms, past its window [$ws, $we] (#119): '$($s.text)'" }
+        if ($null -ne $prevEnd -and $s.start -lt $prevEnd) { return "segment $n starts at $($s.start) ms, before the previous one ended at ${prevEnd}: the segments overlap (#119)" }
+        foreach ($x in @($s.words)) {
+            if ($x.end -gt $we) { return "segment ${n}: word '$($x.text)' ends at $($x.end) ms, past the window's end $we (#119)" }
+        }
+        if ($s.end -eq $we) { $atEdge++ }
+        $prevEnd = $s.end
+    }
+    Write-Verbose "${JsonPath}: $($segs.Count) segment(s) inside their $($wins.Count) window(s) (shortest $shortest ms), $atEdge ending exactly at a window's end"
+    return ''
+}
+
+# The reference build (v1.0.44) lets a segment run past its window's audio
+# (#119); this build bounds it. For the defaults comparison the reference's
+# output is bounded the same way, from the windows the run under test
+# logged: a segment's end becomes its window's end when it lay past it, and
+# a segment that starts in the padding is left out (this build drops it).
+# Everything else is kept byte for byte. Returns @{ Reason; Note }: Reason
+# is '' on success, Note says what was bounded.
+function Get-WhisperBoundedReference {
+    param([string]$Src, [string]$Fmt, [string]$NewErr, [string]$RefErr, [string]$Dst)
+    $wins = Get-WhisperWindows -ErrFile $NewErr
+    if ($wins.Count -eq 0) { return @{ Reason = "$NewErr has no 'run transcription' lines, so the windows are unknown"; Note = '' } }
+    $a = ($wins | ForEach-Object { "$($_.Start)-$($_.End)" }) -join ' '
+    $b = ((Get-WhisperWindows -ErrFile $RefErr) | ForEach-Object { "$($_.Start)-$($_.End)" }) -join ' '
+    if ($a -ne $b) { return @{ Reason = "the two builds cut different windows: $a under test, $b in the reference"; Note = '' } }
+    $bound = {
+        param([int64]$start, [int64]$end)
+        $w = @($wins | Where-Object { $_.Start -le $start })
+        if ($w.Count -eq 0 -or $start -ge $w[-1].End) { return $null }
+        return [int64][math]::Min($end, $w[-1].End)
+    }
+    $data = [System.IO.File]::ReadAllText($Src)
+    $changed = 0
+    $dropped = 0
+    $out = New-Object System.Collections.Generic.List[string]
+    if ($Fmt -eq 'json') {
+        foreach ($line in ($data -split "`n")) {
+            $m = [regex]::Match($line, '^(\{"start":(\d+),"end":)(\d+)(,.*)$')
+            if (-not $m.Success) { $out.Add($line); continue }
+            $e = & $bound ([int64]$m.Groups[2].Value) ([int64]$m.Groups[3].Value)
+            if ($null -eq $e) { $dropped++; continue }
+            if ($e -ne [int64]$m.Groups[3].Value) { $changed++ }
+            $out.Add("$($m.Groups[1].Value)$e$($m.Groups[4].Value)")
+        }
+        $result = $out -join "`n"
+    } elseif ($Fmt -eq 'srt') {
+        $toMs = { param($h, $mi, $s, $ml) (([int64]$h * 60 + [int64]$mi) * 60 + [int64]$s) * 1000 + [int64]$ml }
+        $stamp = { param([int64]$t) '{0:00}:{1:00}:{2:00},{3:000}' -f [int64][math]::Floor($t / 3600000), [int64]([math]::Floor($t / 60000) % 60), [int64]([math]::Floor($t / 1000) % 60), [int64]($t % 1000) }
+        $n = 0  # the filter numbers cues from 0
+        foreach ($block in ($data -split "`n`n")) {
+            $lines = $block -split "`n"
+            $m = $null
+            if ($lines.Count -gt 1 -and $lines[0] -match '^\d+$') {
+                $m = [regex]::Match($lines[1], '^(\d\d):(\d\d):(\d\d),(\d\d\d) --> (\d\d):(\d\d):(\d\d),(\d\d\d)$')
+            }
+            if ($null -eq $m -or -not $m.Success) { $out.Add($block); continue }
+            $g = $m.Groups
+            $start = & $toMs $g[1].Value $g[2].Value $g[3].Value $g[4].Value
+            $end = & $toMs $g[5].Value $g[6].Value $g[7].Value $g[8].Value
+            $e = & $bound $start $end
+            if ($null -eq $e) { $dropped++; continue }
+            if ($e -ne $end) { $changed++ }
+            $rest = @($lines | Select-Object -Skip 2)
+            $out.Add((@("$n", "$(& $stamp $start) --> $(& $stamp $e)") + $rest) -join "`n")
+            $n++
+        }
+        $result = $out -join "`n`n"
+    } else {
+        return @{ Reason = "unknown format $Fmt"; Note = '' }
+    }
+    [System.IO.File]::WriteAllText($Dst, $result, (New-Object System.Text.UTF8Encoding $false))
+    return @{ Reason = ''; Note = "reference ${Fmt}: $changed segment end(s) bounded to their window, $dropped segment(s) in the padding left out" }
+}
+
+# #119: whisper pads every window to 30 s, and a segment without a closing
+# timestamp token ended where that padding ends, not where the window's
+# audio does. With vad_model the windows are cut at speech, so segments ran
+# up to 30 s past them and overlapped their successors; even at the default
+# queue, jfk.wav's 2944 ms windows ended at 3000 ms. Both runs are checked
+# with Test-WhisperSegmentsInWindows. Needs the Silero model like
+# Test-WhisperVadThreads; otherwise Skip.
+function Test-WhisperSegmentEnds {
+    param([string]$FFmpegExe, [string]$Platform)
+
+    $inputs = Get-WhisperTestInputs -FFmpegExe $FFmpegExe
+    if (-not $inputs) {
+        return @{ Status = 'Skip'; Reason = 'no whisper model and clip in this environment (set WHISPER_TEST_MODEL to ggml-base.en.bin and WHISPER_TEST_AUDIO to jfk.wav)'; Output = '' }
+    }
+    $vad = $env:WHISPER_TEST_VAD_MODEL
+    $nextTo = Join-Path (Split-Path -Parent $FFmpegExe) 'ggml-silero-v5.1.2.bin'
+    if (-not $vad -and (Test-Path $nextTo)) { $vad = $nextTo }
+    if (-not $vad -or -not (Test-Path $vad)) {
+        return @{ Status = 'Skip'; Reason = 'no VAD model in this environment (set WHISPER_TEST_VAD_MODEL to ggml-silero-v5.1.2.bin)'; Output = '' }
+    }
+    $dir = New-WhisperTestDir -Model $inputs.Model
+    $lines = New-Object System.Collections.Generic.List[string]
+    try {
+        Copy-Item -Path $vad -Destination (Join-Path $dir 'vad.bin')
+        $ctx = @{ Dir = $dir; Audio = $inputs.Audio; Baseline = ''; Threads = '1' }
+        foreach ($mode in 'queue', 'vad') {
+            $opts = 'format=json:destination=-:word_timestamps=1'
+            if ($mode -eq 'vad') { $opts += ':vad_model=vad.bin' }
+            $out = Join-Path $dir "$mode.json"
+            $err = Join-Path $dir "$mode.err"
+            if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $ctx -OutFile $out -ErrFile $err -Options $opts) -ne 0) {
+                return @{ Status = 'Fail'; Reason = "the $mode run failed"; Output = ($lines -join "`n") }
+            }
+            if ($mode -eq 'vad' -and [System.IO.File]::ReadAllText($err) -notmatch 'VAD detected') {
+                return @{ Status = 'Fail'; Reason = 'VAD never cut a window, so no window shorter than the queue was transcribed'; Output = ($lines -join "`n") }
+            }
+            $why = Test-WhisperJson $out 'words'
+            if ($why) { return @{ Status = 'Fail'; Reason = $why; Output = ($lines -join "`n") } }
+            $why = Test-WhisperSegmentsInWindows -JsonPath $out -ErrFile $err
+            if ($why) { return @{ Status = 'Fail'; Reason = $why; Output = ($lines -join "`n") } }
+            $wins = Get-WhisperWindows -ErrFile $err
+            $lines.Add("${mode}: every segment and word ends inside its window ($($wins.Count) windows)")
+        }
+        return @{ Status = 'Pass'; Reason = ''; Output = ($lines -join "`n") }
+    } finally {
+        Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-WhisperDefaultsUnchanged {
     param([string]$FFmpegExe, [string]$Platform)
 
@@ -501,10 +665,21 @@ function Test-WhisperDefaultsUnchanged {
             if ((Get-Item $old).Length -eq 0) {
                 return @{ Status = 'Fail'; Reason = "the reference wrote no $fmt"; Output = ($lines -join "`n") }
             }
-            if (-not (Test-SameBytes $new $old)) {
-                return @{ Status = 'Fail'; Reason = "default format=$fmt output differs from the reference"; Output = ($lines -join "`n") }
+            # #119: the reference lets a segment run past its window's audio
+            # (jfk.wav at the default queue: 2944 ms windows, ends at 3000 ms).
+            # This build bounds those ends; everything else must still match
+            # byte for byte, so the reference's output is bounded the same way
+            # first, from the windows this run logged.
+            $bounded = Join-Path $dir "bounded.$fmt"
+            $b = Get-WhisperBoundedReference -Src $old -Fmt $fmt -NewErr (Join-Path $dir 'new.err') -RefErr (Join-Path $dir 'ref.err') -Dst $bounded
+            if ($b.Reason) {
+                return @{ Status = 'Fail'; Reason = "could not bound the reference's $fmt output to its windows: $($b.Reason)"; Output = ($lines -join "`n") }
             }
-            $lines.Add("format=${fmt}: byte-identical to the reference ($((Get-Item $new).Length) bytes)")
+            $lines.Add($b.Note)
+            if (-not (Test-SameBytes $new $bounded)) {
+                return @{ Status = 'Fail'; Reason = "default format=$fmt output differs from the reference beyond the segment ends bounded to their window (#119)"; Output = ($lines -join "`n") }
+            }
+            $lines.Add("format=${fmt}: identical to the reference with its segment ends bounded to their window ($((Get-Item $new).Length) bytes)")
         }
         return @{ Status = 'Pass'; Reason = ''; Output = ($lines -join "`n") }
     } finally {
