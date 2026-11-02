@@ -55,11 +55,12 @@ DIR="${2:?usage: stemsplit-assets.sh <platform> <dir>}"
 STEMSPLIT_TAG=v1.1.0
 FORGEJO=https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit
 # The suite comes from this commit on stemsplit's main, not from the tag: it is
-# the tag plus one tests-only commit that lets the suite run on Windows and
-# macOS (design D1a). The filter in it is byte-identical with the tag's, and
-# FILTER_SHA is asserted below so that stays provable.
-SUITE_REF=0b9921e
-ARCHIVE_SHA=9f47f57db781296b7a1cf3d3a54443cf88f54cf6860d7bb361368041de892271
+# the tag plus two tests-only commits, one that lets the suite run on Windows
+# and macOS (design D1a) and one that reads a GPU's refusal of the graph as the
+# CPU run it is (design D9). The filter in it is byte-identical with the tag's,
+# and FILTER_SHA is asserted below so that stays provable.
+SUITE_REF=a8b8ea3
+ARCHIVE_SHA=89f438ee54b9b6cc12837c8466a42fcf8d275aa67cc2826d0ed910955a226901
 FILTER_SHA=13d5583478829b97c743f70eb867335d1f75a7fd125018eff7bea34ecd86e3f4
 TINY_SHA=7b04652c855296e7d428ad5a130cf842e4da90eb16d2246fc7393284c42ea235
 SPLEETER_URL=https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/download/v2026.09.09/spleeter-2stems-f16.gguf
