@@ -39,7 +39,9 @@ jobs:
           for c in 0 1 2 3; do cat /sys/devices/system/cpu/cpu$c/topology/thread_siblings_list 2>/dev/null || true; done
           ls /usr/share/vulkan/icd.d/ 2>/dev/null || echo "no ICDs"
           dpkg -l | grep -iE 'mesa-vulkan|libvulkan' || true
-          which gdb && gdb --version | head -1
+          # ubuntu-latest is the ubuntu-26.04 image now, and it ships no gdb.
+          which gdb || sudo apt-get install -y -qq gdb >/dev/null
+          gdb --version | head -1
 
       - name: Binaries and assets
         run: |
