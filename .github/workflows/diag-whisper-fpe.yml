@@ -59,7 +59,9 @@ jobs:
           sha256sum ffmpeg-rc ffmpeg-ref
 
       - name: Run matrix (exit codes only)
+        shell: bash {0}
         run: |
+          set +e
           cd w
           run() {  # run <label> <binary> [env...]
             local label="$1" bin="$2"; shift 2
@@ -76,8 +78,16 @@ jobs:
           run rc-ivybridge  ffmpeg-rc  NOMERCY_GGML_CPU=ivybridge
           run rc-nogpu      ffmpeg-rc  NOMERCY_GGML_GPU=0
           run rc-noicd      ffmpeg-rc  VK_ICD_FILENAMES=/nonexistent.json VK_DRIVER_FILES=/nonexistent.json
+          run rc-noguard    ffmpeg-rc  NOMERCY_VK_ICD_GUARD=0
           run ref           ffmpeg-ref
           run ref-baseline  ffmpeg-ref NOMERCY_GGML_CPU=x64
+          run ref-nogpu     ffmpeg-ref NOMERCY_GGML_GPU=0
+          echo "=== a ggml filter without a model, as the smoke test's startup check runs it"
+          ./ffmpeg-rc -hide_banner -loglevel error -nostats -f lavfi -i "anullsrc=channel_layout=mono:sample_rate=16000" -t 0.1 -af whisper -f null - ; echo "exit $?"
+          echo "=== host libc and loader"
+          cat /proc/version; ldd --version | head -1; ls -la /usr/lib/x86_64-linux-gnu/libvulkan.so.1* 2>/dev/null
+          echo "=== newest glibc symbol version the static binary was built against"
+          strings -n 8 ffmpeg-rc | grep -E '^GLIBC_2\.[0-9]+$' | sort -V | tail -2
           echo "=== rc, ffmpeg's default filter thread count"
           ./ffmpeg-rc -hide_banner -nostdin -nostats -i jfk.wav \
             -af "whisper=model=model.bin:use_gpu=0:format=json:destination=-" -f null - >out-rc-defthreads.json 2>err-rc-defthreads.txt </dev/null
@@ -94,8 +104,11 @@ jobs:
             -ex "echo \n=== registers ===\n" -ex "info registers" \
             -ex "echo \n=== code ===\n" -ex "x/16i \$pc-32" \
             -ex "echo \n=== threads ===\n" -ex "info threads" \
+            -ex "echo \n=== shared libraries ===\n" -ex "info sharedlibrary" \
+            -ex "echo \n=== mappings (code only) ===\n" -ex "info proc mappings" \
             --args ./ffmpeg-rc -hide_banner -nostdin -nostats -filter_threads 1 -i jfk.wav \
-              -af "whisper=model=model.bin:use_gpu=0:format=json:destination=-" -f null - 2>&1 | tail -120
+              -af "whisper=model=model.bin:use_gpu=0:format=json:destination=-" -f null - 2>&1 \
+            | grep -vE '^\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+(rw-|r--|---)p' | tail -200
 
       - name: Backtrace under gdb (rc binary, baseline variant)
         if: always()
