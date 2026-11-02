@@ -49,9 +49,15 @@ concurrency:
   group: mac-runner-check
   cancel-in-progress: false
 
+# contents: write, not read: the build under test is an asset on a DRAFT
+# release, and draft releases are only visible to a token with push access.
+permissions:
+  contents: write
+
 jobs:
   check:
     runs-on: [self-hosted, macOS, ARM64, apple-silicon]
+    timeout-minutes: 7200
     steps:
       - name: Checkout
         uses: actions/checkout@v7

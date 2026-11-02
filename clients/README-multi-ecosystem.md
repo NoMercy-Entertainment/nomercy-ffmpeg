@@ -24,9 +24,22 @@ Every client, regardless of language, implements the same four-step resolve:
 
 | Constant | Default | Env override |
 | --- | --- | --- |
-| Fork release tag | `v1.0.36` | `NOMERCY_FFMPEG_VERSION` |
-| Upstream ffmpeg version | `8.1.1` | `NOMERCY_FFMPEG_FFVERSION` |
+| Fork release tag | stamped at publish time | `NOMERCY_FFMPEG_VERSION` |
+| Upstream ffmpeg version | stamped at publish time | `NOMERCY_FFMPEG_FFVERSION` |
 | Source repo | `NoMercy-Entertainment/nomercy-ffmpeg` | — |
+
+**The default is stamped, not hand-maintained.** This table used to name
+`v1.0.36` and `8.1.1` as the defaults while the npm client shipped `v1.0.40`
+and `9.0` — a contract that sibling clients implement, quietly disagreeing
+with the client it describes. Any literal version written here goes stale at
+the next release, so none is.
+
+In the npm client, `src/version.ts` carries a placeholder default.
+`npm-publish.yml` overwrites both constants from the release being published,
+so a shipped package always pins exactly the release it belongs to. A sibling
+client should do the same at its own publish step, or pin a release explicitly
+and treat that pin as its own versioned decision. Never copy a value from this
+file.
 
 ### Platform → artifact map (identical across clients)
 
@@ -45,7 +58,8 @@ Every client, regardless of language, implements the same four-step resolve:
 https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/{TAG}/ffmpeg-{FFVERSION}-{slug}-{TAG}.{ext}
 ```
 
-Example (Windows, pinned): `.../download/v1.0.36/ffmpeg-8.1.1-windows-x86_64-v1.0.36.zip`
+Example, for illustration only — release `v1.0.44`, ffmpeg `9.0`:
+`.../download/v1.0.44/ffmpeg-9.0-windows-x86_64-v1.0.44.zip`
 
 Archives are flat: the binaries sit at the archive root. Extract straight into
 the cache dir; no nested-directory stripping needed.

@@ -59,8 +59,13 @@ fi
 # What actually reached the linked, pre-strip binary.
 got=$("${nm_tool}" --defined-only "${nm_g}" 2>/dev/null \
     | grep -oE "nm_v[0-9]+_ggml_backend_cpu_reg" | sort -u | wc -l)
+# `|| true` because grep -c exits 1 when the count is 0, and this script runs
+# under `set -e`: a link with no unprefixed copy stopped the script right here,
+# with exit 1 and no message, instead of reaching the check below that says
+# exactly what went wrong. The verdict was right, the explanation was lost.
+# grep still prints "0" before exiting, so the variable is set correctly.
 unprefixed=$("${nm_tool}" --defined-only "${nm_g}" 2>/dev/null \
-    | grep -cE " T ggml_backend_cpu_reg$")
+    | grep -cE " T ggml_backend_cpu_reg$" || true)
 
 echo "verify_ggml_cpu_link: ${variants_lib} contributes ${expected} distinct variants; ${nm_g} carries ${got} distinct + ${unprefixed} unprefixed ggml_backend_cpu_reg"
 

@@ -92,14 +92,18 @@ function extractArchive(archivePath: string, target: PlatformTarget, destination
  *      extract, cache, clean the archive.
  */
 export async function resolveBinary(tool: Tool, options: ResolveOptions = {}): Promise<string> {
-	const envKey = tool === 'ffmpeg' ? 'NOMERCY_FFMPEG' : 'NOMERCY_FFPROBE';
+	const envKey = tool === 'ffmpeg'
+		? 'NOMERCY_FFMPEG'
+		: 'NOMERCY_FFPROBE';
 	const fromEnv = process.env[envKey];
 	if (fromEnv && isRunnable(fromEnv, tool))
 		return fromEnv;
 
 	const target = resolvePlatformTarget(options.platform, options.arch);
 	const cacheDir = cacheRootFor(options);
-	const binaryName = tool === 'ffmpeg' ? target.ffmpeg : target.ffprobe;
+	const binaryName = tool === 'ffmpeg'
+		? target.ffmpeg
+		: target.ffprobe;
 	const binaryPath = join(cacheDir, binaryName);
 	if (isRunnable(binaryPath, tool))
 		return binaryPath;
@@ -113,7 +117,9 @@ export async function resolveBinary(tool: Tool, options: ResolveOptions = {}): P
 	if (!binaryName.endsWith('.exe')) {
 		await chmod(binaryPath, 0o755).catch(() => {});
 		// The companion tool ships in the same archive; make it executable too.
-		const companion = join(cacheDir, tool === 'ffmpeg' ? target.ffprobe : target.ffmpeg);
+		const companion = join(cacheDir, tool === 'ffmpeg'
+			? target.ffprobe
+			: target.ffmpeg);
 		if (existsSync(companion))
 			await chmod(companion, 0o755).catch(() => {});
 	}

@@ -216,6 +216,21 @@ static int fix_music_notes(uint8_t *buf, int len, int bufsize)
                 }
             }
             at_line_start = 0;
+
+            /* The "- " prefix, if there was one, is already in tmp, and only
+             * the local cursor s moved past it. Without this the real cursor
+             * src still pointed at the "-", so the copy below wrote the
+             * prefix a second time: every normal dialog line came out as
+             * "- - text". The music-note branch above already moves src to s;
+             * this is the same step for the path where no note follows.
+             *
+             * s can now equal len -- a line that is exactly "- " at the end
+             * of the buffer. The copy below reads buf[src] before the loop
+             * condition is re-checked, so without the guard that would be a
+             * read one past the end, which the old code never made. */
+            src = s;
+            if (src >= len)
+                continue;
         }
 
         if (buf[src] == '\n')

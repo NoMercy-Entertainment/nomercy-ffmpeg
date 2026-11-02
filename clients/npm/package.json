@@ -69,7 +69,7 @@
 		"prepublishOnly": "npm run build"
 	},
 	"devDependencies": {
-		"@antfu/eslint-config": "^9.0.0",
+		"@antfu/eslint-config": "^10.0.0",
 		"@types/node": "^26.2.0",
 		"eslint": "^10.4.0",
 		"typescript": "^6.0.3",

@@ -154,12 +154,30 @@ for i in /scripts/*.sh; do
     name="${name^^}"   # Uppercase
     text_with_padding "🛠️ Building ${name}" "[${string_current_count}/${string_total_count}]" -5
     start_time=$(date +%s)
+    # Reset per script. Only the success and failure branches below set it, yet
+    # it is added to total_time after the if for every script -- so a skipped
+    # script (exit 255) added the previous script's duration a second time and
+    # inflated the reported total build time.
+    end_time=0
     $i >/dev/null 2>&1
     result=$?
     if [ ${result} -eq 255 ]; then # This is skipped
         text_with_padding "➖ ${name} was skipped" ""
         skipped_count=$((skipped_count + 1))
     elif [ ${result} -eq 0 ]; then # This is success
+        # Lines a component pinned for the build log (see 60-stemsplit.sh):
+        # the source tag and digest it built from. Shown on every build, not
+        # only under DEBUG, because they are what a release is traced back
+        # with; the rest of the component's log stays behind as before.
+        if [[ -f /ffmpeg_build_pins.log ]]; then
+            while IFS= read -r pin; do
+                [[ -n "${pin}" ]] && printf "%s\n" "📌 ${pin}"
+            done < /ffmpeg_build_pins.log
+            if [[ ${DEBUG} == "true" ]]; then
+                { echo "Pinned by ${name}"; cat /ffmpeg_build_pins.log; echo ""; } >>/full_ffmpeg_build.log
+            fi
+            rm -f /ffmpeg_build_pins.log
+        fi
         if [[ ${DEBUG} == "true" ]]; then
             if [[ -f /ffmpeg_build.log ]]; then
                 logtext=$(clean_whitespace "$(cat /ffmpeg_build.log)")

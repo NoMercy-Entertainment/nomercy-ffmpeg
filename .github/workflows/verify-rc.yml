@@ -31,9 +31,12 @@ concurrency:
   group: verify-rc-${{ github.event.workflow_run.head_sha || inputs.pr }}
   cancel-in-progress: true
 
+# Read-only by default. Only sync-checklist writes (it edits the PR body and
+# its verdict comment), so pull-requests: write sits on that job alone and the
+# verify matrix on the self-hosted fleet never carries it (follow-up from #79).
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   # ── Work out which PR and which RC we are verifying ───────────────────────
@@ -162,22 +165,24 @@ jobs:
             ext: zip
             labels: '["self-hosted","ffmpeg-verify","windows-x86_64"]'
             via: windows
-          # windows-aarch64 is built and released but is deliberately absent
-          # here: there is no Windows-on-ARM machine in the verify fleet, and an
-          # entry whose labels no runner carries does not fail — it queues until
-          # the job times out, holding up the whole RC verification.
+          # windows-aarch64 is built and released but deliberately absent here,
+          # so no verdict is produced, sync-checklist.js leaves its box unticked
+          # and a human ticks it after testing by hand. That is the honest state.
           #
-          # The consequence is intended and visible: no verdict file is produced
-          # for windows-aarch64, so sync-checklist.js leaves its box unticked and
-          # the release PR stays blocked until a human tests it. That is the
-          # honest state, not a gap to paper over.
+          # It was wired to github-windows-arm64-1 for two days in October 2026.
+          # That runner is a Windows 11 ARM64 guest under QEMU TCG on an x86 host,
+          # and the suite does not finish on it: sample generation took 870 s,
+          # the x264 test 234 s, and the x265 test was still running after
+          # eighteen hours (run 38056397474). An entry here would hold the RC
+          # verification for the five-day job limit and then fail. The owner's
+          # decision: hand-ticked until there is a real ARM64 Windows machine.
           #
-          # To wire it up, add a runner labelled
-          #   ["self-hosted","ffmpeg-verify","windows-aarch64"]
-          # and add the matrix entry below with `via: windows`. tests/tests.ps1
-          # already runs there unchanged.
+          # When one exists, add it back with `via: windows` and, if it is not
+          # native hardware, `execution: <what it is>` -- verify-rc.ps1 writes that
+          # into the verdict so the bot's evidence never claims native hardware.
+          # tests/tests.ps1 runs there unchanged.
     runs-on: ${{ fromJSON(matrix.labels) }}
-    timeout-minutes: 45
+    timeout-minutes: 7200
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -355,6 +360,9 @@ jobs:
     needs: [resolve, verify]
     if: always() && needs.resolve.outputs.should-run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7

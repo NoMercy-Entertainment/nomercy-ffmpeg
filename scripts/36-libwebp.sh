@@ -26,8 +26,8 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 fi
 
 make clean
-make -j$(nproc)
-make install
+make -j$(nproc) || exit 1
+make install || exit 1
 
 if [ ! -f ${PREFIX}/lib/libpng.a ]; then
     log "Failed to build libpng a "
@@ -75,39 +75,37 @@ if [[ ${TARGET_OS} != "windows" ]]; then
         sed -i 's/-Wl,-soname/-Wl,-install_name/g' Makefile
     fi
 
-    make PREFIX=${PREFIX} || (
+    # `|| { ...; exit 1; }`, never `|| ( ...; exit 1 )`. Parentheses run the
+    # block in a subshell, so its exit leaves the subshell and nothing else:
+    # a failed giflib make logged its error and the build carried on as though
+    # it had worked. All five handlers in this region had that shape.
+    make PREFIX=${PREFIX} || {
         log "Error: giflib make failed."
         exit 1
-    )
+    }
 
-    make PREFIX=${PREFIX} install || (
+    make PREFIX=${PREFIX} install || {
         log "Error: giflib install failed."
         exit 1
-    )
+    }
 else
-    if [[ ${ARCH} == "aarch64" ]]; then
-        # giflib's Makefile links the shared libgif.so with -soname, an ELF-only
-        # flag. GNU ld only warns about it, so windows-x86_64 builds fine, but
-        # this target links with lld, which hard-errors:
-        #   lld: error: unknown argument: -soname
-        # make then dies before producing libgif.a. Only the static library and
-        # the header are consumed here, so build just the static target and skip
-        # `make install`, whose shared targets hit the same error. The
-        # gif_lib.h / libgif.a copies below install exactly what is needed.
-        make libgif.a || (
-            log "Error: giflib make failed."
-            exit 1
-        )
-    else
-        make || (
-            log "Error: giflib make failed."
-            exit 1
-        )
-        make install || (
-            log "Error: giflib install failed."
-            exit 1
-        )
-    fi
+    # Only the static library and the header are consumed here, so build just
+    # the static target and skip `make install`; the gif_lib.h / libgif.a
+    # copies below install exactly what is needed. A full `make` fails on
+    # both windows targets:
+    #   windows-aarch64 links with lld, which rejects the ELF-only -soname
+    #     flag on libgif.so ("lld: error: unknown argument: -soname"), and
+    #     make dies there, before it has written libgif.a.
+    #   windows-x86_64 gets past that (GNU ld only warns), writes libgif.a,
+    #     then fails on libutil.so, the helper library for giflib's own CLI
+    #     tools: a DLL must resolve every symbol, and it cannot find GifErrorString.
+    # The x86_64 failure was invisible until the October 2026 audit: the
+    # handler ran in a subshell, so the build carried on and the fallback
+    # copies below picked up the libgif.a that make had already written.
+    make libgif.a || {
+        log "Error: giflib make failed."
+        exit 1
+    }
     if [ ! -f ${PREFIX}/include/gif_lib.h ]; then
         if [ -f gif_lib.h ]; then
             cp gif_lib.h ${PREFIX}/include/gif_lib.h
@@ -194,7 +192,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log "Failed to build libtiff"
     exit 1
 fi
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 if [ ! -f ${PREFIX}/lib/pkgconfig/libtiff-4.pc ]; then
     log "Failed to build libtiff"
     exit 1
@@ -238,7 +236,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 rm -rf /build/libwebp
 
 cp ${PREFIX}/lib/pkgconfig/libsharpyuv.pc ${PREFIX}/lib/pkgconfig/sharpyuv.pc

@@ -24,7 +24,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-ninja -j$(nproc) && ninja install
+ninja -j$(nproc) && ninja install || exit 1
 rm -rf /build/libvpl ${PREFIX}/{etc,share}
 
 # libvpl is C++ but upstream leaves vpl.pc's C++ runtime empty (CXX_LIB is never set),

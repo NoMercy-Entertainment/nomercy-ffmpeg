@@ -791,12 +791,23 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
 
     close(fds[0]);
 
-    /* Only signal a child that has not answered. Once the byte is in hand the
+    /* Only signal a child that may still be alive. Once the byte is in hand the
      * child has already reached its _exit(), and on a host that auto-reaps
      * (SIGCHLD = SIG_IGN, the very host this guard was rewritten for) its pid
-     * can be free and recycled by the time a signal would land - so an
-     * unconditional kill here is a kill aimed at whatever now owns that pid. */
-    if (!got)
+     * can be free and recycled by the time a signal would land - so a kill
+     * there is a kill aimed at whatever now owns that pid.
+     *
+     * EOF is the same case and was not treated as one. This used to read
+     * `if (!got)`, which is true on EOF too, because no byte arrived: the
+     * child closed the pipe by dying. So a child that had already crashed was
+     * sent SIGKILL anyway - on exactly the auto-reaping host where its pid
+     * could already belong to something else. The comment on the EOF branch
+     * below says "we never signal the child on this path" - that was not true
+     * until this change, and now it is.
+     *
+     * Only the two exits that leave the child possibly running signal it: we
+     * ran out of time, or our own poll()/read() broke. */
+    if (timed_out || io_failed)
         kill(pid, SIGKILL);
 
     /* The status is kept now, not discarded, for one specific question on one

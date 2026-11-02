@@ -19,7 +19,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 rm -rf /build/fdk-aac
 
 add_enable "--enable-libfdk-aac"

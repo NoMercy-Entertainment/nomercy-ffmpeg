@@ -18,10 +18,25 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+// sched_getaffinity() and the CPU_SET macros, for counting physical cores.
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>   // strstr, for reading whisper.cpp back-end report out of its log
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/param.h>
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <sched.h>
+#endif
 
 #include <whisper.h>
 #include "nm_ggml_cpu.h"
@@ -36,9 +51,45 @@
 #include "libavutil/avstring.h"
 #include "libavutil/internal.h"
 #include "libavformat/avio.h"
+#include "libavutil/bprint.h"
+#include "libavutil/cpu.h"
 #include "libavutil/thread.h"
 
 #include "formats.h"
+
+// libavutil/internal.h poisons malloc and friends, so the shared header gets
+// FFmpeg's allocator. See nm_whisper_words.h for why it is a separate file.
+#define NM_WW_MALLOC(n)     av_malloc(n)
+#define NM_WW_REALLOC(p, n) av_realloc(p, n)
+#define NM_WW_FREE(p)       av_free(p)
+#include "nm_whisper_words.h"
+
+// whisper.cpp's enum values for the presets in nm_whisper_words.h, by index.
+// Listed by name rather than computed from the enum's order, so a reordering
+// upstream is a compile-visible change here, not a silent shift of presets.
+static const enum whisper_alignment_heads_preset nm_whisper_dtw_aheads[] = {
+    WHISPER_AHEADS_TINY_EN,
+    WHISPER_AHEADS_TINY,
+    WHISPER_AHEADS_BASE_EN,
+    WHISPER_AHEADS_BASE,
+    WHISPER_AHEADS_SMALL_EN,
+    WHISPER_AHEADS_SMALL,
+    WHISPER_AHEADS_MEDIUM_EN,
+    WHISPER_AHEADS_MEDIUM,
+    WHISPER_AHEADS_LARGE_V1,
+    WHISPER_AHEADS_LARGE_V2,
+    WHISPER_AHEADS_LARGE_V3,
+    WHISPER_AHEADS_LARGE_V3_TURBO,
+};
+
+// whisper.cpp refuses more than this many decoders (WHISPER_MAX_DECODERS in
+// whisper.cpp, not exported), and it refuses per window: whisper_full() fails
+// and the window's audio is dropped. Capping the options catches it at init.
+#define NM_WHISPER_MAX_DECODERS 8
+
+// A prompt longer than this is a mistake rather than a prompt: whisper keeps
+// only the last n_text_ctx/2 tokens (about 223) of it anyway.
+#define NM_WHISPER_MAX_PROMPT_FILE (1 << 20)
 
 typedef struct WhisperContext {
     const AVClass *class;
@@ -62,6 +113,21 @@ typedef struct WhisperContext {
     char *destination;
     char *format;
     int max_len;
+
+    char *dtw;
+    int word_timestamps;
+    char *prompt;
+    char *prompt_file;
+    int beam_size;
+    int best_of;
+    /* Index into nm_whisper_dtw_presets(), -1 when DTW is off. */
+    int dtw_preset;
+    /* whisper.cpp threads, resolved once by config_input (nm_whisper_threads). */
+    int n_threads;
+    /* The prompt handed to whisper_full(): prompt_file's contents, else the
+     * prompt option, else NULL. Owned when it came from the file. */
+    const char *initial_prompt;
+    char *prompt_file_text;
 
     struct whisper_context *ctx_wsp;
     struct whisper_vad_context *ctx_vad;
@@ -134,11 +200,333 @@ static void cb_log(enum ggml_log_level level, const char *text, void *user_data)
     av_log(ctx, av_log_level, "%s", text);
 }
 
+/**
+ * Physical cores this process may run on, or 0 when the platform cannot say.
+ *
+ * Only cores with at least one logical CPU in the process affinity count, so
+ * a pinned or cgroup-limited process is not told about cores it cannot use.
+ * The same count af_stemsplit.c uses for its thread default.
+ */
+static int nm_whisper_physical_cores(void)
+{
+#if defined(_WIN32)
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION *info;
+    DWORD_PTR proc_mask, sys_mask;
+    DWORD len = 0;
+    int i, n, cores = 0;
+
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask))
+        return 0;
+    GetLogicalProcessorInformation(NULL, &len);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || !len)
+        return 0;
+    info = av_malloc(len);
+    if (!info)
+        return 0;
+    if (GetLogicalProcessorInformation(info, &len)) {
+        n = len / sizeof(*info);
+        for (i = 0; i < n; i++)
+            if (info[i].Relationship == RelationProcessorCore &&
+                (info[i].ProcessorMask & proc_mask))
+                cores++;
+    }
+    av_free(info);
+    return cores;
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    int n = 0;
+    size_t size = sizeof(n);
+#if defined(__APPLE__)
+    const char *name = "hw.physicalcpu";
+#else
+    const char *name = "kern.smp.cores";
+#endif
+    return sysctlbyname(name, &n, &size, NULL, 0) == 0 && n > 0 ? n : 0;
+#elif defined(__linux__)
+    cpu_set_t set;
+    int cpu, cores = 0;
+
+    if (sched_getaffinity(0, sizeof(set), &set))
+        return 0;
+    // A core counts once: at the lowest of its hyperthreads that the
+    // affinity mask allows.
+    for (cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+        char path[96], list[256], *p;
+        int first = -1;
+        FILE *f;
+
+        if (!CPU_ISSET(cpu, &set))
+            continue;
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
+        f = fopen(path, "r");
+        if (!f)
+            return 0;
+        p = fgets(list, sizeof(list), f);
+        fclose(f);
+        if (!p)
+            return 0;
+        // "0,28" or "0-1": walk every sibling, ranges included
+        while (*p && first < 0) {
+            long lo = strtol(p, &p, 10), hi = lo, c;
+            if (*p == '-')
+                hi = strtol(p + 1, &p, 10);
+            for (c = lo; c <= hi && c < CPU_SETSIZE; c++)
+                if (CPU_ISSET(c, &set)) {
+                    first = c;
+                    break;
+                }
+            if (*p != ',')
+                break;
+            p++;
+        }
+        if (first == cpu)
+            cores++;
+    }
+    return cores;
+#else
+    return 0;
+#endif
+}
+
+/**
+ * Threads for whisper.cpp: half the physical cores, unless the graph's thread
+ * count was set on purpose.
+ *
+ * ggml's thread pool (no OpenMP, #64) busy-waits at every barrier, so a worker
+ * that has to share a core - with its hyperthread twin, with ffmpeg's own
+ * threads, with anything else the machine runs - stalls all the others. With
+ * ffmpeg's default (threads=auto, which libavfilter turns into
+ * min(cpus + 1, 16)) every whisper run on the CPU fell off that cliff: jfk.wav
+ * on base.en took 53.6 s with 7 threads on 6 cores against 3.3 s with 6, and
+ * 16.0 s with 16 threads on an 8-core/16-thread i7 against 5.0 s with 4. It
+ * is what made vad_model unusable at the default (#115).
+ *
+ * Half the physical cores is the rule af_stemsplit.c follows for the same
+ * reason (owner decision D16): a media server transcribes while it also
+ * serves and transcodes, so a filter never takes the whole machine. When the
+ * platform cannot count physical cores, half the logical CPUs.
+ *
+ * A graph thread count other than ffmpeg's automatic one was chosen on
+ * purpose (-filter_threads, or the filter's own threads option) and is
+ * followed, never above the CPUs this process may use. The thread count does
+ * not change the transcript.
+ */
+static int nm_whisper_threads(AVFilterContext *ctx)
+{
+    const int cpus = av_cpu_count();
+    const int graph = FFMAX(1, ff_filter_get_nb_threads(ctx));
+    const int automatic = cpus > 1 ? FFMIN(cpus + 1, 16) : 1;
+    const int cores = nm_whisper_physical_cores();
+
+    if (graph != automatic)
+        return FFMAX(1, FFMIN(graph, cpus));
+    return FFMAX(1, (cores > 0 ? cores : cpus) / 2);
+}
+
+/**
+ * Read prompt_file into wctx->prompt_file_text.
+ *
+ * Through avio rather than fopen, so the path behaves like every other path
+ * FFmpeg takes, UTF-8 on Windows included. A UTF-8 byte order mark and
+ * trailing whitespace are dropped: an editor's final newline is not part of
+ * the prompt. An empty file means no prompt.
+ */
+static int read_prompt_file(AVFilterContext *ctx)
+{
+    WhisperContext *wctx = ctx->priv;
+    AVIOContext *pb = NULL;
+    AVBPrint bp;
+    char *text;
+    size_t len;
+    int ret;
+
+    ret = avio_open(&pb, wctx->prompt_file, AVIO_FLAG_READ);
+    if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Could not read prompt_file %s: %s\n",
+               wctx->prompt_file, av_err2str(ret));
+        return ret;
+    }
+
+    av_bprint_init(&bp, 0, AV_BPRINT_SIZE_UNLIMITED);
+    ret = avio_read_to_bprint(pb, &bp, NM_WHISPER_MAX_PROMPT_FILE + 1);
+    avio_closep(&pb);
+    if (ret >= 0 && !av_bprint_is_complete(&bp))
+        ret = AVERROR(ENOMEM);
+    if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Could not read prompt_file %s: %s\n",
+               wctx->prompt_file, av_err2str(ret));
+        av_bprint_finalize(&bp, NULL);
+        return ret;
+    }
+    if (bp.len > NM_WHISPER_MAX_PROMPT_FILE) {
+        av_log(ctx, AV_LOG_ERROR, "prompt_file %s is larger than %d bytes.\n",
+               wctx->prompt_file, NM_WHISPER_MAX_PROMPT_FILE);
+        av_bprint_finalize(&bp, NULL);
+        return AVERROR(EINVAL);
+    }
+
+    ret = av_bprint_finalize(&bp, &text);
+    if (ret < 0)
+        return ret;
+
+    len = strlen(text);
+    while (len && av_isspace(text[len - 1]))
+        text[--len] = '\0';
+    if (len >= 3 && !memcmp(text, "\xEF\xBB\xBF", 3))
+        memmove(text, text + 3, len - 2);
+
+    if (!text[0]) {
+        av_free(text);
+        return 0;
+    }
+    wctx->prompt_file_text = text;
+    return 0;
+}
+
+/**
+ * Whether a model of this shape is one the dtw preset was made for.
+ *
+ * whisper.cpp only rejects a preset whose alignment heads do not exist in
+ * the model. A preset for a model of the same shape - base on base.en, or
+ * tiny.en on a base.en file - loads without a word and produces wrong
+ * timings, so the filter checks the decoder shape itself and refuses.
+ */
+static int dtw_preset_fits(AVFilterContext *ctx, int preset, int layers, int heads,
+                           int multilingual, int mels)
+{
+    int n;
+    const NMWhisperDtwPreset *want = nm_whisper_dtw_presets(&n) + preset;
+
+    if (nm_whisper_dtw_preset_matches(preset, layers, heads, multilingual, mels))
+        return 1;
+
+    av_log(ctx, AV_LOG_ERROR,
+           "dtw=%s does not match this model: it has %d text layers, %d heads, "
+           "%s, %d mel bins, and %s was made for %d layers, %d heads, %s. "
+           "Use the preset named after the model (ggml-base.en.bin is base.en).\n",
+           want->name, layers, heads, multilingual ? "multilingual" : "English-only",
+           mels, want->name, want->n_text_layer, want->n_text_head,
+           want->multilingual ? "multilingual" : "English-only");
+    return 0;
+}
+
+/**
+ * Check the dtw preset against the model file's header, before any load.
+ *
+ * Returns 0 when it fits, or when the header cannot be read: a missing or
+ * broken model is reported by the real load, with its own message. Returns
+ * AVERROR(EINVAL) for a preset that does not fit.
+ *
+ * Done here, from 48 bytes of the file, rather than by letting whisper.cpp
+ * load the model with the wrong preset: whisper.cpp then rejects it in
+ * whisper_init_state(), and its cleanup frees a half-built state. That
+ * crashed ffmpeg on Windows (exit 139) once the load moved off the main
+ * thread (#114).
+ */
+static int check_dtw_preset_against_file(AVFilterContext *ctx)
+{
+    WhisperContext *wctx = ctx->priv;
+    AVIOContext *pb = NULL;
+    unsigned char head[48];
+    NMWhisperModelShape shape;
+    int got;
+
+    if (avio_open(&pb, wctx->model_path, AVIO_FLAG_READ) < 0)
+        return 0;
+    got = avio_read(pb, head, sizeof(head));
+    avio_closep(&pb);
+    if (got != (int) sizeof(head) || nm_whisper_parse_model_header(head, sizeof(head), &shape) < 0)
+        return 0;
+
+    if (!dtw_preset_fits(ctx, wctx->dtw_preset, shape.n_text_layer, shape.n_text_head,
+                         nm_whisper_model_multilingual(&shape), shape.n_mels))
+        return AVERROR(EINVAL);
+    return 0;
+}
+
 static int init(AVFilterContext *ctx)
 {
     WhisperContext *wctx = ctx->priv;
 
+    if (!wctx->model_path) {
+        av_log(ctx, AV_LOG_ERROR, "No whisper model path specified. Use the 'model' option.\n");
+        return AVERROR(EINVAL);
+    }
+
+    // The options that do not need the model are checked before loading it,
+    // so a typo fails in milliseconds rather than after a model load.
+    wctx->dtw_preset = -1;
+    if (wctx->dtw && wctx->dtw[0]) {
+        wctx->dtw_preset = nm_whisper_dtw_preset_find(wctx->dtw);
+        if (wctx->dtw_preset < 0 || wctx->dtw_preset >= (int) FF_ARRAY_ELEMS(nm_whisper_dtw_aheads)) {
+            av_log(ctx, AV_LOG_ERROR, "Unknown dtw preset '%s'. Valid presets: %s.\n",
+                   wctx->dtw, nm_whisper_dtw_preset_list());
+            return AVERROR(EINVAL);
+        }
+        int ret = check_dtw_preset_against_file(ctx);
+        if (ret < 0)
+            return ret;
+    }
+
+    if (wctx->word_timestamps && av_strcasecmp(wctx->format, "json")) {
+        av_log(ctx, AV_LOG_WARNING,
+               "word_timestamps only applies to format=json; ignored for format=%s.\n",
+               wctx->format);
+        wctx->word_timestamps = 0;
+    }
+
+    if (wctx->prompt_file && wctx->prompt_file[0]) {
+        int ret = read_prompt_file(ctx);
+        if (ret < 0)
+            return ret;
+        if (wctx->prompt && wctx->prompt[0])
+            av_log(ctx, AV_LOG_WARNING, "Both prompt and prompt_file are set; using prompt_file.\n");
+        wctx->initial_prompt = wctx->prompt_file_text;
+    } else if (wctx->prompt && wctx->prompt[0])
+        wctx->initial_prompt = wctx->prompt;
+
+    wctx->next_pts = AV_NOPTS_VALUE;
+
+    if (wctx->destination && strcmp("", wctx->destination)) {
+        const char *dst = wctx->destination;
+        if (!strcmp("-", dst))
+            dst = "pipe:1";
+        int ret = avio_open(&wctx->avio_context, dst, AVIO_FLAG_WRITE);
+
+        if (ret < 0) {
+            av_log(ctx, AV_LOG_ERROR, "Could not open %s: %s\n", wctx->destination, av_err2str(ret));
+            return ret;
+        }
+
+        wctx->avio_context->direct = AVIO_FLAG_DIRECT;
+    }
+
+    return 0;
+}
+
+/**
+ * Load the model, on the input link's configuration rather than in init().
+ *
+ * The ffmpeg CLI parses every filtergraph twice: fg_create() builds a
+ * throwaway graph only to learn its inputs and outputs, and that runs each
+ * filter's init() but is never configured. Loading here instead of in init()
+ * means that graph never loads the model, which used to cost a whole second
+ * load per run - about 2 s for large-v3 (#114). Everything that only checks
+ * options stays in init(), so a typo still fails before any model I/O.
+ *
+ * The GPU decision, the log-callback registration and the backend report move
+ * with the load: they belong to the whisper_init_*() call, not to init().
+ */
+static int config_input(AVFilterLink *inlink)
+{
+    AVFilterContext *ctx = inlink->dst;
+    WhisperContext *wctx = ctx->priv;
+
     static AVOnce init_static_once = AV_ONCE_INIT;
+
+    // A graph is configured once, but stay safe if a link is reconfigured.
+    if (wctx->ctx_wsp)
+        return 0;
 
     // Ask FIRST, before ggml_backend_load_all() or anything else can reach
     // ggml's backend registry. nm_ggml_gpu_usable()'s first call is what makes
@@ -175,11 +563,6 @@ static int init(AVFilterContext *ctx)
     whisper_log_set(cb_log, ctx);
     nm_whisper_log_owner = ctx;
 
-    // Init whisper context
-    if (!wctx->model_path) {
-        av_log(ctx, AV_LOG_ERROR, "No whisper model path specified. Use the 'model' option.\n");
-        return AVERROR(EINVAL);
-    }
 
     struct whisper_context_params params = whisper_context_default_params();
     // whisper.cpp picks its own backend from this flag - it is never handed
@@ -190,6 +573,17 @@ static int init(AVFilterContext *ctx)
     params.use_gpu = wctx->gpu_active;
     params.gpu_device = wctx->gpu_device;
 
+    // DTW token timestamps. flash_attn defaults to true in whisper.cpp, and
+    // whisper_init_with_params_no_state() then switches DTW off again with
+    // only a warning (whisper.cpp v1.9.1, src/whisper.cpp:3708). Turning DTW
+    // on therefore has to turn flash attention off, or the option would be
+    // accepted and do nothing.
+    if (wctx->dtw_preset >= 0) {
+        params.dtw_token_timestamps = true;
+        params.dtw_aheads_preset = nm_whisper_dtw_aheads[wctx->dtw_preset];
+        params.flash_attn = false;
+    }
+
     // Cleared here, read immediately after the call below: that pair is what
     // makes the process-wide flag above safe to attribute to this filter.
     nm_whisper_saw_no_gpu = 0;
@@ -197,6 +591,19 @@ static int init(AVFilterContext *ctx)
     if (wctx->ctx_wsp == NULL) {
         av_log(ctx, AV_LOG_ERROR, "Failed to initialize whisper context from model: %s\n", wctx->model_path);
         return AVERROR(EIO);
+    }
+
+    if (wctx->dtw_preset >= 0) {
+        // init() already checked the file header; this is the same check on
+        // what whisper.cpp actually loaded, for a header it could not read.
+        if (!dtw_preset_fits(ctx, wctx->dtw_preset,
+                             whisper_model_n_text_layer(wctx->ctx_wsp),
+                             whisper_model_n_text_head(wctx->ctx_wsp),
+                             whisper_is_multilingual(wctx->ctx_wsp),
+                             whisper_model_n_mels(wctx->ctx_wsp)))
+            return AVERROR(EINVAL);
+        av_log(ctx, AV_LOG_INFO, "whisper: DTW on (preset %s); flash attention turned off.\n",
+               nm_whisper_dtw_preset_name(wctx->dtw_preset));
     }
 
     // What whisper.cpp ACTUALLY got, which is not always what it was asked
@@ -230,6 +637,9 @@ static int init(AVFilterContext *ctx)
            wctx->gpu_active ? nm_ggml_backend_device(wctx->gpu_device)
                             : nm_ggml_cpu_variant_name());
 
+    wctx->n_threads = nm_whisper_threads(ctx);
+    av_log(ctx, AV_LOG_INFO, "whisper: %d threads.\n", wctx->n_threads);
+
     // Init buffer
     wctx->audio_buffer_queue_size = av_rescale(wctx->queue, WHISPER_SAMPLE_RATE, AV_TIME_BASE);
     wctx->audio_buffer = av_malloc_array(wctx->audio_buffer_queue_size, sizeof(*wctx->audio_buffer));
@@ -239,7 +649,13 @@ static int init(AVFilterContext *ctx)
     // Init VAD model context
     if (wctx->vad_model_path) {
         struct whisper_vad_context_params ctx_params = whisper_vad_default_context_params();
-        ctx_params.n_threads = ff_filter_get_nb_threads(ctx);
+        // At most whisper.cpp's own VAD default (4 in v1.9.1), never every
+        // logical core. Silero is a tiny LSTM evaluated as one small ggml graph
+        // per 512-sample chunk; with 16 threads the synchronisation dwarfs the
+        // work, and 15 s of audio took over five minutes instead of 7 s (#115).
+        // Fewer threads only when the user asked for fewer with -filter_threads.
+        // The VAD result does not depend on the thread count.
+        ctx_params.n_threads = FFMIN(ctx_params.n_threads, wctx->n_threads);
         // ctx_params.use_gpu = wctx->use_gpu; TODO (see: whisper_vad_init_context)
         ctx_params.gpu_device = wctx->gpu_device;
         wctx->ctx_vad = whisper_vad_init_from_file_with_params(wctx->vad_model_path, ctx_params);
@@ -251,22 +667,6 @@ static int init(AVFilterContext *ctx)
         wctx->vad_params.max_speech_duration_s = av_rescale(wctx->queue, 1, AV_TIME_BASE);
         wctx->vad_params.speech_pad_ms = 0;
         wctx->vad_params.samples_overlap = 0;
-    }
-
-    wctx->next_pts = AV_NOPTS_VALUE;
-
-    if (wctx->destination && strcmp("", wctx->destination)) {
-        const char *dst = wctx->destination;
-        if (!strcmp("-", dst))
-            dst = "pipe:1";
-        int ret = avio_open(&wctx->avio_context, dst, AVIO_FLAG_WRITE);
-
-        if (ret < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Could not open %s: %s\n", wctx->destination, av_err2str(ret));
-            return ret;
-        }
-
-        wctx->avio_context->direct = AVIO_FLAG_DIRECT;
     }
 
     if (!whisper_is_multilingual(wctx->ctx_wsp)) {
@@ -310,6 +710,8 @@ static void uninit(AVFilterContext *ctx)
     }
 
     av_freep(&wctx->audio_buffer);
+    av_freep(&wctx->prompt_file_text);
+    wctx->initial_prompt = NULL;
 
     if (wctx->avio_context)
         avio_closep(&wctx->avio_context);
@@ -365,7 +767,7 @@ static void resolve_language(AVFilterContext *ctx)
         if (!lang_probs)
             return;
 
-        lang_id = whisper_lang_auto_detect(wctx->ctx_wsp, 0, ff_filter_get_nb_threads(ctx), lang_probs);
+        lang_id = whisper_lang_auto_detect(wctx->ctx_wsp, 0, wctx->n_threads, lang_probs);
         if (lang_id >= 0 && lang_id <= max_id) {
             wctx->detected_language = whisper_lang_str(lang_id);
             wctx->language_confidence = lang_probs[lang_id];
@@ -380,13 +782,81 @@ static void resolve_language(AVFilterContext *ctx)
            wctx->detected_language, wctx->language_confidence);
 
     if (wctx->avio_context && !av_strcasecmp(wctx->format, "json")) {
-        char *buf = av_asprintf("{\"detected_language\":\"%s\",\"language_confidence\":%.6f}\n",
-                                wctx->detected_language, wctx->language_confidence);
+        char *lang_json = nm_json_escape(wctx->detected_language);
+        char *buf = lang_json
+            ? av_asprintf("{\"detected_language\":\"%s\",\"language_confidence\":%.6f}\n",
+                          lang_json, wctx->language_confidence)
+            : NULL;
+        av_freep(&lang_json);
         if (buf) {
             avio_write(wctx->avio_context, buf, strlen(buf));
             av_freep(&buf);
         }
     }
+}
+
+/**
+ * Drop the first `samples` from the audio buffer and move the rest to the
+ * front.
+ *
+ * This used memcpy, and source and destination are the same buffer: they
+ * overlap as soon as more than half of it is kept (fill > 2 * samples).
+ * Overlapping memcpy is undefined behaviour. It mostly works because glibc
+ * happens to copy forwards, and silently corrupts the buffer on any
+ * implementation that copies in blocks or backwards. memmove is defined for
+ * exactly this.
+ */
+static void consume_buffer(WhisperContext *wctx, int samples)
+{
+    const float duration = (float) samples / WHISPER_SAMPLE_RATE;
+
+    if (wctx->audio_buffer_fill_size > samples) {
+        memmove(wctx->audio_buffer, wctx->audio_buffer + samples,
+                (wctx->audio_buffer_fill_size - samples) * sizeof(*wctx->audio_buffer));
+        wctx->audio_buffer_start_ms += duration * 1000;
+    }
+    wctx->audio_buffer_fill_size -= samples;
+    wctx->audio_buffer_vad_size = wctx->audio_buffer_fill_size;
+}
+
+/**
+ * The "words" array for segment i of the last whisper_full() call, built by
+ * nm_whisper_build_words() from the segment's tokens. offset_ms is where the
+ * whisper_full() window started; seg_start/seg_end are the segment's absolute
+ * times as written in its JSON line. Returns NULL when allocation fails.
+ */
+static char *segment_words_json(AVFilterContext *ctx, int i, int64_t offset_ms,
+                                int64_t seg_start, int64_t seg_end)
+{
+    WhisperContext *wctx = ctx->priv;
+    const whisper_token eot = whisper_token_eot(wctx->ctx_wsp);
+    const int n_tok = whisper_full_n_tokens(wctx->ctx_wsp, i);
+    NMWhisperToken *tok = NULL;
+    NMWhisperWord *words = NULL;
+    int n_words = 0;
+    char *json = NULL;
+
+    if (n_tok > 0) {
+        tok = av_malloc_array(n_tok, sizeof(*tok));
+        if (!tok)
+            return NULL;
+    }
+    for (int j = 0; j < n_tok; j++) {
+        const whisper_token_data data = whisper_full_get_token_data(wctx->ctx_wsp, i, j);
+        tok[j].text = whisper_full_get_token_text(wctx->ctx_wsp, i, j);
+        tok[j].special = data.id >= eot;
+        tok[j].t0 = data.t0;
+        tok[j].t_dtw = data.t_dtw;
+        tok[j].p = data.p;
+    }
+
+    if (nm_whisper_build_words(tok, n_tok, offset_ms, seg_start, seg_end,
+                               wctx->dtw_preset >= 0, &words, &n_words) >= 0) {
+        json = nm_whisper_words_json(words, n_words);
+        nm_whisper_free_words(words, n_words);
+    }
+    av_free(tok);
+    return json;
 }
 
 static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
@@ -404,20 +874,39 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
            "run transcription at %" PRId64 " ms, %d/%d samples (%.2f seconds)...\n",
            timestamp_ms, samples, wctx->audio_buffer_fill_size, duration);
 
-    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    struct whisper_full_params params = whisper_full_default_params(
+        wctx->beam_size > 0 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
     params.language = wctx->language;
     params.translate = wctx->translate;
-    params.n_threads = ff_filter_get_nb_threads(ctx);
+    params.n_threads = wctx->n_threads;
     params.print_special = 0;
     params.print_progress = 0;
     params.print_realtime = 0;
     params.print_timestamps = 0;
     params.max_len = wctx->max_len;
-    params.token_timestamps = (wctx->max_len > 0);
+    params.token_timestamps = (wctx->max_len > 0) || wctx->word_timestamps;
     params.split_on_word = (wctx->max_len > 0);
+    params.initial_prompt = wctx->initial_prompt;
+    if (wctx->beam_size > 0) {
+        params.beam_search.beam_size = wctx->beam_size;
+        // The beam-search defaults leave greedy.best_of at -1, which makes the
+        // temperature fallback decode with a single candidate. whisper-cli
+        // always passes the greedy default (5) along with a beam size; do the
+        // same, so beam_size=N here means what --beam-size N means there.
+        params.greedy.best_of = whisper_full_default_params(WHISPER_SAMPLING_GREEDY).greedy.best_of;
+    }
+    if (wctx->best_of > 0)
+        params.greedy.best_of = wctx->best_of;
 
     if (whisper_full(wctx->ctx_wsp, params, wctx->audio_buffer, samples) != 0) {
         av_log(ctx, AV_LOG_ERROR, "Failed to process audio with whisper.cpp\n");
+        /* Drain the failed window anyway. This used to return with the
+         * buffer untouched, and filter_frame calls this function precisely to
+         * make room: it then appended the next frame to a buffer that was
+         * still full and wrote past the end of the allocation. Dropping the
+         * audio is the only option that does not overflow, and it also stops
+         * the same window being retried forever. */
+        consume_buffer(wctx, samples);
         return;
     }
 
@@ -478,7 +967,18 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
 
                 wctx->index++;
             } else if (!av_strcasecmp(wctx->format, "json")) {
-                buf = av_asprintf("{\"start\":%" PRId64 ",\"end\":%" PRId64 ",\"text\":\"%s\"}\n", start_t, end_t, text_cleaned);
+                char *text_json = nm_json_escape(text_cleaned);
+                if (text_json && wctx->word_timestamps) {
+                    char *words_json = segment_words_json(ctx, i, timestamp_ms, start_t, end_t);
+                    if (words_json)
+                        buf = av_asprintf("{\"start\":%" PRId64 ",\"end\":%" PRId64
+                                          ",\"text\":\"%s\",\"words\":%s}\n",
+                                          start_t, end_t, text_json, words_json);
+                    av_freep(&words_json);
+                } else if (text_json)
+                    buf = av_asprintf("{\"start\":%" PRId64 ",\"end\":%" PRId64 ",\"text\":\"%s\"}\n",
+                                      start_t, end_t, text_json);
+                av_freep(&text_json);
             } else
                 buf = av_asprintf("%s\n", text_cleaned);
 
@@ -511,13 +1011,7 @@ static void run_transcription(AVFilterContext *ctx, AVFrame *frame, int samples)
     }
     av_freep(&segments_text);
 
-    if (wctx->audio_buffer_fill_size > samples) {
-        memcpy(wctx->audio_buffer, wctx->audio_buffer + samples,
-               (wctx->audio_buffer_fill_size - samples) * sizeof(*wctx->audio_buffer));
-        wctx->audio_buffer_start_ms += duration * 1000;
-    }
-    wctx->audio_buffer_fill_size -= samples;
-    wctx->audio_buffer_vad_size = wctx->audio_buffer_fill_size;
+    consume_buffer(wctx, samples);
 }
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
@@ -528,17 +1022,54 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 
     const int samples = frame->nb_samples;
     const float *input_data = (const float *) frame->data[0];
+    int copy = samples;
+    int skipped = 0;
 
     if (wctx->audio_buffer_fill_size + samples > wctx->audio_buffer_queue_size) {
         run_transcription(ctx, frame, wctx->audio_buffer_fill_size);
     }
 
+    /* The append below writes into an allocation of exactly
+     * audio_buffer_queue_size floats, and nothing checked that it fit. Two
+     * ways it did not, both of which wrote past the end of the heap buffer:
+     *
+     *  - run_transcription could not drain. Since it now drains even when
+     *    whisper_full fails, that is down to a missing context; the buffered
+     *    audio cannot be transcribed then, so it is dropped.
+     *
+     *  - this frame alone is bigger than the whole queue. queue= accepts
+     *    values down to 20 ms, which is 320 samples at 16 kHz, and an
+     *    ordinary audio frame is 1024 or more -- so queue=0.02 on a normal
+     *    input was enough to overflow. The newest queue_size samples are
+     *    kept, and the start time moves forward by what was skipped.
+     *
+     * After this, fill + copy <= audio_buffer_queue_size always holds. */
+    if (wctx->audio_buffer_fill_size + copy > wctx->audio_buffer_queue_size) {
+        if (wctx->audio_buffer_fill_size) {
+            av_log(ctx, AV_LOG_WARNING,
+                   "dropping %d buffered samples that could not be transcribed\n",
+                   wctx->audio_buffer_fill_size);
+            wctx->audio_buffer_fill_size = 0;
+            wctx->audio_buffer_vad_size  = 0;
+        }
+        if (copy > wctx->audio_buffer_queue_size) {
+            skipped = copy - wctx->audio_buffer_queue_size;
+            copy    = wctx->audio_buffer_queue_size;
+            av_log(ctx, AV_LOG_WARNING,
+                   "frame of %d samples is larger than the %d-sample queue; "
+                   "keeping the last %d. Raise queue= to avoid this.\n",
+                   samples, wctx->audio_buffer_queue_size, copy);
+        }
+    }
+
     if (!wctx->audio_buffer_fill_size)
         wctx->audio_buffer_start_ms = av_rescale_q(frame->pts,
                                                    (AVRational) {1000, 1},
-                                                   (AVRational) {inlink->time_base.den, inlink->time_base.num});
-    memcpy(wctx->audio_buffer + wctx->audio_buffer_fill_size, input_data, samples * sizeof(*wctx->audio_buffer));
-    wctx->audio_buffer_fill_size += samples;
+                                                   (AVRational) {inlink->time_base.den, inlink->time_base.num})
+                                    + av_rescale(skipped, 1000, WHISPER_SAMPLE_RATE);
+    memcpy(wctx->audio_buffer + wctx->audio_buffer_fill_size, input_data + skipped,
+           copy * sizeof(*wctx->audio_buffer));
+    wctx->audio_buffer_fill_size += copy;
 
     if (wctx->ctx_vad
         && (wctx->audio_buffer_fill_size - wctx->audio_buffer_vad_size) >=
@@ -679,6 +1210,12 @@ static const AVOption whisper_options[] = {
     { "vad_threshold", "VAD threshold", OFFSET(vad_threshold), AV_OPT_TYPE_FLOAT, {.dbl = 0.5}, 0.0, 1.0, .flags = FLAGS },
     { "vad_min_speech_duration", "Minimum speech duration for VAD", OFFSET(vad_min_speech_duration), AV_OPT_TYPE_DURATION, {.i64 = 100000}, 20000, HOURS, .flags = FLAGS },
     { "vad_min_silence_duration", "Minimum silence duration for VAD", OFFSET(vad_min_silence_duration), AV_OPT_TYPE_DURATION, {.i64 = 500000}, 0, HOURS, .flags = FLAGS },
+    { "dtw", "DTW token timestamps with this alignment-heads preset (tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large.v1, large.v2, large.v3, large.v3.turbo); turns flash attention off", OFFSET(dtw), AV_OPT_TYPE_STRING, {.str = ""}, .flags = FLAGS },
+    { "word_timestamps", "Add a per-word 'words' array to each format=json segment", OFFSET(word_timestamps), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, .flags = FLAGS },
+    { "prompt", "Initial prompt for whisper (only its last ~223 tokens are used)", OFFSET(prompt), AV_OPT_TYPE_STRING, {.str = ""}, .flags = FLAGS },
+    { "prompt_file", "Read the initial prompt from this UTF-8 file; wins over prompt", OFFSET(prompt_file), AV_OPT_TYPE_STRING, {.str = ""}, .flags = FLAGS },
+    { "beam_size", "Beam search with this beam size (0 = greedy decoding)", OFFSET(beam_size), AV_OPT_TYPE_INT, {.i64 = 0}, 0, NM_WHISPER_MAX_DECODERS, .flags = FLAGS },
+    { "best_of", "Candidates for greedy decoding and the temperature fallback (0 = library default)", OFFSET(best_of), AV_OPT_TYPE_INT, {.i64 = 0}, 0, NM_WHISPER_MAX_DECODERS, .flags = FLAGS },
     { NULL }
 };
 
@@ -687,6 +1224,14 @@ static const AVClass whisper_class = {
     .item_name = av_default_item_name,
     .option = whisper_options,
     .version = LIBAVUTIL_VERSION_INT,
+};
+
+static const AVFilterPad whisper_inputs[] = {
+    {
+        .name         = "default",
+        .type         = AVMEDIA_TYPE_AUDIO,
+        .config_props = config_input,
+    },
 };
 
 const FFFilter ff_af_whisper = {
@@ -698,7 +1243,7 @@ const FFFilter ff_af_whisper = {
     .uninit = uninit,
     .activate = activate,
     .priv_size = sizeof(WhisperContext),
-    FILTER_INPUTS(ff_audio_default_filterpad),
+    FILTER_INPUTS(whisper_inputs),
     FILTER_OUTPUTS(ff_audio_default_filterpad),
     FILTER_QUERY_FUNC2(query_formats),
 };

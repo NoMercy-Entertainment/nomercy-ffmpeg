@@ -8,7 +8,7 @@ CONFIG_ARG="-DSDL_SHARED=OFF \
 
 if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     # xxf86vm
-    git clone --branch libXxf86vm-1.1.6 https://gitlab.freedesktop.org/xorg/lib/libxxf86vm.git /build/libxxf86vm
+    git clone --branch libXxf86vm-1.1.6 https://github.com/NoMercy-CI-Mirrors/libxxf86vm.git /build/libxxf86vm
     cd /build/libxxf86vm
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
@@ -18,11 +18,11 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libxxf86vm && cd /build
 
     # xrender
-    git clone --branch libXrender-0.9.12 https://gitlab.freedesktop.org/xorg/lib/libxrender.git /build/libxrender
+    git clone --branch libXrender-0.9.12 https://github.com/NoMercy-CI-Mirrors/libxrender.git /build/libxrender
     cd /build/libxrender
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
@@ -32,11 +32,11 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libxrender && cd /build
 
     # xscrnsaver
-    git clone --branch libXScrnSaver-1.2.4 https://gitlab.freedesktop.org/xorg/lib/libxscrnsaver.git /build/libxscrnsaver
+    git clone --branch libXScrnSaver-1.2.4 https://github.com/NoMercy-CI-Mirrors/libxscrnsaver.git /build/libxscrnsaver
     cd /build/libxscrnsaver
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
@@ -46,11 +46,11 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libxscrnsaver && cd /build
 
     # xrandr
-    git clone --branch libXrandr-1.5.4 https://gitlab.freedesktop.org/xorg/lib/libxrandr.git /build/libxrandr
+    git clone --branch libXrandr-1.5.4 https://github.com/NoMercy-CI-Mirrors/libxrandr.git /build/libxrandr
     cd /build/libxrandr
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
@@ -60,11 +60,11 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libxrandr && cd /build
 
     # xi
-    git clone --branch libXi-1.8.2 https://gitlab.freedesktop.org/xorg/lib/libxi.git /build/libxi
+    git clone --branch libXi-1.8.2 https://github.com/NoMercy-CI-Mirrors/libxi.git /build/libxi
     cd /build/libxi
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
@@ -74,11 +74,11 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libxi && cd /build
 
     # xinerama
-    git clone --branch libXinerama-1.1.5 https://gitlab.freedesktop.org/xorg/lib/libxinerama.git /build/libxinerama
+    git clone --branch libXinerama-1.1.5 https://github.com/NoMercy-CI-Mirrors/libxinerama.git /build/libxinerama
     cd /build/libxinerama
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
@@ -88,11 +88,11 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libxinerama && cd /build
 
     # xcursor
-    git clone --branch libXcursor-1.2.3 https://gitlab.freedesktop.org/xorg/lib/libxcursor.git /build/libxcursor
+    git clone --branch libXcursor-1.2.3 https://github.com/NoMercy-CI-Mirrors/libxcursor.git /build/libxcursor
     cd /build/libxcursor
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
@@ -102,7 +102,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libxcursor && cd /build
 
     # libsamplerate
@@ -115,11 +115,11 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libsamplerate && cd /build
 
     # libpulse
-    git clone --branch stable-16.x https://gitlab.freedesktop.org/pulseaudio/pulseaudio.git /build/pulseaudio
+    git clone --branch stable-16.x https://github.com/NoMercy-CI-Mirrors/pulseaudio.git /build/pulseaudio
     cd /build/pulseaudio
     echo >src/utils/meson.build
     echo >src/pulsecore/sndfile-util.c
@@ -143,7 +143,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    ninja -j$(nproc) && ninja install
+    ninja -j$(nproc) && ninja install || exit 1
     echo "Libs.private: -lstdc++ -ldl -lrt" >>${PREFIX}/lib/pkgconfig/libpulse.pc
     echo "Libs.private: -lstdc++ -ldl -lrt" >>${PREFIX}/lib/pkgconfig/libpulse-simple.pc
     rm -rf /build/pulseaudio && cd /build
@@ -169,7 +169,7 @@ else
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         exit 1
     fi
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
     rm -rf /build/libsamplerate
 
     if [[ ${TARGET_OS} == "linux" ]]; then
@@ -217,7 +217,7 @@ cmake -S .. -B . \
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 
 if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" ]]; then
     sed -ri -e 's/\-Wl,\-\-no\-undefined.*//' -e 's/ \-l\/.+?\.a//g' ${PREFIX}/lib/pkgconfig/sdl2.pc

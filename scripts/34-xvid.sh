@@ -36,7 +36,7 @@ if [[ ${TARGET_OS} == "freebsd" ]]; then
     install -m 644 ./=build/libxvidcore.a ${PREFIX}/lib/libxvidcore.a
     install -m 644 ../../src/xvid.h ${PREFIX}/include/xvid.h
 else
-    make -j$(nproc) && make install
+    make -j$(nproc) && make install || exit 1
 fi
 if [[ ${TARGET_OS} == "windows" ]]; then
     mv ${PREFIX}/lib/xvidcore.a ${PREFIX}/lib/libxvidcore.a

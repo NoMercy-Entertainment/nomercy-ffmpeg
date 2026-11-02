@@ -17,6 +17,7 @@ $ErrorActionPreference = 'Stop'
 
 $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/cpu-variant.ps1"
+. "$HERE/lib/stemsplit.ps1"
 
 function Fail($msg) { Write-Host "❌ $msg"; exit 1 }
 function Note($msg) { Write-Host "ℹ️  $msg" }
@@ -269,5 +270,34 @@ if ($tsMatches.Count -gt 0) { $tsOut = $tsMatches[$tsMatches.Count - 1].Groups[1
 if ([string]::IsNullOrEmpty($tsOut)) { Fail 'trailingsilence: empty metadata extraction' }
 if ($tsOut -ne '1') { Fail "trailingsilence did not detect the tail (got '$tsOut')" }
 Write-Host "✅ trailingsilence detected the padded tail (detected=$tsOut)"
+
+# stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; the design is
+# docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md), the
+# same three checks smoke.sh runs, through lib/stemsplit.ps1. They need the
+# assets tests/lib/stemsplit-assets.sh fetches, which the workflow provides
+# here, and STEMSPLIT_TEST_REQUIRED=1 there turns a skip into a failure: a
+# fetch that quietly stopped supplying an asset must not leave these
+# "passing" by never running.
+function Invoke-StemsplitCheck($name, [scriptblock]$block) {
+    $r = & $block
+    switch ($r.Status) {
+        'Pass' {
+            ($r.Output -split "`r?`n" | Where-Object { $_ }) | ForEach-Object { Write-Host "   $_" }
+            Write-Host "✅ $name"
+        }
+        'Skip' {
+            if ($env:STEMSPLIT_TEST_REQUIRED -eq '1') { Write-Host $r.Output; Fail "${name}: skipped, but STEMSPLIT_TEST_REQUIRED=1" }
+            Note "${name}: $($r.Reason)"
+        }
+        default {
+            Write-Host $r.Output
+            Fail "${name}: $($r.Reason)"
+        }
+    }
+}
+Invoke-StemsplitCheck 'stemsplit v1.1.0 suite with the tiny RoFormer models and Spleeter' { Test-StemsplitSuite -FFmpegExe $ffmpeg -Platform $Platform }
+Invoke-StemsplitCheck 'stemsplit 20/20 clean exits, Spleeter and RoFormer' { Test-StemsplitCleanExit -FFmpegExe $ffmpeg -Platform $Platform }
+Invoke-StemsplitCheck 'stemsplit Spleeter stems byte-identical with the previous release' { Test-StemsplitSpleeterAB -FFmpegExe $ffmpeg -Platform $Platform }
+
 Write-Host '✅ Smoke test passed.'
 exit 0

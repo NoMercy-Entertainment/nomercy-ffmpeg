@@ -22,6 +22,11 @@ on:
         type: boolean
         default: true
 
+# Explicit and least-privilege: without this block every job gets the repo
+# default token, which is read/write. Jobs that need more set their own.
+permissions:
+  contents: read
+
 jobs:
   # ── Detect which platforms need to (re)build ─────────────────────────────
   detect-changes:
@@ -87,6 +92,7 @@ jobs:
       # --pull in the reusable build, this guarantees the matrix never compiles
       # against a stale local base image on a beast-unit runner.
       base_tag: ${{ needs.detect-changes.outputs.base-changed == 'true' && github.sha || 'latest' }}
+      source_refs: ${{ needs.detect-changes.outputs.source-refs }}
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -116,6 +122,7 @@ jobs:
       && (github.event_name != 'pull_request'
           || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64, beast-unit]
+    timeout-minutes: 7200
     steps:
       - name: Log in to DockerHub
         uses: docker/login-action@v4
@@ -199,6 +206,79 @@ jobs:
             zip)    unzip -o "${archive}" ;;
           esac
 
+      # stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; design in
+      # docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md).
+      # The three checks in tests/lib/stemsplit.sh read the assets
+      # tests/lib/stemsplit-assets.sh fetches, every one pinned by digest: the
+      # stemsplit tag's own suite, its tiny RoFormer models, the Spleeter model
+      # and the previous release's binary for this platform. Only where this
+      # runner can execute the binary; the cross-exec platforms get the same
+      # checks from the manual suite on real hardware. STEMSPLIT_TEST_REQUIRED
+      # turns a skip into a failure, so a fetch that quietly stopped supplying
+      # an asset cannot leave the gates "passing" by never running. The suite
+      # and its corpus generator are Python with numpy; setup-python gives
+      # every runner the same interpreter, and the numpy version is the one
+      # the stemsplit converter's own lock file names.
+      - name: Set up Python for the stemsplit checks
+        if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Fetch stemsplit test assets
+        if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --disable-pip-version-check numpy==2.4.6
+          chmod +x tests/lib/stemsplit-assets.sh
+          tests/lib/stemsplit-assets.sh "${{ matrix.platform }}" "${RUNNER_TEMP}/stemsplit-assets" >> "$GITHUB_ENV"
+          echo "STEMSPLIT_TEST_REQUIRED=1" >> "$GITHUB_ENV"
+
+      # The whisper option tests (#112) need a real model, a clip, and the
+      # v1.0.44 binary that default output must stay byte-identical to. Only
+      # for linux-x86_64: the one platform whose smoke runner can execute its
+      # own binary and has a reference build of the same platform. The model
+      # and the clip are pinned by digest; a download that is not what was
+      # pinned fails the job instead of quietly testing something else. The
+      # reference binary is the one the stemsplit step above already fetched,
+      # also by digest. WHISPER_TEST_REQUIRED makes smoke.sh fail rather than
+      # skip if these ever stop arriving.
+      - name: Fetch whisper test assets (linux-x86_64)
+        if: matrix.platform == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          A="${RUNNER_TEMP}/whisper-assets"
+          mkdir -p "${A}"
+          fetch() {  # fetch <url> <out> <sha256>
+            curl -fsSL --retry 3 -o "$2" "$1" || { echo "::error::download failed: $1"; return 1; }
+            local got
+            got="$(sha256sum "$2" | cut -d' ' -f1)"
+            [[ "${got}" == "$3" ]] || { echo "::error::$(basename "$2"): expected $3, got ${got}"; return 1; }
+            echo "fetched: $(basename "$2")"
+          }
+          fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" \
+                "${A}/ggml-base.en.bin" \
+                "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+          fetch "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav" \
+                "${A}/jfk.wav" \
+                "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"
+          fetch "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin" \
+                "${A}/ggml-silero-v5.1.2.bin" \
+                "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
+          # stemsplit-assets.sh keeps one reference build per platform under
+          # ref/<platform>/, so one machine can hold several platforms' assets.
+          ref="${STEMSPLIT_ASSETS_DIR:?the stemsplit asset step must run first}/ref/${{ matrix.platform }}/ffmpeg"
+          [[ -x "${ref}" ]] || { echo "::error::no reference build at ${ref}"; exit 1; }
+          {
+            echo "WHISPER_TEST_MODEL=${A}/ggml-base.en.bin"
+            echo "WHISPER_TEST_AUDIO=${A}/jfk.wav"
+            echo "WHISPER_TEST_VAD_MODEL=${A}/ggml-silero-v5.1.2.bin"
+            echo "WHISPER_TEST_REFERENCE_FFMPEG=${ref}"
+            echo "WHISPER_TEST_REQUIRED=1"
+          } >> "$GITHUB_ENV"
+
       - name: Smoke test (unix)
         if: matrix.kind == 'unix'
         shell: bash
@@ -237,6 +317,7 @@ jobs:
       && needs.export-artifacts.result == 'success'
       && contains(needs.detect-changes.outputs.platforms-to-build, 'darwin-arm64')
     runs-on: [self-hosted, macOS, ARM64, apple-silicon]
+    timeout-minutes: 7200
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -303,16 +384,21 @@ jobs:
                 "jfk.wav" \
                 "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e" || exit 1
 
-          # The stemsplit model is not public. README.md:249 says it is
-          # "published as a GitHub release asset"; it is attached to no release
-          # yet (checked against v1.0.42). Until it is, it has to be placed on
-          # this runner by hand, once.
-          if [ ! -f "${CACHE}/spleeter-2stems-f16.gguf" ]; then
-            echo "::error::${CACHE}/spleeter-2stems-f16.gguf is missing on this runner."
-            echo "::error::Place it there once — 39,319,552 bytes, sha256 155dc9d2e2eef70ad633af98134df29a5273defaeb98ef013d46251faa69d0ad."
-            echo "::error::Better: attach it to a release as README.md:249 already promises, then fetch it here by digest like the two above."
-            exit 1
-          fi
+          # The stemsplit model, fetched by digest like the two above. It is
+          # not in this repository's releases: it lives in the org's
+          # nomercy-stemsplit-models, which is public, so no token is needed.
+          #
+          # This used to demand the file be placed on the runner by hand, on
+          # the belief that the model was attached to no release. It was:
+          # v2026.09.09 has carried it since 2026-09-09, with a matching
+          # sha256. Nobody put it on the Mac mini, so this job failed on every
+          # run, and because a failed job makes the whole workflow conclude
+          # failure, npm-publish's conclusion gate skipped. That is why npm sat
+          # on 1.0.42 while v1.0.43 and v1.0.44 shipped: a reporting job in no
+          # other job's needs was silently blocking the client release.
+          fetch "https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/download/v2026.09.09/spleeter-2stems-f16.gguf" \
+                "spleeter-2stems-f16.gguf" \
+                "155dc9d2e2eef70ad633af98134df29a5273defaeb98ef013d46251faa69d0ad" || exit 1
 
           # A music clip generated by the binary under test rather than
           # downloaded: no licensing question, identical every run, and gate 4
@@ -400,13 +486,14 @@ jobs:
   # a guarantee from another job's condition is the kind of coincidence that
   # stops being true the moment that job is refactored.
   publish-rc:
-    needs: [detect-changes, export-artifacts, smoke-test]
+    needs: [detect-changes, export-artifacts, smoke-test, unit-tests]
     if: |
       github.event_name == 'pull_request'
       && github.head_ref == 'dev'
       && github.event.pull_request.head.repo.full_name == github.repository
       && needs.export-artifacts.result == 'success'
       && needs.smoke-test.result == 'success'
+      && needs.unit-tests.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -432,6 +519,26 @@ jobs:
             cp "$f" "release/${stem}-${VERSION}-rc.${ext}"
           done
           ls -lh release/
+
+          # Refuse to publish an incomplete release. The npm client pins itself
+          # to the newest tag and builds every platform's asset URL from it, so
+          # a release missing one platform is a 404 for everyone on that
+          # platform. detect-changes now widens any partial selection to every
+          # platform, which is what prevents this; this check is the second
+          # line, so that a future change to that selection cannot quietly
+          # bring partial releases back. It runs before anything is tagged.
+          missing=""
+          for platform in ${{ needs.detect-changes.outputs.all-platforms }}; do
+            n=$(find release/ -maxdepth 1 -name "ffmpeg-${FFMPEG_VERSION}-${platform}-${VERSION}.*" ! -name "*.sha256" | wc -l)
+            if [[ "${n}" -ne 1 ]]; then
+              missing="${missing} ${platform}(${n})"
+            fi
+          done
+          if [[ -n "${missing}" ]]; then
+            echo "::error::refusing to publish ${VERSION}: expected exactly one archive per platform, got:${missing}"
+            exit 1
+          fi
+          echo "All platforms present: ${{ needs.detect-changes.outputs.all-platforms }}"
 
       - name: Generate per-asset SHA256, manifest and signature
         env:
@@ -516,11 +623,23 @@ jobs:
             `manifest.json` lists all assets with SHA-256 digests; `manifest.json.sig`
             is a detached ASCII-armored GPG signature over `manifest.json`.
 
+  # ── Unit tests for the headers in scripts/includes ──────────────────────
+  # Plain C against the same headers the filters compile, so it needs no
+  # FFmpeg build and runs on a hosted runner in seconds (#112).
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run tests/unit
+        run: bash tests/unit/run.sh
+
   # ── Single required status context for the PR build path ─────────────────
   # always() so it always reports; explicit result checks so any failed
   # dependency reliably fails the gate. PR-only (skipped on master pushes).
   pr-build:
-    needs: [detect-changes, build-base, build-platforms, export-artifacts, smoke-test]
+    needs: [detect-changes, build-base, build-platforms, export-artifacts, smoke-test, unit-tests]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -532,7 +651,8 @@ jobs:
           platforms='${{ needs.build-platforms.result }}'
           export='${{ needs.export-artifacts.result }}'
           smoke='${{ needs.smoke-test.result }}'
-          echo "base=$base platforms=$platforms export=$export smoke=$smoke"
+          unit='${{ needs.unit-tests.result }}'
+          echo "base=$base platforms=$platforms export=$export smoke=$smoke unit=$unit"
 
           # A fork PR skips the three self-hosted jobs by design, so every check
           # below would report 'skipped' and read as a broken build. Say what
@@ -552,18 +672,29 @@ jobs:
           if [[ "$platforms" != "success" ]]; then echo "❌ build-platforms: $platforms"; exit 1; fi
           if [[ "$export" != "success" ]]; then echo "❌ export-artifacts: $export"; exit 1; fi
           if [[ "$smoke" != "success" ]]; then echo "❌ smoke-test: $smoke"; exit 1; fi
+          if [[ "$unit" != "success" ]]; then echo "❌ unit-tests: $unit"; exit 1; fi
           echo "✅ PR build path passed."
 
   # ── Vulnerability scan the freshly-built images ─────────────────────────
-  # Master-only — running Trivy on every PR adds 5-10 min for no marginal
-  # benefit; vulns appear when a base image is rebuilt, which only happens
-  # on master.
+  # Master pushes, and the dev->master release PR from this repository. It
+  # used to be master-only (Trivy on every PR adds 5-10 min for no marginal
+  # benefit), which meant no scan could ever be seen before a release: the
+  # tool-status page showed every Trivy category as "workflow runs failing"
+  # for a month because the last master run had concluded failure through
+  # an unrelated reporting job, and nothing could refresh it short of the next
+  # release. The release PR's images are pushed under the commit SHA exactly
+  # like master's (reusable-docker-build tags both), so the RC gets a fresh
+  # scan and the page is current before the release lands. Other PRs still
+  # skip it; the same-repo check keeps a fork's branch called `dev` out.
   security-scan:
     needs: [detect-changes, build-platforms]
     if: |
       always() && !cancelled()
-      && github.event_name == 'push' && github.ref == 'refs/heads/master'
       && needs.build-platforms.result == 'success'
+      && ((github.event_name == 'push' && github.ref == 'refs/heads/master')
+          || (github.event_name == 'pull_request'
+              && github.base_ref == 'master' && github.head_ref == 'dev'
+              && github.event.pull_request.head.repo.full_name == github.repository))
     strategy:
       fail-fast: false
       matrix:
@@ -578,8 +709,13 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # Pinned to a commit, not @master: this step runs after the login above
+      # has written the DockerHub push credentials to the runner's docker
+      # config, so whatever code it runs can read them. A branch reference ran
+      # whatever that branch held that day (audit AUD-9100). Bump by changing
+      # the SHA and the version comment together.
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nomercyentertainment/ffmpeg-${{ matrix.platform }}:${{ github.sha }}
           format: sarif
@@ -596,11 +732,12 @@ jobs:
   # Master push only, after the whole pipeline is green. Uses the version
   # computed once by detect-changes.
   release:
-    needs: [detect-changes, export-artifacts, smoke-test]
+    needs: [detect-changes, export-artifacts, smoke-test, unit-tests]
     if: |
       github.event_name == 'push' && github.ref == 'refs/heads/master'
       && needs.export-artifacts.result == 'success'
       && needs.smoke-test.result == 'success'
+      && needs.unit-tests.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
