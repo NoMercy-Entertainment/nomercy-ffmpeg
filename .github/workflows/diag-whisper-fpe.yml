@@ -9,13 +9,16 @@ name: Diagnose whisper SIGFPE on ubuntu-latest
 # same way, so the crash site and the first bad version are known before the
 # fix is written. Delete it once the cause is in the main pipeline's tests.
 
+# A push event, not workflow_dispatch: a dispatch resolves the workflow file
+# on the default branch, where this one does not and must not exist.
 on:
-  workflow_dispatch:
-    inputs:
-      run_id:
-        description: pipeline run whose build-artifacts hold the linux-x86_64 tarball
-        required: true
-        default: "41368486061"
+  push:
+    branches: [dev]
+    paths: ['.github/workflows/diag-whisper-fpe.yml']
+
+env:
+  # The pipeline run whose build-artifacts hold the linux-x86_64 tarball.
+  RUN_ID: "41368486061"
 
 permissions:
   contents: read
@@ -42,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p w && cd w
-          gh run download "${{ github.event.inputs.run_id }}" -R "${GITHUB_REPOSITORY}" -n build-artifacts -D art
+          gh run download "${RUN_ID}" -R "${GITHUB_REPOSITORY}" -n build-artifacts -D art
           tar xzf art/ffmpeg-9.0-linux-x86_64.tar.gz
           find . -name ffmpeg -type f
           cp "$(find . -name ffmpeg -type f | head -1)" ffmpeg-rc && chmod +x ffmpeg-rc
