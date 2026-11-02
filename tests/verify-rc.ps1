@@ -15,7 +15,11 @@ param(
     # the build it came from, and a verdict that cannot name its commit and
     # release proves nothing about which bytes were tested.
     [Parameter(Mandatory)][string]$Commit,
-    [Parameter(Mandatory)][string]$Tag
+    [Parameter(Mandatory)][string]$Tag,
+    # How the binary was run. The caller says so, because a guest cannot tell:
+    # under QEMU TCG the guest is ARM64 and so is the binary, which is exactly
+    # the case verify-rc.sh's arch-mismatch rule reports as native.
+    [ValidateSet('native', 'qemu-tcg')][string]$Execution = 'native'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -108,11 +112,11 @@ $document = [ordered]@{
         asset    = $assetName
         sha256   = $actualSha
     }
-    # Windows targets always run natively here; the field exists so the bot has
-    # one shape to read across every platform.
+    # Same shape as verify-rc.sh writes. The bot posts "native" or "via <x>" from
+    # it, so an emulated run is labelled as one in the evidence.
     execution  = [ordered]@{
-        native      = $true
-        translation = $null
+        native      = ($Execution -eq 'native')
+        translation = ($Execution -eq 'native') ? $null : $Execution
         host_arch   = $env:PROCESSOR_ARCHITECTURE
     }
     report     = (Get-Content -Raw -Path $reportPath | ConvertFrom-Json)

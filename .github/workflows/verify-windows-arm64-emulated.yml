@@ -1,5 +1,14 @@
 name: Verify Windows ARM64 (emulated)
 
+# The runner is github-windows-arm64-1: a QEMU guest registered by hand with
+# the standard labels, not the wsl-windows-arm package this workflow was
+# first written for. The probe of 2026-10-10 (probe-windows-arm64-runner)
+# found Windows 11 ARM64, native pwsh 7.6.6 on PATH, 8 CPUs, 8 GB, the
+# work drive D: with 119 GB free, and roughly 100x slower than native for
+# PowerShell itself -- every pwsh step costs two to five minutes before it
+# does anything, so the test is one step. The wrapper scripts live in
+# tools/windows-arm64 now; nothing has to be installed on the guest.
+
 on:
   workflow_run:
     workflows: ["CI/CD Pipeline"]
@@ -10,25 +19,36 @@ on:
         description: 'Existing FFmpeg release or RC tag'
         required: true
         type: string
+  # A same-repo pull request into dev that touches this workflow or its
+  # scripts tests them against the newest published release. workflow_run and
+  # workflow_dispatch only work from master, and master takes PRs from dev
+  # alone, so this is the one way to try a change before it ships.
+  pull_request:
+    branches: [dev]
+    paths:
+      - '.github/workflows/verify-windows-arm64-emulated.yml'
+      - 'tools/windows-arm64/**'
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-arm64-tcg-${{ github.event.workflow_run.head_sha || inputs.tag }}
+  group: windows-arm64-tcg-${{ github.event.workflow_run.head_sha || inputs.tag || github.event.pull_request.head.sha }}
   cancel-in-progress: false
 
 jobs:
   resolve:
-    # The Mac sets this variable only after registration and an online check.
-    # Fork builds never reach the persistent Windows runner.
+    # The variable is the off switch: unset it and nothing queues for a runner
+    # that is down. Fork builds and fork PRs never reach the self-hosted machine.
     if: >-
       vars.FFMPEG_TCG_RUNNER_ENABLED == 'true' &&
       ((github.event_name == 'workflow_dispatch' &&
         github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
        (github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_repository.full_name == github.repository))
+        github.event.workflow_run.head_repository.full_name == github.repository) ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -50,6 +70,10 @@ jobs:
               const tag = process.env.INPUT_TAG;
               if (!validTag.test(tag)) throw new Error('Invalid release tag');
               release = (await github.rest.repos.getReleaseByTag({...repo, tag})).data;
+            } else if (context.eventName === 'pull_request') {
+              // Trying the workflow itself: the newest published release is the
+              // subject, since the PR has not built anything.
+              release = (await github.rest.repos.getLatestRelease({...repo})).data;
             } else {
               const run = context.payload.workflow_run;
               if (run.head_repository.full_name !== `${repo.owner}/${repo.repo}`) {
@@ -94,22 +118,48 @@ jobs:
   verify:
     needs: resolve
     if: needs.resolve.outputs.ready == 'true'
-    runs-on: [self-hosted, Windows, ARM64, ffmpeg-emulated, windows-aarch64-tcg]
-    timeout-minutes: 360
+    runs-on: [self-hosted, Windows, ARM64]
+    timeout-minutes: 7200 # Five days: the GitHub self-hosted job execution limit.
     defaults:
       run:
-        shell: C:\Tools\PowerShell-7.6.6-arm64\pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File {0}
+        shell: pwsh
     steps:
-      - name: Run the existing codec suite in emulated Windows
+      # Only the two wrapper scripts; the suite comes from the release's own
+      # commit, fetched by the script. A full clone is minutes under emulation.
+      - name: Checkout the wrapper scripts
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: tools/windows-arm64
+          sparse-checkout-cone-mode: true
+
+      # One step on purpose: each pwsh start costs minutes here. The work goes
+      # under RUNNER_TEMP, which the runner clears between jobs, on the D:
+      # drive. The coverage note is written from the same step for the same
+      # reason, and always, so a failed run still says what it was.
+      - name: Run the codec suite against the release in emulated Windows
         id: test
         env:
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           EXPECTED_COMMIT: ${{ needs.resolve.outputs.commit }}
         run: |
-          $script = 'C:\ffmpeg-runner-tools\Invoke-ReleaseTest.ps1'
-          if (-not (Test-Path -LiteralPath $script)) { throw 'Install/update the Windows ARM64 runner package first.' }
-          & $script -Tag $env:RELEASE_TAG -ExpectedCommit $env:EXPECTED_COMMIT
-          exit $LASTEXITCODE
+          # Starts failed: if the script dies before setting it, `exit $code`
+          # must not read an empty value as success.
+          $code = 1
+          try {
+            & "$env:GITHUB_WORKSPACE\tools\windows-arm64\Invoke-ReleaseTest.ps1" `
+              -Tag $env:RELEASE_TAG -ExpectedCommit $env:EXPECTED_COMMIT `
+              -WorkRoot "$env:RUNNER_TEMP\ffmpeg-arm64"
+            $code = $LASTEXITCODE
+          }
+          finally {
+            @'
+          ## Windows ARM64 under QEMU TCG
+          Functional/codec coverage in an emulated guest. This is not a native-hardware verdict.
+          GPU encoder skips are not passes. Hardware decoding is not tested by this suite.
+          No release hardware-checklist boxes are changed by this workflow.
+          '@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          }
+          exit $code
 
       - name: Upload emulation reports
         if: always() && steps.test.outputs.results-root != ''
@@ -124,13 +174,3 @@ jobs:
             ${{ steps.test.outputs.results-root }}/results/*/summary.json
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Explain coverage
-        if: always()
-        run: |
-          @'
-          ## Windows ARM64 under QEMU TCG
-          Functional/codec coverage in an emulated guest. This is not a native-hardware verdict.
-          GPU encoder skips are not passes. Hardware decoding is not tested by this suite.
-          No release hardware-checklist boxes are changed by this workflow.
-          '@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

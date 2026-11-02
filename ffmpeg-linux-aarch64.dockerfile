@@ -113,6 +113,18 @@ COPY ./scripts /scripts
 # Convert Windows line endings to Unix line endings
 RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} +
 
+# Which release of our own filters to build, and which omnidrive ref. CI
+# resolves them once per run (detect-changes) and passes the same values to
+# every platform. They sit right before init.sh on purpose: a changed value
+# reruns it, an unchanged one keeps the cache. Before, a new filter release
+# with nothing changed in scripts/ replayed the old download from the cache
+# of the last published image. Empty, as in a local build, means the
+# scripts resolve the newest themselves.
+ARG BEATDETECT_TAG=
+ARG KEYDETECT_TAG=
+ARG STEMSPLIT_TAG=
+ARG OMNIDRIVE_REF=
+
 # Initialize the build
 RUN touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_libflags.txt \
     && chmod +x /scripts/init/init.sh \
@@ -156,6 +168,19 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     ${FFMPEG_ENABLES} \
     --enable-filter=all \
     --enable-runtime-cpudetect \
+    # The shader compiler, by path. FFmpeg 9.0 compiles its Vulkan shaders at
+    # build time with the first compiler on its list that runs, and if that one
+    # fails the check it disables spirv_compiler and every component that needs
+    # it: 20 components -- 17 *_vulkan filters, the color_vulkan source, and the
+    # ffv1_vulkan and prores_ks_vulkan encoders. v1.0.44 shipped linux-aarch64
+    # without all 20. Measured on the base image, 2026-10-05:
+    #   ${PREFIX}/bin/glslc is shaderc built for the TARGET, an ARM binary; it
+    #     leads PATH, and only runs where the host emulates ARM.
+    #   /usr/bin/glslc (Ubuntu shaderc 2023.8) rejects --target-env=vulkan1.4,
+    #     which FFmpeg 9.0 asks for, so naming it disables all 20 too.
+    #   /usr/bin/glslang (glslang-tools 15.1.0) passes configure's own check.
+    # Naming glslang makes the result the same on every x86_64 host.
+    --glslc=/usr/bin/glslang \
     --extra-version="NoMercy-MediaServer" \
     --extra-cflags="-static -static-libgcc -static-libstdc++" \
     --extra-ldflags="-static -static-libgcc -static-libstdc++" \
@@ -175,6 +200,15 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=linux /build/ffmpeg-9.0-linux-aarch64.tar.gz /build/ffmpeg-9.0-linux-aarch64.tar.gz
+# The archive is named after ffmpeg_version in ffmpeg-base.dockerfile
+# (scripts/init/package.sh builds the name). It used to be spelled out
+# here as well, so a version bump that missed this line broke the build
+# at the very last step. The glob takes whatever version the build
+# produced. A wildcard COPY that matches nothing still succeeds, so the
+# RUN below insists on exactly one archive: none, or a stale second one
+# from another version, stops the build here.
+COPY --from=linux /build/ffmpeg-*-linux-aarch64.tar.gz /build/
+RUN set -- /build/ffmpeg-*-linux-aarch64.tar.gz && [ "$#" -eq 1 ] && [ -f "$1" ] \
+    || { echo "expected exactly one ffmpeg archive, found: $*" >&2; exit 1; }
 
-CMD ["cp", "/build/ffmpeg-9.0-linux-aarch64.tar.gz", "/output"]
+CMD ["sh", "-c", "cp /build/ffmpeg-*-linux-aarch64.tar.gz /output"]

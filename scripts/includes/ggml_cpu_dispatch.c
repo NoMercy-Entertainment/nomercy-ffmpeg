@@ -332,6 +332,14 @@ bool ggml_backend_is_cpu(ggml_backend_t backend)
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
+#if defined(__GLIBC__)
+#include <gnu/libc-version.h>
+#endif
+#endif
+
+#if !defined(NM_NO_VULKAN)
+/* vk_loader_shim.c, in this same archive: never open the loader. */
+void nm_vk_shim_forbid(void);
 #endif
 
 #if defined(_WIN32)
@@ -791,12 +799,23 @@ static int nm_vk_probe(const char *icd, long deadline_ms)
 
     close(fds[0]);
 
-    /* Only signal a child that has not answered. Once the byte is in hand the
+    /* Only signal a child that may still be alive. Once the byte is in hand the
      * child has already reached its _exit(), and on a host that auto-reaps
      * (SIGCHLD = SIG_IGN, the very host this guard was rewritten for) its pid
-     * can be free and recycled by the time a signal would land - so an
-     * unconditional kill here is a kill aimed at whatever now owns that pid. */
-    if (!got)
+     * can be free and recycled by the time a signal would land - so a kill
+     * there is a kill aimed at whatever now owns that pid.
+     *
+     * EOF is the same case and was not treated as one. This used to read
+     * `if (!got)`, which is true on EOF too, because no byte arrived: the
+     * child closed the pipe by dying. So a child that had already crashed was
+     * sent SIGKILL anyway - on exactly the auto-reaping host where its pid
+     * could already belong to something else. The comment on the EOF branch
+     * below says "we never signal the child on this path" - that was not true
+     * until this change, and now it is.
+     *
+     * Only the two exits that leave the child possibly running signal it: we
+     * ran out of time, or our own poll()/read() broke. */
+    if (timed_out || io_failed)
         kill(pid, SIGKILL);
 
     /* The status is kept now, not discarded, for one specific question on one
@@ -1076,6 +1095,86 @@ static void nm_vk_pin(const char *value)
     setenv("VK_DRIVER_FILES", value, 1);
 }
 
+/* Vulkan off for this process: the pin, for FFmpeg's own Vulkan code which
+ * opens the loader by itself, AND the shim told never to open it, for ggml.
+ * The pin alone was not enough: the loader is a shared object that brings
+ * the host's libc.so.6 into this statically linked process, and on a host
+ * whose glibc is not the one this binary was linked with that second libc
+ * dies on its first allocation from a thread (SIGFPE, run 41368486061) with
+ * no driver involved at all. A probe child survives that same loader, being
+ * single-threaded, so a "crash" verdict with no driver to blame is exactly
+ * this case; and once no driver is allowed, opening the loader can only hurt. */
+static void nm_vk_disable(void)
+{
+    nm_vk_pin("/nonexistent.json");
+    nm_vk_shim_forbid();
+}
+
+/* The host's glibc version, read from the libc.so.6 file the loader would
+ * bring in, by its banner ("... release version 2.43."), loading nothing:
+ * opening that file as a library is the very thing that is unsafe, and even
+ * in a probe child a dlopen of it died (first cut of this fix). The standard
+ * paths cover every glibc distribution; a host that keeps libc elsewhere
+ * answers NULL, which means "no comparison", not "fine". */
+static const char *nm_vk_host_libc_version(void)
+{
+    static const char *const paths[] = {
+        "/lib/x86_64-linux-gnu/libc.so.6", "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "/lib/aarch64-linux-gnu/libc.so.6", "/usr/lib/aarch64-linux-gnu/libc.so.6",
+        "/lib64/libc.so.6", "/usr/lib64/libc.so.6", "/lib/libc.so.6", "/usr/lib/libc.so.6",
+    };
+    static const char needle[] = "release version ";
+    static char found[32];
+    static char buf[65536 + sizeof(needle)];
+    size_t i;
+
+    for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        FILE *f = fopen(paths[i], "rb");
+        size_t keep = 0, n;
+
+        if (!f)
+            continue;
+        /* The banner sits in .rodata, a few hundred KB in; read the file in
+         * 64 KB pieces, carrying the needle's length over each boundary. */
+        while ((n = fread(buf + keep, 1, sizeof(buf) - 1 - keep, f)) > 0) {
+            char *hit;
+            size_t len = keep + n, j;
+
+            buf[len] = 0;
+            for (j = 0; j < len; j++)
+                if (!buf[j])
+                    buf[j] = ' ';   /* strstr must walk the whole piece */
+            hit = strstr(buf, needle);
+            if (hit) {
+                const char *v = hit + sizeof(needle) - 1;
+                size_t k = 0;
+
+                while (k < sizeof(found) - 1 && ((v[k] >= '0' && v[k] <= '9') || v[k] == '.'))
+                    found[k] = v[k], k++;
+                while (k && found[k - 1] == '.')
+                    k--;        /* the banner ends the version with a full stop */
+                found[k] = 0;
+                fclose(f);
+                return k ? found : NULL;
+            }
+            keep = len > sizeof(needle) ? sizeof(needle) - 1 : 0;
+            if (keep)
+                memmove(buf, buf + len - keep, keep);
+        }
+        fclose(f);
+    }
+    return NULL;
+}
+
+static const char *nm_vk_own_libc_version(void)
+{
+#if defined(__GLIBC__)
+    return gnu_get_libc_version();
+#else
+    return "";
+#endif
+}
+
 /*
  * Leave this process able to enumerate Vulkan without dying.
  *
@@ -1129,7 +1228,7 @@ static void nm_vk_pin(const char *value)
  * what it knows; understating it is the worse half of the same failure. */
 static void nm_vk_pin_precaution(const char *reason, int seen_crash)
 {
-    nm_vk_pin("/nonexistent.json");
+    nm_vk_disable();
     if (seen_crash)
         /* NOMERCY_VK_GUARD_MS is offered on this arm and NOMERCY_VK_ICD_GUARD=0
          * is not, and the asymmetry is the whole point. The other arm offers
@@ -1167,6 +1266,27 @@ static void nm_vk_make_safe(void)
      * harness reproduces the pre-guard crash without a second binary. */
     if (guard && !strcmp(guard, "0"))
         return;
+
+    /* First, and without forking: a host whose glibc is not the one this
+     * binary was linked with cannot have the loader opened at all (see
+     * nm_vk_disable). Measured with a 2.39 binary: 2.39 hosts run, 2.35, 2.36
+     * and 2.43 hosts die, loader installed and no driver (runs 41368486061,
+     * 41374434056). The notice names both, so the reader knows which host
+     * this build's Vulkan needs. */
+    {
+        const char *host = nm_vk_host_libc_version();
+        const char *own = nm_vk_own_libc_version();
+
+        if (host && *own && strcmp(host, own) != 0) {
+            nm_vk_shim_forbid();
+            nm_vk_say("this machine's glibc is %s and this binary was linked "
+                      "with glibc %s; a statically linked binary can open the "
+                      "vulkan loader only on the glibc it was linked with, so "
+                      "vulkan is off for this process and the filter runs on "
+                      "the CPU", host, own);
+            return;
+        }
+    }
 
     verdict = nm_vk_probe(NULL, deadline);
 
@@ -1251,7 +1371,7 @@ static void nm_vk_make_safe(void)
             return;
         }
         if (uv == NM_VK_CRASHED) {
-            nm_vk_pin("/nonexistent.json");
+            nm_vk_disable();
             nm_vk_say("every combination of this machine's vulkan drivers crashes a "
                       "statically linked binary; vulkan disabled for this process");
             return;
@@ -1274,7 +1394,7 @@ static void nm_vk_make_safe(void)
          * proven fatal too. The one case where switching Vulkan off for the
          * process is a conclusion rather than a guess, and the only place that
          * is allowed to say so. */
-        nm_vk_pin("/nonexistent.json");
+        nm_vk_disable();
         nm_vk_say("this machine's vulkan drivers crash a statically linked "
                   "binary; vulkan disabled for this process");
         return;
@@ -1366,12 +1486,20 @@ static void nm_backend_discover(void)
      * filter back on the CPU without editing filtergraphs. Checked after
      * nm_vk_make_safe() on purpose - the process may still enumerate Vulkan
      * for FFmpeg's own reasons, and leaving it unguarded would be a crash this
-     * variable appeared to have prevented. */
+     * variable appeared to have prevented. With the GPU off, ggml must also
+     * never open the loader: until now it did, regardless, and on a host whose
+     * glibc is not this binary's that was a SIGFPE with the GPU "off" (run
+     * 41374434056, rc-nogpu). The shim is the only way ggml reaches the
+     * loader, so telling it to stay shut is the whole switch. */
     {
         const char *off = getenv("NOMERCY_GGML_GPU");
 
-        if (off && !strcmp(off, "0"))
+        if (off && !strcmp(off, "0")) {
+#if !defined(NM_NO_VULKAN)
+            nm_vk_shim_forbid();
+#endif
             return;
+        }
     }
 
     /* No early return for "the guard could not tell": there used to be one, and

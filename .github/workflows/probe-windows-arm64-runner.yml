@@ -1,0 +1,79 @@
+name: Probe Windows ARM64 runner
+
+# Inspect the self-hosted Windows ARM64 runner, to learn what the
+# guest has before the emulated test (verify-windows-arm64-emulated)
+# is pointed at it: architecture, PowerShell, memory, disk, tools. Changes
+# nothing on the runner.
+#
+# Runs for a pull request into dev that touches this file, and by hand once it
+# is on master. workflow_dispatch only sees workflows on the default branch,
+# and master takes PRs from dev alone, so the pull_request trigger is what lets
+# the probe run before the next release. Same-repo PRs only: a fork must not
+# reach the self-hosted machine.
+
+on:
+  pull_request:
+    branches: [dev]
+    paths: ['.github/workflows/probe-windows-arm64-runner.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-windows-arm64-runner
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    # The standard labels only. The runner was registered by hand, not by the
+    # wsl-windows-arm package, so it carries none of the package's extra labels.
+    runs-on: [self-hosted, Windows, ARM64]
+    timeout-minutes: 7200 # Five days: the GitHub self-hosted job execution limit.
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: What is this machine
+        run: |
+          $ri = [Runtime.InteropServices.RuntimeInformation]
+          "os:          $($ri::OSDescription)"
+          "os arch:     $($ri::OSArchitecture)"
+          "proc arch:   $($ri::ProcessArchitecture)"
+          "pwsh:        $($PSVersionTable.PSVersion) at $PSHOME"
+          "runner name: $env:RUNNER_NAME"
+          "runner os:   $env:RUNNER_OS / $env:RUNNER_ARCH"
+          "workspace:   $env:GITHUB_WORKSPACE"
+          "cpu:         $((Get-CimInstance Win32_Processor).Name) x$((Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors)"
+          "memory:      {0:N1} GB" -f ((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+          Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+            "disk {0}     {1:N1} GB free of {2:N1} GB" -f $_.DeviceID, ($_.FreeSpace / 1GB), ($_.Size / 1GB)
+          }
+          "video:       $((Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join ', ')"
+          "model:       $((Get-CimInstance Win32_ComputerSystem).Model)"
+
+      - name: Which tools are on PATH
+        run: |
+          foreach ($tool in 'git', 'curl', 'tar', 'ffmpeg', 'python', 'docker') {
+            $c = Get-Command $tool -ErrorAction SilentlyContinue
+            if ($c) { "{0,-8} {1}" -f $tool, $c.Source } else { "{0,-8} (not found)" -f $tool }
+          }
+          "package files from wsl-windows-arm, if any:"
+          foreach ($p in 'C:\ffmpeg-runner-tools\Invoke-ReleaseTest.ps1', 'C:\Tools\PowerShell-7.6.6-arm64\pwsh.exe') {
+            "  {0}  {1}" -f $(if (Test-Path -LiteralPath $p) { 'present' } else { 'absent ' }), $p
+          }
+
+      - name: Can it reach GitHub releases
+        run: |
+          $r = Invoke-WebRequest -Uri 'https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/v1.0.44/manifest.json' -UseBasicParsing
+          "manifest.json: HTTP $($r.StatusCode), $($r.Content.Length) bytes"
+
+      - name: How fast is emulation
+        run: |
+          # One minute of a tight loop in pwsh, for a rough idea of the pace.
+          $sw = [Diagnostics.Stopwatch]::StartNew(); $n = 0
+          while ($sw.Elapsed.TotalSeconds -lt 10) { $n++ }
+          "pwsh loop iterations in 10 s: {0:N0}" -f $n

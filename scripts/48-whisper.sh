@@ -12,6 +12,20 @@ git clone --branch v${whisper_version} https://github.com/ggml-org/whisper.cpp.g
 
 rm -rf build
 
+# DTW on a decode window shorter than ~160 ms aborts the whole ffmpeg process
+# in v1.9.1 (WHISPER_ASSERT in the DTW median filter, #113). Upstream fixed it
+# in a46fadb, which no release contains yet; the patch file says when to drop
+# it. git apply refuses a patch whose context no longer matches, and the grep
+# confirms the new code is really there, so a whisper.cpp bump cannot lose
+# this fix silently.
+git apply /scripts/includes/whisper-dtw-median-filter.patch \
+    || { log "Error: whisper-dtw-median-filter.patch does not apply to whisper.cpp v${whisper_version}"; exit 1; }
+if [[ $(grep -c 'narrow the filter instead of aborting' src/whisper.cpp) -ne 1 ]]; then
+    log "Error: the DTW median-filter fix is not in src/whisper.cpp after applying the patch"
+    exit 1
+fi
+log "Applied whisper.cpp DTW median-filter backport (a46fadb)"
+
 # chmod +x ./models/download-ggml-model.sh
 # ./models/download-ggml-model.sh base
 
@@ -178,8 +192,25 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     CFLAGS="${CFLAGS} -lws2_32 -lwinpthread -lkernel32"
     CXXFLAGS="${CXXFLAGS} -lws2_32 -lwinpthread -lkernel32"
 
-    find . -name '*.cpp' -exec sed -i 's|%ld|%llu|g' {} +
-    find . -name '*.cpp' -exec sed -i 's|%lld|%llu|g' {} +
+    # Two seds stood here that rewrote %ld and %lld to %llu in every .cpp file,
+    # added with the first whisper integration and never explained. They were
+    # wrong in principle -- %lld -> %llu flips signed to unsigned, and on
+    # Windows `long` is 32 bits, so %ld -> %llu makes printf read 64 bits for a
+    # 32-bit argument -- and they changed nothing that is built.
+    #
+    # They ran on Windows only (this block). In whisper.cpp v1.9.1 their matches
+    # are in examples/ and bindings/, which nothing here compiles (EXAMPLES,
+    # SERVER and TESTS are off below), and in seven ggml backend sources:
+    # hexagon, metal, openvino, virtgpu and zdnn. None of those backends is
+    # built on Windows -- Metal is turned on for darwin-arm64 alone, and the
+    # other four default OFF and are never enabled in this script. So on the
+    # one platform the seds ran, they touched no file that was compiled.
+    #
+    # Removed rather than corrected, so that enabling one of those backends or
+    # the examples on Windows later does not quietly bring the undefined
+    # behaviour in with it. Checked against the full v1.9.1 tree from GitHub
+    # (394 .cpp files): an earlier, partial clone had missed the ggml backends
+    # entirely and suggested every match was under examples/.
 
     # mingw-w64's headers don't declare THREAD_POWER_THROTTLING_STATE, so ggml's
     # thread power-throttling block in ggml_thread_apply_priority() fails to build.
@@ -776,6 +807,11 @@ lib_private_flags="Libs.private: -lstdc++"
 if [[ -f /scripts/includes/af_whisper.c ]]; then
     cp /scripts/includes/af_whisper.c /build/ffmpeg/libavfilter/af_whisper.c
     log "Applied af_whisper.c language-detection patch"
+    # The JSON escaping and word-timing code af_whisper.c includes (#112). A
+    # missing header would only surface as a compile error deep in the FFmpeg
+    # build, so fail here, where the cause is obvious.
+    cp /scripts/includes/nm_whisper_words.h /build/ffmpeg/libavfilter/nm_whisper_words.h \
+        || { log "Error: copying nm_whisper_words.h next to af_whisper.c failed"; exit 1; }
 fi
 
 add_enable "--enable-whisper"

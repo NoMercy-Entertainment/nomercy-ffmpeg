@@ -46,6 +46,24 @@ static PFN_vkGetInstanceProcAddr g_real_gipa = 0;
 static PFN_vkCmdCopyBuffer g_real_copy_buffer = 0;
 static PFN_vkGetPhysicalDeviceFeatures2 g_real_get_features2 = 0;
 
+/* Set before the first Vulkan call, the loader is never opened and every entry
+ * point below answers as it does on a machine without one: no instance, no
+ * devices, the CPU. ggml_cpu_dispatch.c sets it when NOMERCY_GGML_GPU=0, and
+ * when its probe finds that the host's glibc is not the one this binary was
+ * linked with. On Linux the loader is a shared object that pulls the host's
+ * libc.so.6 into this statically linked process as a second libc, and glibc
+ * supports that only for the exact version the binary carries; any other
+ * version dies on the first allocation from a thread, a SIGFPE inside the
+ * host libc's malloc, before the filter has logged a line. Pinning
+ * VK_ICD_FILENAMES does not help: the crash is in the loader's libc, not in a
+ * driver. The only safe move is not to open the loader at all. */
+static volatile int g_forbidden = 0;
+
+void nm_vk_shim_forbid(void)
+{
+    g_forbidden = 1;
+}
+
 #if defined(_WIN32)
 #include <windows.h>
 
@@ -59,7 +77,10 @@ static void vk_resolve_real_symbols(HMODULE lib)
 static BOOL CALLBACK vk_init_once_cb(PINIT_ONCE init_once, PVOID param, PVOID *context)
 {
     (void) init_once; (void) param; (void) context;
-    HMODULE lib = LoadLibraryA("vulkan-1.dll");
+    HMODULE lib;
+    if (g_forbidden)
+        return TRUE;
+    lib = LoadLibraryA("vulkan-1.dll");
     if (lib)
         vk_resolve_real_symbols(lib);
     return TRUE;
@@ -83,7 +104,10 @@ static void vk_resolve_real_symbols(void *lib)
 
 static void vk_init_once(void)
 {
-    void *lib = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+    void *lib;
+    if (g_forbidden)
+        return;
+    lib = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
     if (!lib) lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
     if (lib)
         vk_resolve_real_symbols(lib);

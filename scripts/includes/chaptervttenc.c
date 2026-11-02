@@ -48,6 +48,36 @@ static void format_vtt_time(char *buf, size_t buf_size, int64_t ms)
     snprintf(buf, buf_size, "%02d:%02d:%02d.%03d", h, m, s, ml);
 }
 
+/**
+ * Write a chapter title as WebVTT cue text.
+ *
+ * Cue text is not plain text. "&" and "<" start a character reference and a
+ * tag, so a title such as "Rock & Roll" or "A <B> C" produced a cue that a
+ * conforming parser misreads or drops. Two sequences end the cue outright: a
+ * blank line, and "-->", which a parser takes for the next timing line. The
+ * title used to be printed verbatim, so all of these reached the file.
+ *
+ * Escaping ">" as well is what removes "-->": it becomes "--&gt;". Line
+ * breaks become spaces, since a chapter title is one line and a break inside
+ * the payload is exactly how a blank line gets in. Every other byte is copied
+ * as is, so UTF-8 passes through untouched.
+ */
+static void write_vtt_cue_text(AVIOContext *pb, const char *text)
+{
+    const char *p;
+
+    for (p = text; *p; p++) {
+        switch (*p) {
+        case '&':  avio_write(pb, (const uint8_t *)"&amp;", 5); break;
+        case '<':  avio_write(pb, (const uint8_t *)"&lt;", 4);  break;
+        case '>':  avio_write(pb, (const uint8_t *)"&gt;", 4);  break;
+        case '\r':
+        case '\n': avio_w8(pb, ' ');           break;
+        default:   avio_w8(pb, *p);            break;
+        }
+    }
+}
+
 static int chapters_vtt_write_header(AVFormatContext *s)
 {
     unsigned int i;
@@ -76,10 +106,11 @@ static int chapters_vtt_write_header(AVFormatContext *s)
 
         title = av_dict_get(chapter->metadata, "title", NULL, 0);
 
-        if (title && title->value[0] != '\0')
-            avio_printf(s->pb, "%s --> %s\n%s\n\n",
-                        start_buf, end_buf, title->value);
-        else
+        if (title && title->value[0] != '\0') {
+            avio_printf(s->pb, "%s --> %s\n", start_buf, end_buf);
+            write_vtt_cue_text(s->pb, title->value);
+            avio_printf(s->pb, "\n\n");
+        } else
             avio_printf(s->pb, "%s --> %s\nChapter %u\n\n",
                         start_buf, end_buf, i + 1);
     }

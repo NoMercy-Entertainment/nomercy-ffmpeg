@@ -71,12 +71,18 @@ ENV PREFIX=/ffmpeg_build/windows
 # resolve to this toolchain's real C++ runtime, which is what they mean, and
 # keeps every shared script untouched.
 ARG LLVM_MINGW_VERSION=20260728
+# SHA-256 of the ucrt-ubuntu-22.04-x86_64 tarball for that release, as GitHub
+# reports it for the asset. This is the compiler that builds every
+# windows-aarch64 binary, and it was unpacked unverified. Tied to the version:
+# bump both together, or the check below stops the build.
+ARG LLVM_MINGW_SHA256=bdc15cb613f2ef309827a90d409806a45eb68e4e607c290fa1b933d74ab87846
 ENV LLVM_MINGW_DIR=/opt/llvm-mingw
 RUN echo "------------------------------------------------------" \
     && echo "🔧 Start downloading llvm-mingw ${LLVM_MINGW_VERSION} (Windows-on-ARM toolchain)" \
     && TARBALL="llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz" \
     && curl -fsSL --retry 5 --retry-delay 5 -o /tmp/llvm-mingw.tar.xz \
         "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${TARBALL}" \
+    && echo "${LLVM_MINGW_SHA256}  /tmp/llvm-mingw.tar.xz" | sha256sum -c - \
     && mkdir -p ${LLVM_MINGW_DIR} \
     && tar -xJf /tmp/llvm-mingw.tar.xz -C ${LLVM_MINGW_DIR} --strip-components=1 \
     && rm -f /tmp/llvm-mingw.tar.xz \
@@ -195,6 +201,18 @@ COPY ./scripts /scripts
 # Convert Windows line endings to Unix line endings
 RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} +
 
+# Which release of our own filters to build, and which omnidrive ref. CI
+# resolves them once per run (detect-changes) and passes the same values to
+# every platform. They sit right before init.sh on purpose: a changed value
+# reruns it, an unchanged one keeps the cache. Before, a new filter release
+# with nothing changed in scripts/ replayed the old download from the cache
+# of the last published image. Empty, as in a local build, means the
+# scripts resolve the newest themselves.
+ARG BEATDETECT_TAG=
+ARG KEYDETECT_TAG=
+ARG STEMSPLIT_TAG=
+ARG OMNIDRIVE_REF=
+
 # Initialize the build
 RUN touch /build/enable.txt /build/cflags.txt /build/ldflags.txt /build/extra_libflags.txt \
     && chmod +x /scripts/init/init.sh \
@@ -257,6 +275,15 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
-COPY --from=windows /output/ffmpeg-9.0-windows-aarch64.zip /build/ffmpeg-9.0-windows-aarch64.zip
+# The archive is named after ffmpeg_version in ffmpeg-base.dockerfile
+# (scripts/init/package.sh builds the name). It used to be spelled out
+# here as well, so a version bump that missed this line broke the build
+# at the very last step. The glob takes whatever version the build
+# produced. A wildcard COPY that matches nothing still succeeds, so the
+# RUN below insists on exactly one archive: none, or a stale second one
+# from another version, stops the build here.
+COPY --from=windows /output/ffmpeg-*-windows-aarch64.zip /build/
+RUN set -- /build/ffmpeg-*-windows-aarch64.zip && [ "$#" -eq 1 ] && [ -f "$1" ] \
+    || { echo "expected exactly one ffmpeg archive, found: $*" >&2; exit 1; }
 
-CMD ["cp", "/build/ffmpeg-9.0-windows-aarch64.zip", "/output"]
+CMD ["sh", "-c", "cp /build/ffmpeg-*-windows-aarch64.zip /output"]

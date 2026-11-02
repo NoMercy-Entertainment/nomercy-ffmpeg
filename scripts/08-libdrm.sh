@@ -13,7 +13,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-ninja -j$(nproc) -C build && ninja -C build install
+ninja -j$(nproc) -C build && ninja -C build install || exit 1
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libpciaccess.pc
 rm -rf /build/libpciaccess
 
@@ -28,7 +28,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 mv ${PREFIX}/share/pkgconfig/xcb-proto.pc ${PREFIX}/lib/pkgconfig/xcb-proto.pc
 rm -rf /build/xcbproto
 
@@ -43,7 +43,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 mv ${PREFIX}/share/pkgconfig/xproto.pc ${PREFIX}/lib/pkgconfig/xproto.pc
 rm -rf /build/xproto
 
@@ -58,7 +58,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 cp -r ${PREFIX}/share/aclocal/. ${PREFIX}/lib/aclocal
 rm -rf /build/libxtrans
 
@@ -73,7 +73,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 rm -rf /build/libxcb
 
 # libx11
@@ -91,7 +91,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/x11.pc
 rm -rf /build/libx11
 
@@ -106,7 +106,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-make -j$(nproc) && make install
+make -j$(nproc) && make install || exit 1
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/xfixes.pc
 rm -rf /build/libxfixes
 
@@ -124,7 +124,7 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-ninja -j$(nproc) && ninja install install
+ninja -j$(nproc) && ninja install install || exit 1
 echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libdrm.pc
 rm -rf /build/libdrm
 

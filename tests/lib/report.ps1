@@ -26,7 +26,10 @@ function Report-Add {
             name       = $Name
             status     = $Status
             duration_s = $DurationSeconds
-            reason     = [string]::IsNullOrWhiteSpace($Reason) ? $null : $Reason
+            # if/else, not `? :`: the ternary is pwsh 7 only, and on Windows
+            # PowerShell 5.1 it made this whole file fail to parse, so every
+            # local tests.ps1 run lost its report (CI runs pwsh and never saw it).
+            reason     = $(if ([string]::IsNullOrWhiteSpace($Reason)) { $null } else { $Reason })
         })
 }
 

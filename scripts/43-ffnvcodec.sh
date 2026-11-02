@@ -12,7 +12,7 @@ if [[ ${TARGET_OS} == "windows" && ${ARCH} == "aarch64" ]]; then
 fi
 
 cd /build/ffnvcodec
-make PREFIX=${PREFIX} install
+make PREFIX=${PREFIX} install || exit 1
 rm -rf /build/ffnvcodec
 
 add_enable "--enable-ffnvcodec --enable-nvenc --enable-nvdec"
