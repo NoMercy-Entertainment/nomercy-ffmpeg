@@ -526,4 +526,31 @@ static inline int nm_whisper_model_multilingual(const NMWhisperModelShape *s)
     return s->n_vocab >= 51865;
 }
 
+/*
+ * Bound a segment to the audio its whisper_full() window actually held.
+ *
+ * whisper pads every window to a 30 s mel. A segment that has no closing
+ * timestamp token ends where that padding ends, 30 s after the window
+ * started, not where the window's audio does. A window cut by the VAD or by
+ * the end of the stream is shorter, so such a segment ran past it and
+ * overlapped the next window's segments (#119). Times are relative to the
+ * window, in ms; window_ms is the audio the window held.
+ *
+ * Returns 0 when the segment starts at or past the window's end: it lies in
+ * the padding, nothing in the audio produced it, and the caller drops it.
+ * Otherwise returns 1 with *t1 bounded to window_ms and never before *t0.
+ */
+static inline int nm_whisper_segment_in_window(int64_t window_ms, int64_t *t0, int64_t *t1)
+{
+    if (*t0 < 0)
+        *t0 = 0;
+    if (*t0 >= window_ms)
+        return 0;
+    if (*t1 > window_ms)
+        *t1 = window_ms;
+    if (*t1 < *t0)
+        *t1 = *t0;
+    return 1;
+}
+
 #endif /* NM_WHISPER_WORDS_H */
