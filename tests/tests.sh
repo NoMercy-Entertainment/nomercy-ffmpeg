@@ -18,6 +18,8 @@ source "${HERE}/lib/cpu-variant.sh"
 source "${HERE}/lib/whisper.sh"
 # shellcheck source=lib/stemsplit.sh
 source "${HERE}/lib/stemsplit.sh"
+# shellcheck source=lib/jpegxl.sh
+source "${HERE}/lib/jpegxl.sh"
 
 Workspace="$1"
 shift 2>/dev/null || true
@@ -360,6 +362,9 @@ run_test "libopus" "-y -i ${SampleAudio} -c:a libopus ${TestRoot}/test_opus.opus
 run_test "libmp3lame" "-y -i ${SampleAudio} -c:a libmp3lame ${TestRoot}/test_mp3.mp3" "mp3"
 run_test "libwebp" "-y -i ${SampleImage} -c:v libwebp -f webp ${TestRoot}/test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i ${SampleImage} -c:v libopenjpeg ${TestRoot}/test_jp2.jp2" "openjpeg"
+run_custom_test "jpegxl_still" "test_jpegxl_still"
+run_custom_test "jpegxl_animation" "test_jpegxl_animation"
+run_custom_test "jpegxl_defaults" "test_jpegxl_defaults"
 run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"

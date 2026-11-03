@@ -2,6 +2,14 @@
 
 ## Version History
 
+### Unreleased
+
+- JPEG XL: statically link libjxl 0.12.0 for still and animated encoding and
+  decoding (`--enable-libjxl`), including alpha. Both manual test suites and
+  executable CI smoke jobs verify lossless RGBA round-trips and default encoder
+  settings. Ships with the next content release; no standalone release or version
+  bump (#109).
+
 ### v1.0.35 - May 22, 2026
 
 #### ⬆️ FFmpeg 8.0 → 8.1.1 Upgrade

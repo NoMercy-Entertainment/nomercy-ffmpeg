@@ -1,9 +1,53 @@
 #!/usr/bin/env bash
 # Tests tests/smoke.sh against stub ffmpeg/ffprobe binaries (shell scripts).
 set -uo pipefail
+# Each startup test supplies its own override; ignore the caller's choice.
+unset NOMERCY_GGML_CPU
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SMOKE="${HERE}/smoke.sh"
 PASS=0; FAIL=0
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+# The smoke gate checks these literal markers before executing a Linux
+# binary. Stub them independently of the code under test.
+add_backend_markers() {
+  cat >> "$1" <<'EOF'
+# ggml_vulkan vkGetInstanceProcAddr
+# crash a statically linked
+# vulkan disabled for this process
+# could not finish identifying which
+# not a report that anything is broken
+# the loader configuration is unchanged
+# NOMERCY_VK_GUARD_MS NOMERCY_VK_ICD_GUARD
+EOF
+}
+
+add_codec_stub() {
+  cat >> "$1" <<'EOF'
+if [[ "$*" == *libjxl* && "${SMOKE_STUB_NO_JXL:-0}" == 1 ]]; then exit 55; fi
+if [[ "$*" == *libjxl_anim* && "${SMOKE_STUB_NO_JXL_ANIM:-0}" == 1 ]]; then exit 55; fi
+out="${!#}"; input=""; frames=1
+args=("$@")
+if [[ "$*" == *libjxl* && "$*" != *-distance* && "$out" == */image.jxl && "${SMOKE_STUB_DEFAULT_JXL_CRASH:-0}" == 1 ]]; then exit 56; fi
+for ((i=0; i<${#args[@]}-1; i++)); do
+  [[ "${args[i]}" == -i ]] && input="${args[i+1]}"
+  [[ "${args[i]}" == -frames:v ]] && frames="${args[i+1]}"
+done
+if [[ "$input" == testsrc=size=64x48* ]]; then
+  dd if=/dev/zero of="$out" bs=12288 count="$frames" 2>/dev/null
+  exit $?
+fi
+if [[ "$out" != - && -f "$input" ]]; then
+  cp "$input" "$out" || exit 1
+  if [[ "$out" == */decoded.rgba && "${SMOKE_STUB_CORRUPT_JXL:-0}" == 1 ]]; then
+    printf '\001' | dd of="$out" bs=1 seek=3 conv=notrunc 2>/dev/null
+  fi
+  exit 0
+fi
+if [[ "$*" == *trailingsilence* ]]; then echo 'lavfi.trailingsilence.detected=1'; fi
+EOF
+}
 
 make_stub() {  # dir, name, version_string, exit_code
   local dir="$1" name="$2" ver="$3" code="$4"
@@ -22,6 +66,9 @@ make_execfmt_stub() {  # dir, name — emulates running a foreign-arch binary
 echo "${name}: cannot execute binary file: Exec format error" >&2
 exit 126
 EOF
+  # These comments are visible to presence checks even after exit 126.
+  echo '# NOMERCY_GGML_CPU' >> "${dir}/${name}"
+  add_backend_markers "${dir}/${name}"
   chmod +x "${dir}/${name}"
 }
 
@@ -39,10 +86,22 @@ if [[ "${crash}" == "1" && -n "\${NOMERCY_GGML_CPU:-}" ]]; then
   echo "${name}: simulated crash on NOMERCY_GGML_CPU override" >&2
   exit 9
 fi
-echo "${name} version ${ver} Copyright (c) the FFmpeg developers"
-exit ${code}
 EOF
+  add_backend_markers "${dir}/${name}"
+  if [[ "$code" == 0 ]]; then add_codec_stub "${dir}/${name}"; fi
+  printf 'echo "%s version %s Copyright (c) the FFmpeg developers"\nexit %s\n' "$name" "$ver" "$code" >> "${dir}/${name}"
   chmod +x "${dir}/${name}"
+}
+
+make_elf_stub() {  # A well-formed header for a cross-exec Linux ARM64 binary.
+  {
+    printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000\002\000\267\000\001\000\000\000'
+    dd if=/dev/zero bs=28 count=1 2>/dev/null
+    printf '\100\000\000\000\000\000\000\000\000\000\000\000'
+    printf 'NOMERCY_GGML_CPU\n'
+  } > "$1/$2"
+  add_backend_markers "$1/$2"
+  chmod +x "$1/$2"
 }
 
 expect() {  # description, expected_rc, actual_rc
@@ -53,41 +112,56 @@ expect() {  # description, expected_rc, actual_rc
 # Uses make_dispatcher_stub (not make_stub): tests/smoke.sh now also asserts
 # the ggml cpu dispatcher is compiled in (see Case 7), so a stub meant to
 # represent an overall-passing binary has to carry that marker too.
-d="$(mktemp -d)"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; expect "correct version passes" 0 $?
 
 # Case 2: wrong version → fail (rc != 0)
-d="$(mktemp -d)"; make_stub "$d" ffmpeg 7.0.0 0; make_stub "$d" ffprobe 7.0.0 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "wrong version fails" 1 $rc
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 7.0.0 0 0; make_dispatcher_stub "$d" ffprobe 7.0.0 0 0
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/version.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'expected version' "${WORK}/version.log"; expect "wrong version fails at the version gate" 0 $?
 
 # Case 3: non-zero ffmpeg exit (not exec-format) → fail
-d="$(mktemp -d)"; make_stub "$d" ffmpeg 8.1.1 3; make_stub "$d" ffprobe 8.1.1 0
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 3 0; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "non-zero ffmpeg exit fails" 1 $rc
 
 # Case 4: missing binary → fail
-d="$(mktemp -d)"; make_stub "$d" ffprobe 8.1.1 0
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_stub "$d" ffprobe 8.1.1 0
 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "missing ffmpeg fails" 1 $rc
 
-# Case 5: exec-format error on the cross-arch platform → presence-only PASS
-d="$(mktemp -d)"; make_execfmt_stub "$d" ffmpeg; make_execfmt_stub "$d" ffprobe
-bash "$SMOKE" "$d" 8.1.1 linux-aarch64 >/dev/null 2>&1; expect "exec-format on linux-aarch64 passes (presence-only)" 0 $?
+# Case 5: valid cross-arch ELF headers pass without executing the binary.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_elf_stub "$d" ffmpeg; make_elf_stub "$d" ffprobe
+bash "$SMOKE" "$d" 8.1.1 linux-aarch64 >/dev/null 2>&1; expect "valid linux-aarch64 headers pass without execution" 0 $?
 
 # Case 6: SAME exec-format failure on a NATIVE platform → must FAIL (not masked as cross-arch)
-d="$(mktemp -d)"; make_execfmt_stub "$d" ffmpeg; make_execfmt_stub "$d" ffprobe
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_execfmt_stub "$d" ffmpeg; make_execfmt_stub "$d" ffprobe
 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "exec-format on native platform fails" 1 $rc
 
 # Case 7: correct version, but no ggml cpu dispatcher compiled in (plain
 # make_stub, no marker) → must FAIL. This is the case that matters most:
 # without it, a binary that predates the dispatcher entirely would sail
 # through smoke.sh exactly like it did before this feature existed.
-d="$(mktemp -d)"; make_stub "$d" ffmpeg 8.1.1 0; make_stub "$d" ffprobe 8.1.1 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "no dispatcher marker fails" 1 $rc
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_stub "$d" ffmpeg 8.1.1 0; make_stub "$d" ffprobe 8.1.1 0
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/dispatcher.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'does not carry the ggml cpu dispatcher' "${WORK}/dispatcher.log"; expect "no dispatcher marker fails at the presence gate" 0 $?
 
 # Case 8: dispatcher marker present, but the binary bricks itself when
 # NOMERCY_GGML_CPU is set → must FAIL. Proves cpu_variant_startup_ok's own
 # failure path actually fires, not just the presence check's.
-d="$(mktemp -d)"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 1; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "crash-on-override fails" 1 $rc
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 1; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/override.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'did not start with NOMERCY_GGML_CPU' "${WORK}/override.log"; expect "crash-on-override fails at the startup gate" 0 $?
+
+# A binary that starts and reports the right version must still fail if the
+# codec is missing, or returns success while damaging the decoded alpha.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
+SMOKE_STUB_NO_JXL=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/missing.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'JPEG XL round-trip' "${WORK}/missing.log"; expect "missing JPEG XL fails at the codec gate" 0 $?
+SMOKE_STUB_NO_JXL_ANIM=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/missing-animation.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'JPEG XL round-trip: test_jpegxl_animation' "${WORK}/missing-animation.log"; expect "missing animated JPEG XL fails at the animation gate" 0 $?
+SMOKE_STUB_CORRUPT_JXL=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/corrupt.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'changed pixels, alpha or frame count' "${WORK}/corrupt.log"; expect "corrupted alpha fails despite successful commands" 0 $?
+SMOKE_STUB_DEFAULT_JXL_CRASH=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/defaults.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'JPEG XL round-trip: test_jpegxl_defaults' "${WORK}/defaults.log"; expect "crashing default encoder settings fail at the defaults gate" 0 $?
 
 echo "----"; echo "passed=$PASS failed=$FAIL"
 [[ $FAIL -eq 0 ]]

@@ -798,10 +798,20 @@ which is easy to get wrong.
 | **HEVC/H.265 & H.264** | ✅ x265 + x264 + hardware accel | ✅ Basic |
 | **AVS2** | ✅ libdavs2 + xavs2 | ❌ Not included |
 | **VP8/VP9, Xvid, OpenJPEG, WebP** | ✅ Included | ⚠️ Optional |
+| **JPEG XL (still and animated)** | ✅ Static libjxl 0.12.0, encode + decode, including alpha | ⚠️ Optional |
 | **Hardware Acceleration** | ✅ NVENC/NVDEC/CUDA/AMF/QSV (libvpl)/VAAPI | ⚠️ Platform dependent |
 | **Vulkan + libplacebo + shaderc** | ✅ Full integration | ⚠️ Optional/experimental |
 | **Advanced Scaling** | ✅ libzimg + placebo | ⚠️ Basic only |
 | **Frei0r / AviSynth** | ✅ Included | ⚠️ Optional |
+
+JPEG XL encoding examples:
+
+```bash
+ffmpeg -i input.png -c:v libjxl -distance 0 output.jxl
+ffmpeg -i input.mov -an -c:v libjxl_anim -f image2pipe output.jxl
+```
+
+Use `image2pipe` for animation so every encoded packet goes into the same file.
 
 #### 📀 **Disc & Container Support**
 - **Blu-ray**: libbluray + libaacs with static keydb patches for decryption
@@ -846,6 +856,7 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 --enable-librav1e --enable-libdav1d      # Full AV1 stack
 --enable-libdavs2 --enable-libxavs2      # AVS2 (China standard)
 --enable-libxvid --enable-libopenjpeg --enable-libwebp
+--enable-libjxl                         # JPEG XL still images and animation
 
 # Hardware Acceleration
 --enable-nvenc --enable-cuda --enable-cuda-nvcc --enable-libnpp  # NVIDIA

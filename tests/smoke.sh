@@ -23,6 +23,8 @@ source "${HERE}/lib/cpu-variant.sh"
 source "${HERE}/lib/whisper.sh"
 # shellcheck source=lib/stemsplit.sh
 source "${HERE}/lib/stemsplit.sh"
+# shellcheck source=lib/jpegxl.sh
+source "${HERE}/lib/jpegxl.sh"
 
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
@@ -284,6 +286,13 @@ assert_version() {  # bin, banner
 
 assert_version "${ffmpeg_bin}" "ffmpeg version"
 assert_version "${ffprobe_bin}" "ffprobe version"
+
+# Exercise both wrappers, not just their presence in the codec list. Missing
+# JPEG XL support must fail the release gate on every executable platform.
+for check in test_jpegxl_still test_jpegxl_animation test_jpegxl_defaults; do
+  FFMPEG="${ffmpeg_bin}" "${check}" || fail "JPEG XL round-trip: ${check}"
+done
+ok "JPEG XL lossless RGBA round-trips and default encoder settings"
 
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.

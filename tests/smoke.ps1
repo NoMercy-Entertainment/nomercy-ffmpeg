@@ -18,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/cpu-variant.ps1"
 . "$HERE/lib/stemsplit.ps1"
+. "$HERE/lib/jpegxl.ps1"
 
 function Fail($msg) { Write-Host "❌ $msg"; exit 1 }
 function Note($msg) { Write-Host "ℹ️  $msg" }
@@ -238,6 +239,12 @@ function Assert-Version($bin, $banner) {
 
 Assert-Version $ffmpeg  'ffmpeg version'
 Assert-Version $ffprobe 'ffprobe version'
+
+foreach ($mode in @('still', 'animated', 'defaults')) {
+    $result = Test-JpegXL -FFmpegExe $ffmpeg -Animated:($mode -eq 'animated') -DefaultSettings:($mode -eq 'defaults')
+    if ($result.Status -ne 'Pass') { Write-Host $result.Output; Fail $result.Reason }
+    Write-Host "✅ $($result.Output)"
+}
 
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.
