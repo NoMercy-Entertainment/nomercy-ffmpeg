@@ -25,6 +25,8 @@ source "${HERE}/lib/whisper.sh"
 source "${HERE}/lib/stemsplit.sh"
 # shellcheck source=lib/jpegxl.sh
 source "${HERE}/lib/jpegxl.sh"
+# shellcheck source=lib/alpha-codecs.sh
+source "${HERE}/lib/alpha-codecs.sh"
 
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
@@ -293,6 +295,11 @@ for check in test_jpegxl_still test_jpegxl_animation test_jpegxl_defaults; do
   FFMPEG="${ffmpeg_bin}" "${check}" || fail "JPEG XL round-trip: ${check}"
 done
 ok "JPEG XL lossless RGBA round-trips and default encoder settings"
+
+for check in test_hap_alpha test_apv_alpha; do
+  FFMPEG="${ffmpeg_bin}" "${check}" || fail "Alpha codec round-trip: ${check}"
+done
+ok "HAP and APV retain the alpha gradient in three frames"
 
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.

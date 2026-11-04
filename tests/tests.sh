@@ -20,6 +20,8 @@ source "${HERE}/lib/whisper.sh"
 source "${HERE}/lib/stemsplit.sh"
 # shellcheck source=lib/jpegxl.sh
 source "${HERE}/lib/jpegxl.sh"
+# shellcheck source=lib/alpha-codecs.sh
+source "${HERE}/lib/alpha-codecs.sh"
 
 Workspace="$1"
 shift 2>/dev/null || true
@@ -365,6 +367,8 @@ run_test "libopenjpeg" "-y -i ${SampleImage} -c:v libopenjpeg ${TestRoot}/test_j
 run_custom_test "jpegxl_still" "test_jpegxl_still"
 run_custom_test "jpegxl_animation" "test_jpegxl_animation"
 run_custom_test "jpegxl_defaults" "test_jpegxl_defaults"
+run_custom_test "hap_alpha" "test_hap_alpha"
+run_custom_test "apv_alpha" "test_apv_alpha"
 run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"

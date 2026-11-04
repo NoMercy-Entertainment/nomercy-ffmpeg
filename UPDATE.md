@@ -4,6 +4,12 @@
 
 ### Unreleased
 
+- HAP/APV alpha: statically link Snappy 1.3.1 and OpenAPV 1.1.3.0 across all
+  platforms (`--enable-libsnappy`, `--enable-liboapv`). Backport FFmpeg's OpenAPV
+  API-set 1 metadata descriptor support. Both manual suites and executable CI
+  smoke jobs check three-frame alpha gradients through the native decoders.
+  Ships with the next content release; no standalone release or version bump
+  (#121).
 - JPEG XL: statically link libjxl 0.12.0 for still and animated encoding and
   decoding (`--enable-libjxl`), including alpha. Both manual test suites and
   executable CI smoke jobs verify lossless RGBA round-trips and default encoder

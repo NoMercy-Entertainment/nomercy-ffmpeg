@@ -19,6 +19,7 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/cpu-variant.ps1"
 . "$HERE/lib/stemsplit.ps1"
 . "$HERE/lib/jpegxl.ps1"
+. "$HERE/lib/alpha-codecs.ps1"
 
 function Fail($msg) { Write-Host "❌ $msg"; exit 1 }
 function Note($msg) { Write-Host "ℹ️  $msg" }
@@ -242,6 +243,12 @@ Assert-Version $ffprobe 'ffprobe version'
 
 foreach ($mode in @('still', 'animated', 'defaults')) {
     $result = Test-JpegXL -FFmpegExe $ffmpeg -Animated:($mode -eq 'animated') -DefaultSettings:($mode -eq 'defaults')
+    if ($result.Status -ne 'Pass') { Write-Host $result.Output; Fail $result.Reason }
+    Write-Host "✅ $($result.Output)"
+}
+
+foreach ($codec in @('hap', 'liboapv')) {
+    $result = Test-AlphaCodec -FFmpegExe $ffmpeg -Codec $codec
     if ($result.Status -ne 'Pass') { Write-Host $result.Output; Fail $result.Reason }
     Write-Host "✅ $($result.Output)"
 }
