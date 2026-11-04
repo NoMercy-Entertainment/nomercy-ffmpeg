@@ -11,6 +11,11 @@ on:
         description: 'Platform name for tagging'
         required: true
         type: string
+      linux_build_variant:
+        description: 'Linux x64 runtime variant: cpu (fully static) or hardware (system runtime)'
+        required: false
+        type: string
+        default: 'cpu'
       context:
         description: 'Build context'
         required: false
@@ -189,9 +194,17 @@ jobs:
       - name: Build Docker Image with Retry
         env:
           SOURCE_REFS: ${{ inputs.source_refs }}
+          LINUX_BUILD_VARIANT: ${{ inputs.linux_build_variant }}
         run: |
           source error_handler.sh
           IMAGE="nomercyentertainment/ffmpeg-${{ inputs.platform }}"
+          LINUX_VARIANT_ARGS=()
+          case "${{ inputs.platform }}" in
+            linux-x86_64|linux-x86_64-hardware)
+              case "$LINUX_BUILD_VARIANT" in cpu|hardware) ;; *) echo 'Invalid Linux build variant' >&2; exit 1 ;; esac
+              LINUX_VARIANT_ARGS=(--build-arg "LINUX_BUILD_VARIANT=${LINUX_BUILD_VARIANT}")
+              ;;
+          esac
 
           NO_CACHE_FLAG=""
           CACHE_FROM_FLAG="--cache-from ${IMAGE}:latest"
@@ -277,7 +290,7 @@ jobs:
           for attempt in $(seq 1 $MAX_BUILD_ATTEMPTS); do
             echo "🔄 Build attempt $attempt/$MAX_BUILD_ATTEMPTS"
             set +e
-            docker buildx build --progress=plain $BUILD_ARGS 2>&1 | tee "$BUILD_LOG"
+            docker buildx build --progress=plain "${LINUX_VARIANT_ARGS[@]}" $BUILD_ARGS 2>&1 | tee "$BUILD_LOG"
             BUILD_EXIT=${PIPESTATUS[0]}
             set -e
 

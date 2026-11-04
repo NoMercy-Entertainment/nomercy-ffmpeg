@@ -34,7 +34,7 @@ on:
 # Single source of truth for the platform list. Anything that needs to know
 # about platforms (this workflow, the matrix in main.yml) reads it from here.
 env:
-  ALL_PLATFORMS: "linux-x86_64 linux-aarch64 windows-x86_64 windows-aarch64 darwin-x86_64 darwin-arm64 freebsd-x86_64"
+  ALL_PLATFORMS: "linux-x86_64 linux-x86_64-hardware linux-aarch64 windows-x86_64 windows-aarch64 darwin-x86_64 darwin-arm64 freebsd-x86_64"
 
 # Explicit and least-privilege: without this block every job gets the repo
 # default token, which is read/write. Jobs that need more set their own.
@@ -122,15 +122,12 @@ jobs:
           # execute an ARM64 PE any more than ubuntu can, so smoke.ps1 does the
           # same cross-exec downgrade and validates the PE header instead.
           declare -A OS=(
-            # ubuntu-24.04 on purpose, not ubuntu-latest (26.04 since 2026-10):
-            # the smoke job runs the previous release's binary too (whisper
-            # defaults, stemsplit A/B), and a release before v1.0.45 dies on
-            # any host whose glibc is not the build's 2.39 when libvulkan1 is
-            # installed, which GitHub's images have. The build's glibc is the
-            # 24.04 one. The mismatch itself is covered by the foreign-glibc
-            # step, in containers. See
-            # docs/superpowers/specs/2026-11-02-vulkan-loader-glibc-guard-design.md.
+            # Both x64 jobs run on Ubuntu 24.04: the hardware archive needs
+            # glibc 2.39, and the old pinned reference used by both jobs can
+            # crash on a different glibc when Vulkan is installed. The new
+            # fully static CPU archive also runs the foreign-glibc checks.
             [linux-x86_64]=ubuntu-24.04
+            [linux-x86_64-hardware]=ubuntu-24.04
             [linux-aarch64]=ubuntu-latest
             [windows-x86_64]=windows-latest
             [windows-aarch64]=windows-latest
@@ -140,6 +137,7 @@ jobs:
           )
           declare -A EXT=(
             [linux-x86_64]=tar.gz
+            [linux-x86_64-hardware]=tar.gz
             [linux-aarch64]=tar.gz
             [windows-x86_64]=zip
             [windows-aarch64]=zip
@@ -149,6 +147,7 @@ jobs:
           )
           declare -A KIND=(
             [linux-x86_64]=unix
+            [linux-x86_64-hardware]=unix
             [linux-aarch64]=unix
             [windows-x86_64]=windows
             [windows-aarch64]=windows
@@ -298,6 +297,8 @@ jobs:
           platform_changed() {
             local platform="$1" platform_scripts_var="$2"
             local dockerfile="ffmpeg-${platform}.dockerfile"
+            # Both x64 variants are produced by this one Dockerfile.
+            [[ "$platform" != linux-x86_64-hardware ]] || dockerfile=ffmpeg-linux-x86_64.dockerfile
             local scripts_changed="${!platform_scripts_var}"
 
             [[ "${BASE_CHANGED}" == "true" ]]      && { echo true; return; }

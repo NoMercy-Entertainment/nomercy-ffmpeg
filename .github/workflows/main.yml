@@ -80,8 +80,9 @@ jobs:
         platform: ${{ fromJSON(needs.detect-changes.outputs.platforms-to-build) }}
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
-      dockerfile: ffmpeg-${{ matrix.platform }}.dockerfile
+      dockerfile: ffmpeg-${{ matrix.platform == 'linux-x86_64-hardware' && 'linux-x86_64' || matrix.platform }}.dockerfile
       platform: ${{ matrix.platform }}
+      linux_build_variant: ${{ matrix.platform == 'linux-x86_64-hardware' && 'hardware' || 'cpu' }}
       secrets_repo: true
       labels: beast-unit
       no_cache: ${{ inputs.force_rebuild || false }}
@@ -137,6 +138,7 @@ jobs:
 
           declare -A EXT=(
             [linux-x86_64]=tar.gz
+            [linux-x86_64-hardware]=tar.gz
             [linux-aarch64]=tar.gz
             [windows-x86_64]=zip
             [windows-aarch64]=zip
@@ -220,13 +222,13 @@ jobs:
       # every runner the same interpreter, and the numpy version is the one
       # the stemsplit converter's own lock file names.
       - name: Set up Python for the stemsplit checks
-        if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
+        if: startsWith(matrix.platform, 'linux-x86_64') || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Fetch stemsplit test assets
-        if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
+        if: startsWith(matrix.platform, 'linux-x86_64') || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
         shell: bash
         run: |
           set -euo pipefail
@@ -237,15 +239,15 @@ jobs:
 
       # The whisper option tests (#112) need a real model, a clip, and the
       # v1.0.44 binary that default output must stay byte-identical to. Only
-      # for linux-x86_64: the one platform whose smoke runner can execute its
-      # own binary and has a reference build of the same platform. The model
+      # for both Linux x64 variants, whose runners can execute the new binary
+      # and the existing Linux x64 reference build. The model
       # and the clip are pinned by digest; a download that is not what was
       # pinned fails the job instead of quietly testing something else. The
       # reference binary is the one the stemsplit step above already fetched,
       # also by digest. WHISPER_TEST_REQUIRED makes smoke.sh fail rather than
       # skip if these ever stop arriving.
-      - name: Fetch whisper test assets (linux-x86_64)
-        if: matrix.platform == 'linux-x86_64'
+      - name: Fetch whisper test assets (Linux x64 variants)
+        if: startsWith(matrix.platform, 'linux-x86_64')
         shell: bash
         run: |
           set -euo pipefail
@@ -269,7 +271,9 @@ jobs:
                 "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
           # stemsplit-assets.sh keeps one reference build per platform under
           # ref/<platform>/, so one machine can hold several platforms' assets.
-          ref="${STEMSPLIT_ASSETS_DIR:?the stemsplit asset step must run first}/ref/${{ matrix.platform }}/ffmpeg"
+          # The hardware archive is new; compare against the existing pinned
+          # Linux x64 release rather than inventing a hardware reference asset.
+          ref="${STEMSPLIT_ASSETS_DIR:?the stemsplit asset step must run first}/ref/linux-x86_64/ffmpeg"
           [[ -x "${ref}" ]] || { echo "::error::no reference build at ${ref}"; exit 1; }
           {
             echo "WHISPER_TEST_MODEL=${A}/ggml-base.en.bin"
@@ -286,15 +290,9 @@ jobs:
           chmod +x tests/smoke.sh
           tests/smoke.sh "${GITHUB_WORKSPACE}" "${FFMPEG_VERSION}" "${{ matrix.platform }}"
 
-      # The hosts this runner is not. The smoke job runs on the build's own
-      # glibc (ubuntu-24.04: the previous release's binary, which the whisper
-      # defaults and stemsplit A/B checks run, dies on any other, see
-      # detect-changes.yml). A statically linked binary that opens the host's
-      # Vulkan loader brings the host's libc in as a second libc and must stay
-      # on the CPU on every other glibc; this proves it does, on three of them
-      # and on the matching one with Mesa's drivers. tests/lib/foreign-glibc.sh
-      # is the same check for a developer's machine. Design:
-      # docs/superpowers/specs/2026-11-02-vulkan-loader-glibc-guard-design.md.
+      # The fully static CPU variant must keep doing real inference on older
+      # and newer glibc hosts, including hosts with Vulkan installed. It carries
+      # no Vulkan backend and therefore emits no driver/glibc guard notice.
       - name: Foreign glibc hosts (linux-x86_64)
         if: matrix.platform == 'linux-x86_64'
         shell: bash
