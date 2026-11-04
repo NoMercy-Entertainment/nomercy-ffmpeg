@@ -138,7 +138,7 @@ assert_vulkan_backend_present() {  # bin, platform
   local bin="$1" platform="$2" diag
 
   if ! vulkan_platform_has_backend "${platform}"; then
-    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin-arm64 gets Metal instead, asserted separately below; freebsd's static dlopen cannot open a loader at all)"
+    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin-arm64 gets Metal instead, asserted separately below)"
     return 0
   fi
 
@@ -196,7 +196,7 @@ assert_vulkan_startup() {  # bin, platform
        ok "vulkan: a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with either escape hatch set (no whisper model here, so a full run is not asserted)"
      fi ;;
   1) echo "${diag}"
-     fail "vulkan: the binary crashes initialising a ggml filter on a machine with no usable GPU driver" ;;
+     fail "vulkan: the binary crashes or times out initialising a ggml filter on a machine with no usable GPU driver" ;;
   *) echo "${diag}"
      note "vulkan: could not instantiate a ggml filter on this build — the no-GPU guarantee is NOT asserted here" ;;
   esac

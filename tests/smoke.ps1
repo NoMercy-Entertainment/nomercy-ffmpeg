@@ -206,7 +206,7 @@ function Assert-VulkanStartup($bin, $platform) {
         Write-Host "✅ $(Split-Path $bin -Leaf): a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with the GPU switched off"
     } elseif ($result.Crash) {
         Write-Host $result.Output
-        Fail "$(Split-Path $bin -Leaf): crashes initialising a ggml filter on a machine with no usable GPU driver"
+        Fail "$(Split-Path $bin -Leaf): crashes or times out initialising a ggml filter on a machine with no usable GPU driver"
     } else {
         Write-Host $result.Output
         Note "$(Split-Path $bin -Leaf): could not instantiate a ggml filter on this build - the no-GPU guarantee is NOT asserted here"

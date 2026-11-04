@@ -1,8 +1,6 @@
 #!/bin/bash
 
-# FreeBSD's fully static libc cannot dlopen the Vulkan loader or its drivers.
-# Skip the entire Vulkan/libplacebo dependency stack, as on Darwin.
-if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" ]]; then
+if [[ ${TARGET_OS} == "darwin" ]]; then
     exit 255
 fi
 
