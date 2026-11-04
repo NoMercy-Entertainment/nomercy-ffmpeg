@@ -85,7 +85,7 @@ Capability differences from `windows-x86_64`, all deliberate:
 
 ### Build Features
 - 🔒 **Security Scanning**: Trivy vulnerability assessment on all platform images
-- 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection. On every platform the runner can execute, the smoke job also runs the stemsplit release gates: the filter's own test suite with its tiny RoFormer models, 20/20 clean exits, and Spleeter stems byte-identical with the previous release (`tests/lib/stemsplit.sh`; assets via `tests/lib/stemsplit-assets.sh`). On linux-x86_64 the smoke job runs on ubuntu-24.04, the build's own glibc, and `tests/lib/foreign-glibc.sh` then runs the binary in Ubuntu 26.04, Ubuntu 22.04 and Debian 12 containers with the Vulkan loader installed, where it must stay on the CPU and say why
+- 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection. On every platform the runner can execute, the smoke job also runs the stemsplit release gates: the filter's own test suite with its tiny RoFormer models, 20/20 clean exits, and Spleeter stems byte-identical with the previous release (`tests/lib/stemsplit.sh`; assets via `tests/lib/stemsplit-assets.sh`). It also round-trips JPEG XL (a still and a three-frame animation at `-distance 0`, RGBA bytes identical, plus the encoder defaults; `tests/lib/jpegxl.sh`) and encodes an alpha gradient with `hap` and `liboapv` that must survive FFmpeg's own decoders in all three frames (`tests/lib/alpha-codecs.sh`); a binary missing any of the five fails the gate. On linux-x86_64 the smoke job runs on ubuntu-24.04, the build's own glibc, and `tests/lib/foreign-glibc.sh` then runs the binary in Ubuntu 26.04, Ubuntu 22.04 and Debian 12 containers with the Vulkan loader installed, where it must stay on the CPU and say why
 - 📦 **Artifact Management**: Version-stamped archives with SHA-256 sidecars and a GPG-signed `manifest.json`
 - 🔄 **Smart Builds**: Change detection rebuilds only the platforms affected by a commit
 - 🚦 **RC Pipeline**: Every master build publishes a Release Candidate prerelease before promotion to a final release
@@ -172,6 +172,12 @@ The `whisper` option tests need `ggml-base.en.bin` and whisper.cpp's
 `jfk.wav`: set `WHISPER_TEST_MODEL` and `WHISPER_TEST_AUDIO`, or put both next
 to the binary. The default-output check also needs a v1.0.44 build in
 `WHISPER_TEST_REFERENCE_FFMPEG`. Without them those tests skip with a reason.
+
+The JPEG XL and HAP/APV alpha tests generate their input with `lavfi`, so they
+need no assets and never skip: on a binary without one of those encoders they
+fail. `tests/smoke.test.sh` runs the smoke harness against stub binaries and
+proves each of those checks fails on a missing codec, a decode error and a
+missing, flat, truncated or malformed alpha result.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [UPDATE.md](UPDATE.md) for the dependency update process.
 
@@ -960,32 +966,45 @@ which is easy to get wrong.
 | **HEVC/H.265 & H.264** | ✅ x265 + x264 + hardware accel | ✅ Basic |
 | **AVS2** | ✅ libdavs2 + xavs2 | ❌ Not included |
 | **VP8/VP9, Xvid, OpenJPEG, WebP** | ✅ Included | ⚠️ Optional |
-| **JPEG XL (still and animated)** | ✅ Static libjxl 0.12.0, encode + decode, including alpha | ⚠️ Optional |
-| **HAP / HAP Alpha** | ✅ Static Snappy 1.3.1 encoding, native decoding | ⚠️ Optional encoder dependency |
-| **APV / APV Alpha** | ✅ Static OpenAPV 1.1.3.0 encoding, native decoding | ⚠️ Optional encoder dependency |
+| **JPEG XL (still and animated)** | ✅ libjxl 0.12.0, encode + decode; RGB, RGBA and gray at 8-bit, 16-bit and float | ⚠️ Optional |
+| **HAP / HAP Alpha** | ✅ Encoder via Snappy 1.3.1 (`-format hap_alpha`); the decoder is FFmpeg's own | ⚠️ Optional encoder dependency |
+| **APV / APV Alpha** | ✅ Encoder via OpenAPV 1.1.3.0 (`yuva444p10le`); the decoder is FFmpeg's own | ⚠️ Optional encoder dependency |
 | **Hardware Acceleration** | ✅ NVENC/NVDEC/CUDA/AMF/QSV (libvpl)/VAAPI | ⚠️ Platform dependent |
-| **Vulkan + libplacebo + shaderc** | ✅ Full integration | ⚠️ Optional/experimental |
+| **Vulkan + libplacebo** | ✅ Full integration; the shaders are compiled at build time with glslc, since FFmpeg 9.0 has no libshaderc option | ⚠️ Optional/experimental |
 | **Advanced Scaling** | ✅ libzimg + placebo | ⚠️ Basic only |
 | **Frei0r / AviSynth** | ✅ Included | ⚠️ Optional |
 
-JPEG XL encoding examples:
+**JPEG XL, HAP and APV encoding are new on `dev` and ship with the first
+release after v1.0.45** (#109, #121). v1.0.45 and earlier list `jpegxl` with
+neither decoder nor encoder, and have no `hap` or `liboapv` encoder at all.
+The three libraries are built from source and linked statically on all seven
+platforms, like everything else here. The HAP and APV *decoders* were already
+present: they are FFmpeg's own and need no library, so what the two libraries
+add is encoding. All three licences are BSD-style, so the build's licensing
+does not change. This brings the alpha-keeping encoders in line with the
+official FFmpeg 9.0 build, which already had all three.
 
 ```bash
+# JPEG XL still: -distance 0 is lossless (the default, 1.0, is visually lossless); -effort 1-9, default 7
 ffmpeg -i input.png -c:v libjxl -distance 0 output.jxl
+
+# Animated JPEG XL: image2pipe keeps every encoded packet in the same file
 ffmpeg -i input.mov -an -c:v libjxl_anim -f image2pipe output.jxl
-```
 
-Use `image2pipe` for animation so every encoded packet goes into the same file.
-
-HAP and APV encoding with alpha (the input must contain transparency):
-
-```bash
+# HAP with alpha; -format takes hap, hap_alpha or hap_q
 ffmpeg -i input.mov -an -c:v hap -format hap_alpha output.mov
+
+# APV with 10-bit alpha
 ffmpeg -i input.mov -an -c:v liboapv -pix_fmt yuva444p10le output.mkv
 ```
 
-Both formats use lossy compression. The manual and smoke suites check that a
-generated alpha gradient survives three frames through the native decoders.
+HAP and APV are lossy, so the tests check that an alpha gradient survives
+three frames through FFmpeg's own decoders rather than comparing bytes; JPEG
+XL at `-distance 0` is compared byte for byte (see Build Features). On
+windows-x86_64, libjxl's Highway kernels are built with unaligned vector moves
+instead of a raised `-march`: MinGW GCC does not realign the Win64 stack for
+AVX2 loads (GCC bug 54412), and raising the baseline would have excluded CPUs
+that every other part of the binary still supports.
 
 #### 📀 **Disc & Container Support**
 - **Blu-ray**: libbluray + libaacs with static keydb patches for decryption
@@ -1015,7 +1034,8 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 ### 🔧 **Build Configuration Summary**
 
 As embedded in the v1.0.45 linux-x86_64 and windows-x86_64 binaries
-(`ffmpeg -version` prints a platform's exact line):
+(`ffmpeg -version` prints a platform's exact line). The three flags marked
+*next release* are on `dev` and are not in v1.0.45:
 
 ```bash
 # Core Configuration
@@ -1034,9 +1054,9 @@ As embedded in the v1.0.45 linux-x86_64 and windows-x86_64 binaries
 --enable-librav1e --enable-libdav1d      # Full AV1 stack
 --enable-libdavs2 --enable-libxavs2      # AVS2 (China standard)
 --enable-libxvid --enable-libopenjpeg --enable-libwebp
---enable-libjxl                         # JPEG XL still images and animation
---enable-libsnappy                      # HAP / HAP Alpha encoding
---enable-liboapv                        # APV encoding, including 10-bit alpha
+--enable-libjxl                         # JPEG XL stills and animation, encode + decode (next release, #109)
+--enable-libsnappy                      # HAP / HAP Alpha encoder (next release, #121)
+--enable-liboapv                        # APV encoder, including 10-bit alpha (next release, #121)
 
 # Hardware Acceleration
 --enable-ffnvcodec --enable-nvenc --enable-nvdec --enable-cuvid
