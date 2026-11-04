@@ -186,7 +186,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 |-----------|------|--------------|
 | **`keydetect`** | Audio filter | Musical key and chord detection |
 | **`beatdetect`** | Audio filter | Tempo, beat grid and confidence as `lavfi.beatdetect.*` frame metadata; octave decided from the onsets, not from a preferred range |
-| **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems (Spleeter 2stems on ggml) |
+| **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems on ggml: Spleeter 2stems, and since v1.0.45 (stemsplit 1.1.0) Mel-Band RoFormer and BS-RoFormer ensembles with StemForge's presets |
 | **`trailingsilence`** | Audio filter | Reports where a stream's audible content ends as `lavfi.trailingsilence.*` frame metadata (and an optional JSON report); never cuts anything itself |
 | **OCR subtitle encoder** | Codec | Converts bitmap subtitles (DVD/Blu-ray) to WebVTT text using Tesseract OCR |
 | **Sprite-sheet muxer** | Muxer | Generates thumbnail sprite sheets with a WebVTT timeline for player scrubbing |
@@ -202,19 +202,34 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 
 #### 🎤 **`stemsplit` — Music Source Separation**
 
-Separates a music track into `vocals` and `accompaniment` stems using the
-Deezer Spleeter `2stems` U-Net, run on **ggml** — the same runtime already
-statically linked into every platform binary for the `whisper` filter, so
-`stemsplit` adds no new dependency and no growth of the shipped tarball.
+Separates a music track into `vocals` and `accompaniment` stems, run on
+**ggml** — the same runtime already statically linked into every platform
+binary for the `whisper` filter, so `stemsplit` adds no new dependency and no
+growth of the shipped tarball. Two model families are supported:
+
+- **Spleeter** (Deezer's `2stems` U-Net): one 39 MB file, fast, modest
+  quality. Every option and number in the rest of this section is Spleeter's.
+- **RoFormer** (Mel-Band RoFormer and BS-RoFormer, since v1.0.45 /
+  stemsplit 1.1.0): four files, 3.4 GB together, far better stems, far
+  slower. See [`stemsplit` 1.1.0 — RoFormer ensembles](#-stemsplit-110--roformer-ensembles)
+  below.
+
+`ffmpeg -h filter=stemsplit` prints the architectures, presets and model
+file names a given binary supports; v1.0.45 reports
+`spleeter-unet-v1, mel-band-roformer-v1, bs-roformer-v1`.
 
 ```bash
-# Karaoke: instrumental only, plain -af
+# Karaoke: instrumental only, plain -af (Spleeter)
 ffmpeg -i song.flac -af "stemsplit=model=2stems.gguf:stem=accompaniment" karaoke.flac
 
-# Both stems, one filtergraph with two outputs
+# Both stems, one filtergraph with two outputs (Spleeter)
 ffmpeg -i song.flac -filter_complex \
   "[0:a]stemsplit=model=2stems.gguf:stem=all[v][a]" \
   -map "[v]" vocals.flac -map "[a]" music.flac
+
+# Both stems, StemForge's best recipe, run in the folder holding the four RoFormer files
+ffmpeg -i song.flac -filter_complex "[0:a]stemsplit=preset=full[voc][acc]" \
+  -map "[voc]" vocals.flac -map "[acc]" instrumental.flac
 ```
 
 `stemsplit` emits one 1024-sample frame per STFT hop, so its output is
@@ -230,7 +245,7 @@ such as FLAC's 65,535 samples. No rechunking filter is needed.
 | `bleed` | float | `0` | Smallest share of the mixture every stem keeps in any bin. Fills the deepest spectral holes; it is **not** a cure for ducking |
 | `smooth` | int | `0` | Smooth the masks over this many frequency bins either side |
 | `overlap` | duration | `0` | Crossfade between segments (e.g. `5`, `1.5`, `00:00:05.000`); `0` matches reference Spleeter's un-overlapped chunking |
-| `threads` | int | `0` | ggml CPU threads. `0` uses one thread per physical core the process may run on, capped by `-filter_threads` when that is set below 16. Hyperthreads and oversubscription slow it down: 8 threads on an 8-core/16-thread CPU is 24% faster than 16 |
+| `threads` | int | `0` | ggml CPU threads, for both architectures. `0` uses **half** the physical cores the process may run on, at least 1 (until 1.1.0 it was every physical core; the filter must never take the whole machine), capped by `-filter_threads` when that is set lower. The count is logged once as `stemsplit: <N> ggml threads.` and never changes the output. Hyperthreads and oversubscription slow it down a lot: on an 8-core/16-thread i7-10700K the v1.0.45 Windows build separates 30 s of audio in 3.3 s at `threads=8`, 4.1 s at the default and 15.7 s at `threads=16` |
 
 **Why `extend` is the default.** `passthrough` was, until it was measured. It
 loses nothing, but it hands *all* the unmodelled energy to one stem
@@ -259,11 +274,13 @@ back, which the filter logs as a warning.
 `155dc9d2e2eef70ad633af98134df29a5273defaeb98ef013d46251faa69d0ad`) is
 downloaded the same way whisper's ggml models are, not bundled in the
 platform tarballs. It is published as a release asset on the org's
-[nomercy-stemsplit-models](https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/tag/v2026.09.09)
-repository, which is public, so no token is needed:
+[nomercy-stemsplit-models](https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/tag/v2026.10.31)
+repository, which is public, so no token is needed. The v2026.10.31 release
+(every model, built from stemsplit 1.1.0) republishes it byte for byte, same
+SHA-256, next to the four RoFormer files:
 
 ```
-https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/download/v2026.09.09/spleeter-2stems-f16.gguf
+https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/download/v2026.10.31/spleeter-2stems-f16.gguf
 ```
 
 Earlier revisions of this section said the asset lived on *this*
@@ -275,11 +292,13 @@ did, so that job failed on every run from 2026-09-09 onward.
 **This is an offline filter, by design.** The network needs a full ~512-frame
 (~11.9 s) segment before it can emit anything, so `stemsplit` is unsuitable
 for live playback — that lookahead is what the architecture requires, not an
-oversight. Throughput on 16 threads of a modern desktop CPU is roughly
-**1.8x realtime** for the `2stems` pair (about 0.11x realtime per core,
-since ggml's own kernels — not a BLAS gemm — drive the convolutions here):
-a four-minute track takes a little over two minutes to separate on such a
-machine. Peak resident memory is about **194 MiB** for `stem=all`, rising
+oversight. Throughput for the `2stems` pair is about **7 to 9x realtime** on
+an 8-core desktop CPU (i7-10700K, v1.0.45 Windows build: 30 s of audio in
+4.1 s at the default thread count and 3.3 s at `threads=8`, including model
+load), so a four-minute track separates in well under a minute. Earlier
+revisions quoted 1.8x realtime on 16 threads; that predates the per-CPU
+ggml variants below and the half-the-cores thread default, and 16 threads on
+that CPU is now the slow case (see `threads`). Peak resident memory is about **194 MiB** for `stem=all`, rising
 somewhat with `overlap` set non-zero. This makes it a good fit for a
 media server pre-generating karaoke tracks on library scan, not for
 real-time use.
@@ -307,6 +326,145 @@ cite:
 As with any source-separation tool, **you must hold the rights to any
 copyrighted material you process** — this carries forward Spleeter's own
 upstream advisory.
+
+#### 🎤 **`stemsplit` 1.1.0 — RoFormer ensembles**
+
+Since v1.0.45 the binaries ship stemsplit 1.1.0, which adds two transformer
+architectures next to Spleeter: **Mel-Band RoFormer** and **BS-RoFormer**,
+with exactly the four models StemForge's "Full" presets use. Same filter,
+same two stems, same output pads; every Spleeter command line keeps working
+unchanged. The full reference, including how every number below was
+measured, is the README of the
+[ffmpeg-stemsplit](https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit)
+repository the filter is fetched from at build time.
+
+**Which one?**
+
+| | Spleeter | RoFormer, `preset=full` |
+|---|---|---|
+| vocals, median SDR on ten held-out tracks | 7.70 dB | 13.37 dB |
+| instrumental, median SDR on the same tracks | 11.72 dB | 17.14 dB |
+| model files | one, 39 MB | four, 639 MB to 913 MB each, 3.38 GB together |
+| memory | about 194 MiB | the filter asks for 4.63 GB and refuses to run on a machine with less than twice that |
+| speed | 30 s of audio in 3.3 to 4.1 s on an 8-core desktop CPU (7 to 9x realtime, v1.0.45) | one minute of audio in 41 to 43 minutes at 8 threads on a shared Xeon E5-2680 v4 (a lower bound) |
+| GPU | opt-in (`use_gpu=1`) | none in 1.1.0: it runs on the CPU, `use_gpu` only affects Spleeter |
+
+**The presets** are StemForge's recipes. Each takes the four files by their
+published names from `model_dir` (empty, the default, means the working
+directory). Only the models a stem needs are loaded: `preset=full:stem=vocals`
+runs two models, not four.
+
+| preset | vocals stem | accompaniment stem |
+|---|---|---|
+| `vocal_full` | Revive 3e + becruily vocals, `max` | the complement of each of those two models' vocals, `max` |
+| `instrumental_full` | the complement of each of the two instrumental models, `max` | v1e+ + becruily instrumental, `max` |
+| `full` | Revive 3e + becruily vocals, `max` | v1e+ + becruily instrumental, `max` |
+
+"The complement" is the input minus the model's target: an instrumental
+model's complement is its vocals.
+
+```bash
+# Only the vocals (two models run)
+ffmpeg -i song.flac -af "stemsplit=preset=full:stem=vocals" vocals.flac
+
+# The files somewhere else
+ffmpeg -i song.flac -af "stemsplit=preset=full:stem=vocals:model_dir=/srv/stemsplit-models" vocals.flac
+
+# One RoFormer model through `model`, exactly like Spleeter; the other stem is the input minus it
+ffmpeg -i song.flac -af "stemsplit=stem=vocals:model=roformer-mel-vocals-becruily-f32.gguf" vocals.flac
+
+# Your own combination: 2 to 4 files separated by '|', combined for both stems
+ffmpeg -i song.flac -af "stemsplit=stem=vocals:models=roformer-bs-vocals-revive3e-unwa-f32.gguf|roformer-mel-vocals-becruily-f32.gguf:ensemble=max" vocals.flac
+
+# Different models per stem
+ffmpeg -i song.flac -filter_complex "[0:a]stemsplit=vocals_models=roformer-bs-vocals-revive3e-unwa-f32.gguf|roformer-mel-vocals-becruily-f32.gguf:vocals_ensemble=max:accompaniment_models=roformer-mel-inst-v1e-plus-unwa-f32.gguf[voc][acc]" \
+  -map "[voc]" vocals.flac -map "[acc]" instrumental.flac
+```
+
+NoMercy's own software (the media server's automix and lyrics features)
+always uses `preset=full`, or `vocal_full` / `instrumental_full` for one
+stem, with every other option at its default.
+
+**One model source per run.** A run takes its models from exactly one of
+`model` (one file: Spleeter, or one RoFormer model), `models` (2 to 4
+RoFormer files for both stems), `preset`, or `vocals_models` +
+`accompaniment_models` (1 to 4 files per stem). No source or two sources is
+refused at filter creation. Spleeter only goes through `model`; a Spleeter
+file in a list is refused. `model_dir` is only for presets. A file found
+under a preset's name must be the architecture its name says and predict the
+stem the preset needs it for, or the run is refused.
+
+**Combination modes.** `ensemble` sets how a list is combined;
+`vocals_ensemble` and `accompaniment_ensemble` override it per stem (their
+default `same` means "as `ensemble`"). A preset defines its own mode (`max`),
+so giving a mode with a preset is refused.
+
+| mode | what it does |
+|---|---|
+| `auto` *(default)* | `avg` for a list, `max` for a preset |
+| `avg` | the weighted mean of the waveforms; `weights=` gives one positive weight per model, in list order |
+| `max` | per STFT bin, the value of the model with the largest magnitude; a tie goes to the first model in the list |
+| `min` | the same, with the smallest magnitude |
+| `median` | per STFT bin, the median of the real parts and of the imaginary parts |
+
+**RoFormer options** (the Spleeter-only options are `highband`, `exponent`,
+`bleed`, `smooth`, `overlap`, `use_gpu` and `gpu_device`; `threads` applies
+to both):
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `preset` | enum | *none* | `vocal_full`, `instrumental_full` or `full`; the files by name in `model_dir` |
+| `model_dir` | string | *empty* | The directory a preset's files are in; empty is the working directory |
+| `models` | string | *empty* | 2 to 4 model files separated by `\|`, both stems combined with `ensemble` |
+| `vocals_models` | string | *empty* | 1 to 4 model files separated by `\|` for the vocals stem |
+| `accompaniment_models` | string | *empty* | 1 to 4 model files separated by `\|` for the accompaniment stem |
+| `ensemble` | enum | `auto` | How the models of a list are combined (table above) |
+| `vocals_ensemble` | enum | `same` | How the vocals stem is combined |
+| `accompaniment_ensemble` | enum | `same` | How the accompaniment stem is combined |
+| `weights` | string | *empty* | Positive weights for `avg` separated by `\|`, one per model of the list, in its order; a count that does not match is refused |
+| `num_overlap` | int | `0` | Chunks covering each sample, 1 to 16; `0` uses the model's own value (fewer trades quality for speed) |
+
+**Memory and speed.** Before reading any weights the filter adds up what the
+run will hold (weights, compute graph, host buffers, output stage); if that
+is more than half of the machine's physical memory the run is refused,
+naming both numbers. On Linux a container's memory limit counts as the
+machine's memory. `preset=full` asks for 4.63 GB (so the machine needs
+9.26 GB), `instrumental_full` 2.78 GB, `vocal_full` 2.51 GB; measured peak
+private memory for `preset=full` is about 4.2 GiB. Speed was measured on one
+shared server only (Intel Xeon E5-2680 v4, Linux, Docker, 8 threads):
+`preset=full` takes about 41 to 43 minutes of work per minute of audio, and
+loading the four models takes 22 to 39 s. Every other machine, including
+desktop CPUs, Apple Silicon and real-model runs on Windows and macOS, is
+unmeasured; a slow machine gives the same stems, later. A single model
+cannot emit a stem before it has seen one 11.0 s chunk; real-time use is not
+a goal.
+
+**The four models** are published, like Spleeter's, on
+[nomercy-stemsplit-models v2026.10.31](https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/tag/v2026.10.31),
+as 32-bit float GGUF files with `.sha256` sidecars and a signed
+`manifest.json`:
+
+| file | model | author | network | target | size |
+|---|---|---|---|---|---|
+| `roformer-bs-vocals-revive3e-unwa-f32.gguf` | Revive 3e | unwa | BS-RoFormer | vocals | 639.1 MB |
+| `roformer-mel-vocals-becruily-f32.gguf` | becruily vocals | becruily | Mel-Band RoFormer | vocals | 912.9 MB |
+| `roformer-mel-inst-v1e-plus-unwa-f32.gguf` | v1e+ | unwa | Mel-Band RoFormer | instrumental | 912.9 MB |
+| `roformer-mel-inst-becruily-f32.gguf` | becruily instrumental | becruily | Mel-Band RoFormer | instrumental | 912.9 MB |
+
+**NoMercy did not make these models, and their authors had published no
+licence for them when they were retrieved.** `NOTICE-roformer-models.md` in
+that release records who made each model, where it comes from, its model
+digest (a SHA-256 over every weight and setting, which the release notes
+list per file) and what NoMercy uses it for. It is not a licence. Names never
+change meaning: new weights get a new file name, and a model that does not
+change keeps its file and its SHA-256 in every later release, so stored
+stems need no new split.
+
+**Release gates.** On every platform the runner can execute, the smoke job
+runs the filter's own test suite with tiny RoFormer models, 20 clean exits
+out of 20, and checks that Spleeter stems are byte-identical with the
+previous release (`tests/lib/stemsplit.sh`, assets via
+`tests/lib/stemsplit-assets.sh`).
 
 #### ⚙️ **CPU instruction sets — `whisper` and `stemsplit`**
 
@@ -692,8 +850,12 @@ consuming `recommended_end` blindly must check for.
 Upstream's `whisper` filter, plus the language detection above and six
 options for aligning known text to audio, such as lyrics to a vocal stem.
 **Every one defaults to the old behaviour:** without them, `format=json` and
-`format=srt` output is byte for byte what it was before (tested against
-v1.0.44).
+`format=srt` output is what it was before (tested against v1.0.44), with one
+deliberate exception since v1.0.45: a segment now ends inside the audio its
+window held instead of running into the 30 s padding (#119, the last bullet
+below). Everything else is byte for byte; the defaults test bounds the
+v1.0.44 reference's segment ends the same way and then compares the rest
+exactly.
 
 ```bash
 # Word times with DTW, on the vocal stem, as JSON Lines on stdout
@@ -829,11 +991,15 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 | **Licensing** | GPL + version3 + nonfree | ⚪ Not redistributable as LGPL; internal use |
 
 ### 🔧 **Build Configuration Summary**
+
+As embedded in the v1.0.45 linux-x86_64 and windows-x86_64 binaries
+(`ffmpeg -version` prints a platform's exact line):
+
 ```bash
 # Core Configuration
 --enable-gpl --enable-version3 --enable-nonfree
 --enable-static --enable-runtime-cpudetect
---enable-filter=all --enable-ffplay
+--enable-filter=all --enable-ffplay --enable-sdl2
 
 # Audio Codecs
 --enable-libfdk-aac      # High-quality AAC (NOT in official builds)
@@ -848,12 +1014,13 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 --enable-libxvid --enable-libopenjpeg --enable-libwebp
 
 # Hardware Acceleration
---enable-nvenc --enable-cuda --enable-cuda-nvcc --enable-libnpp  # NVIDIA
+--enable-ffnvcodec --enable-nvenc --enable-nvdec --enable-cuvid
+--enable-cuda --enable-cuda-nvcc           # NVIDIA (no libnpp)
 --enable-amf                     # AMD
 --enable-libvpl                  # Intel QuickSync
---enable-vaapi                   # Linux VA-API
---enable-dxva2 --enable-d3d11va  # Windows DirectX
---enable-vulkan --enable-libshaderc --enable-libplacebo
+--enable-vaapi --enable-libdrm   # Linux only
+--enable-dxva2 --enable-d3d11va  # Windows only
+--enable-vulkan --enable-libplacebo   # FFmpeg 9.0 has no --enable-libshaderc: the Vulkan shaders are compiled with a host glslc at build time
 --enable-opencl
 
 # AI & Analysis
@@ -863,10 +1030,12 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 --enable-chromaprint     # Audio fingerprinting
 
 # Disc, Subtitles & Media Support
---enable-libbluray       # Blu-ray with AACS keydb patches (EXCLUSIVE)
+--enable-libbluray       # Blu-ray with AACS keydb patches (EXCLUSIVE); -laacs -lbdplus -ldvdcss linked in
 --enable-libdvdread --enable-libdvdnav
 --enable-libcdio         # CD audio extraction
 --enable-libass --enable-libzvbi --enable-librsvg
+--enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-fontconfig
+--enable-libxml2 --enable-iconv
 --enable-libsrt --enable-openssl
 --enable-libzimg --enable-frei0r --enable-avisynth
 --enable-libomnidrive    # OmniDrive protocol (EXCLUSIVE)
