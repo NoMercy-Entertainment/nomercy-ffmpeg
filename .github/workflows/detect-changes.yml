@@ -123,9 +123,10 @@ jobs:
           # same cross-exec downgrade and validates the PE header instead.
           declare -A OS=(
             # Both x64 jobs run on Ubuntu 24.04: the hardware archive needs
-            # glibc 2.39, and the old pinned reference used by both jobs can
+            # glibc 2.35 or newer, and the old pinned reference used by both jobs can
             # crash on a different glibc when Vulkan is installed. The new
-            # fully static CPU archive also runs the foreign-glibc checks.
+            # fully static CPU archive also runs the foreign-glibc checks, and
+            # the hardware archive the hardware-hosts checks of its 2.35 floor.
             [linux-x86_64]=ubuntu-24.04
             [linux-x86_64-hardware]=ubuntu-24.04
             [linux-aarch64]=ubuntu-latest

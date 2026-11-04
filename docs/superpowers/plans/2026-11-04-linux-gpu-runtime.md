@@ -8,6 +8,11 @@ for older Linux hosts and adding `linux-x86_64-hardware` using system glibc
 neither package ships `.so` files. Work and measurements below are local to
 2026-11-04. Linux ARM64 and FreeBSD are outside this change.
 
+> Follow-up the same day: the hardware floor is now glibc 2.35 (Ubuntu 22.04
+> sysroot), verified again on the same hosts and the same RTX 3070; see
+> [2026-11-04-linux-hardware-glibc235-design.md](../specs/2026-11-04-linux-hardware-glibc235-design.md).
+> The 2.39 entries below are the first candidate's record.
+
 **Both full production packages are verified locally.** Final ELF/package
 gates, smoke/manual suites, RTX NVENC/CUDA and whisper Vulkan inference, and
 the four-host static CPU inference matrix pass. FFmpeg's tested Dozen Vulkan

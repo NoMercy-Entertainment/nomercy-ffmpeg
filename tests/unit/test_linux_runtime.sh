@@ -118,13 +118,13 @@ fi
 echo "Version needs section '.gnu.version_r':"
 echo '  Name: GLIBC_2.2.5 Flags: none'
 case "$mode" in
-    high-minor) echo '  Name: GLIBC_2.40 Flags: none' ;;
+    high-minor) echo '  Name: GLIBC_2.36 Flags: none' ;;
     high-digits) echo '  Name: GLIBC_2.100 Flags: none' ;;
     high-major) echo '  Name: GLIBC_10.0 Flags: none' ;;
-    high-patch) echo '  Name: GLIBC_2.39.1 Flags: none' ;;
+    high-patch) echo '  Name: GLIBC_2.35.1 Flags: none' ;;
     private) echo '  Name: GLIBC_PRIVATE Flags: none' ;;
     old-minor) echo '  Name: GLIBC_2.9 Flags: none' ;;
-    *) echo '  Name: GLIBC_2.39 Flags: none' ;;
+    *) echo '  Name: GLIBC_2.35 Flags: none' ;;
 esac
 EOF
 chmod +x "${CROSS_PREFIX}readelf"

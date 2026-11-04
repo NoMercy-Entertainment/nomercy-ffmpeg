@@ -2,6 +2,30 @@
 # CI pins this to the base built in the same run (BASE_TAG=<commit sha>);
 # local/compose builds use the default "latest". See .github/workflows.
 ARG BASE_TAG=latest
+
+# glibc 2.35 sysroot for the hardware variant. That variant links the host's
+# glibc dynamically, so the glibc it is compiled and linked against is the
+# oldest one it can start on. The base image is Ubuntu 24.04 (glibc 2.39),
+# which would shut out Ubuntu 22.04 and Debian 12; compiling and linking
+# against Ubuntu 22.04's glibc instead gives a 2.35 floor. The sysroot holds
+# glibc and the same X development packages ffmpeg-base.dockerfile installs
+# from apt (libXau and libXdmcp, which the libxcb built by 08-libdrm.sh needs
+# and which no script builds); every codec, xproto, libxcb and libX11 are built
+# from source by the numbered scripts, as on every platform, and their copies
+# in the build prefix win over the sysroot's. The image is pinned by digest;
+# apt still fetches the current jammy point release of glibc, like every
+# apt-get in ffmpeg-base.dockerfile. scripts/includes/glibc235_sysroot_setup.sh
+# wires the sysroot into the hardware build below.
+FROM ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11 AS glibc235-sysroot
+RUN apt-get update >/dev/null 2>&1 \
+    && apt-get install -y --no-install-recommends libc6-dev linux-libc-dev libcrypt-dev \
+       libxext-dev libxau-dev libxdmcp-dev xtrans-dev xutils-dev >/dev/null 2>&1 \
+    && mkdir -p /sysroot/usr \
+    && cp -a /usr/include /usr/lib /usr/lib64 /sysroot/usr/ \
+    && ln -s usr/lib /sysroot/lib && ln -s usr/lib64 /sysroot/lib64 \
+    && rm -rf /sysroot/usr/lib/apt /sysroot/usr/lib/dpkg /sysroot/usr/lib/systemd /sysroot/usr/lib/udev /sysroot/usr/lib/python3* \
+    && test "$(sed -n 's/^#define[[:space:]]*__GLIBC_MINOR__[[:space:]]*//p' /sysroot/usr/include/features.h)" = 35
+
 FROM nomercyentertainment/ffmpeg-base:${BASE_TAG} AS linux
 
 LABEL maintainer="Phillippe Pelzer"
@@ -101,6 +125,20 @@ COPY ./scripts /scripts
 
 # Convert Windows line endings to Unix line endings
 RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} +
+
+# Hardware variant: compile and link everything against the glibc 2.35
+# sysroot. The script writes compiler wrappers into /usr/local/bin, adds the
+# four symbols gcc 13's static runtimes need to the sysroot's libc_nonshared.a,
+# and proves with a C++/OpenMP probe that a program links, runs and imports
+# nothing above GLIBC_2.35, before the first dependency builds. The CPU
+# variant is fully static and keeps the base image's toolchain untouched.
+COPY --from=glibc235-sysroot /sysroot /opt/glibc235
+RUN if [ "${LINUX_BUILD_VARIANT}" = hardware ]; then \
+      chmod +x /scripts/includes/glibc235_sysroot_setup.sh \
+      && /scripts/includes/glibc235_sysroot_setup.sh /opt/glibc235; \
+    else \
+      rm -rf /opt/glibc235; \
+    fi
 
 # Which release of our own filters to build, and which omnidrive ref. CI
 # resolves them once per run (detect-changes) and passes the same values to

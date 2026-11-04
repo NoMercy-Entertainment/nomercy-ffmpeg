@@ -6,6 +6,11 @@ system runtime. Both must keep codecs built into the executables and ship no
 `.so` files. This changes x86_64 Linux only; Linux ARM64 and the completed
 FreeBSD Vulkan implementation retain their existing policies.
 
+> Later the same day the hardware variant's glibc floor was lowered from
+> 2.39 to 2.35 by compiling and linking it against an Ubuntu 22.04 sysroot;
+> see [2026-11-04-linux-hardware-glibc235-design.md](2026-11-04-linux-hardware-glibc235-design.md).
+> The 2.39 figures below describe the first candidate and are kept as its record.
+
 ## Problem and evidence
 
 The existing full static Linux artifact crashes during NVENC and Vulkan

@@ -40,6 +40,10 @@ for binary in "${build_dir}/ffmpeg_g" "${build_dir}/ffprobe_g" "${build_dir}/ffp
         esac
     done <<<"${needed}"
     # Inspect required versions, not symbol-version definitions exported by us.
+    # The hardware build compiles and links against the glibc 2.35 sysroot
+    # (Ubuntu 22.04, see ffmpeg-linux-x86_64.dockerfile), so 2.35 is the floor
+    # it promises; anything newer here means a toolchain archive or a host
+    # header leaked into the link.
     versions=$(awk '
         /^Version needs section/ { needs=1 }
         /^Version (symbols|definition) section/ { needs=0 }
@@ -52,13 +56,13 @@ for binary in "${build_dir}/ffmpeg_g" "${build_dir}/ffprobe_g" "${build_dir}/ffp
             if ($0 !~ /^[0-9]+([.][0-9]+)+$/) { bad=1; next }
             n=split($0, version, /[.]/)
             major=version[1]+0; minor=version[2]+0
-            if (major > 2 || (major == 2 && minor > 39)) bad=1
-            if (major == 2 && minor == 39)
+            if (major > 2 || (major == 2 && minor > 35)) bad=1
+            if (major == 2 && minor == 35)
                 for (i=3; i<=n; i++) if ((version[i]+0) > 0) bad=1
         }
         END { exit bad }
     ' <<<"${versions}"; then
-        echo "${binary}: unsupported glibc requirement (maximum GLIBC_2.39): ${versions}" >&2
+        echo "${binary}: unsupported glibc requirement (maximum GLIBC_2.35): ${versions}" >&2
         exit 1
     fi
     printf '%s: hardware glibc base runtime only: %s\n' "${binary}" "${needed//$'\n'/ }"

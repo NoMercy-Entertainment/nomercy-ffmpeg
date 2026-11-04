@@ -300,6 +300,18 @@ jobs:
           chmod +x tests/lib/foreign-glibc.sh
           tests/lib/foreign-glibc.sh ./ffmpeg "${WHISPER_TEST_MODEL:?}" "${WHISPER_TEST_AUDIO:?}"             "${STEMSPLIT_ASSETS_DIR:?}/spleeter-2stems-f16.gguf" "${STEMSPLIT_ASSETS_DIR:?}/audio/mix.wav"
 
+      # The hardware variant links the host's glibc, so its 2.35 floor is a
+      # promise that has to be kept: the archive must start and do real CPU
+      # inference on Ubuntu 22.04 (glibc 2.35) and Debian 12 (2.36), and on
+      # newer hosts with the Vulkan loader installed, where the driver guard
+      # must leave it on the CPU backend.
+      - name: Hardware glibc floor hosts (linux-x86_64-hardware)
+        if: matrix.platform == 'linux-x86_64-hardware'
+        shell: bash
+        run: |
+          chmod +x tests/lib/hardware-hosts.sh
+          tests/lib/hardware-hosts.sh ./ffmpeg "${WHISPER_TEST_MODEL:?}" "${WHISPER_TEST_AUDIO:?}"             "${STEMSPLIT_ASSETS_DIR:?}/spleeter-2stems-f16.gguf" "${STEMSPLIT_ASSETS_DIR:?}/audio/mix.wav"
+
       - name: Smoke test (windows)
         if: matrix.kind == 'windows'
         shell: pwsh

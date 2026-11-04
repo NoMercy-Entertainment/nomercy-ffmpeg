@@ -78,7 +78,7 @@ Resolution order for each tool:
 
 For releases with both Linux x64 variants, automatic downloads continue to
 select the canonical, fully static CPU archive `linux-x86_64.tar.gz`. For GPU
-use on glibc 2.39 or newer, download and extract the
+use on glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and newer), download and extract the
 `linux-x86_64-hardware.tar.gz` release archive explicitly, then set
 `NOMERCY_FFMPEG` and `NOMERCY_FFPROBE` to the extracted executables' absolute
 paths. These existing overrides select your supplied binaries; there is no
