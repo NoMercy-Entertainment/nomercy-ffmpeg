@@ -67,7 +67,14 @@ def main():
                                      text=True, errors='replace', timeout=timeout)
             output = process.stdout
             code = process.returncode
-        except (OSError, subprocess.TimeoutExpired) as error:
+        except subprocess.TimeoutExpired as error:
+            partial = ''.join(
+                part.decode('utf-8', errors='replace') if isinstance(part, bytes) else (part or '')
+                for part in (error.stdout, error.stderr)
+            )
+            output = partial + ('\n' if partial else '') + str(error)
+            code = 124
+        except OSError as error:
             output = str(error)
             code = -1
         (results / (name + '.log')).write_text(output, encoding='utf-8')
@@ -78,7 +85,12 @@ def main():
     report['checks']['gpu_visible'] = {'passed': visible, 'details': names.strip()}
     code, cuda = command('cuda-initialization', [sys.executable, __file__, '--cuda-only', '--expect-gpu', args.expect_gpu], timeout=30)
     try:
-        report['checks']['cuda_initialization'] = json.loads(cuda)
+        initialization = json.loads(cuda)
+        if not isinstance(initialization, dict):
+            raise ValueError('CUDA probe did not return an object')
+        initialization['passed'] = code == 0 and initialization.get('passed') is True
+        initialization['exit_code'] = code
+        report['checks']['cuda_initialization'] = initialization
     except ValueError:
         report['checks']['cuda_initialization'] = {'passed': False, 'details': 'CUDA probe failed; see cuda-initialization.log', 'exit_code': code}
 
