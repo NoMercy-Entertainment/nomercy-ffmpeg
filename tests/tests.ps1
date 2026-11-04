@@ -16,6 +16,7 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/whisper.ps1"
 . "$HERE/lib/stemsplit.ps1"
 . "$HERE/lib/jpegxl.ps1"
+. "$HERE/lib/alpha-codecs.ps1"
 
 Report-Init -Platform $Platform
 
@@ -297,6 +298,8 @@ run_test "libopenjpeg" "-y -i $SampleImage -c:v libopenjpeg $TestRoot\test_jp2.j
 run_custom_test "jpegxl_still" { Test-JpegXL -FFmpegExe "$Workspace\ffmpeg.exe" }
 run_custom_test "jpegxl_animation" { Test-JpegXL -FFmpegExe "$Workspace\ffmpeg.exe" -Animated }
 run_custom_test "jpegxl_defaults" { Test-JpegXL -FFmpegExe "$Workspace\ffmpeg.exe" -DefaultSettings }
+run_custom_test "hap_alpha" { Test-AlphaCodec -FFmpegExe "$Workspace\ffmpeg.exe" -Codec hap }
+run_custom_test "apv_alpha" { Test-AlphaCodec -FFmpegExe "$Workspace\ffmpeg.exe" -Codec liboapv }
 run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i $SampleSvg -frames:v 1 $TestRoot\test_svg.png" "svg"
 run_test "libass" "-y -i '${SampleVideo}' -vf ass='${AssSubPath}' '${TestRoot}/test_ass.mp4'" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"

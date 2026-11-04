@@ -799,6 +799,8 @@ which is easy to get wrong.
 | **AVS2** | ✅ libdavs2 + xavs2 | ❌ Not included |
 | **VP8/VP9, Xvid, OpenJPEG, WebP** | ✅ Included | ⚠️ Optional |
 | **JPEG XL (still and animated)** | ✅ Static libjxl 0.12.0, encode + decode, including alpha | ⚠️ Optional |
+| **HAP / HAP Alpha** | ✅ Static Snappy 1.3.1 encoding, native decoding | ⚠️ Optional encoder dependency |
+| **APV / APV Alpha** | ✅ Static OpenAPV 1.1.3.0 encoding, native decoding | ⚠️ Optional encoder dependency |
 | **Hardware Acceleration** | ✅ NVENC/NVDEC/CUDA/AMF/QSV (libvpl)/VAAPI | ⚠️ Platform dependent |
 | **Vulkan + libplacebo + shaderc** | ✅ Full integration | ⚠️ Optional/experimental |
 | **Advanced Scaling** | ✅ libzimg + placebo | ⚠️ Basic only |
@@ -812,6 +814,16 @@ ffmpeg -i input.mov -an -c:v libjxl_anim -f image2pipe output.jxl
 ```
 
 Use `image2pipe` for animation so every encoded packet goes into the same file.
+
+HAP and APV encoding with alpha (the input must contain transparency):
+
+```bash
+ffmpeg -i input.mov -an -c:v hap -format hap_alpha output.mov
+ffmpeg -i input.mov -an -c:v liboapv -pix_fmt yuva444p10le output.mkv
+```
+
+Both formats use lossy compression. The manual and smoke suites check that a
+generated alpha gradient survives three frames through the native decoders.
 
 #### 📀 **Disc & Container Support**
 - **Blu-ray**: libbluray + libaacs with static keydb patches for decryption
@@ -857,6 +869,8 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 --enable-libdavs2 --enable-libxavs2      # AVS2 (China standard)
 --enable-libxvid --enable-libopenjpeg --enable-libwebp
 --enable-libjxl                         # JPEG XL still images and animation
+--enable-libsnappy                      # HAP / HAP Alpha encoding
+--enable-liboapv                        # APV encoding, including 10-bit alpha
 
 # Hardware Acceleration
 --enable-nvenc --enable-cuda --enable-cuda-nvcc --enable-libnpp  # NVIDIA

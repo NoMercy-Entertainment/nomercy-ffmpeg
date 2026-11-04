@@ -34,6 +34,32 @@ for ((i=0; i<${#args[@]}-1; i++)); do
   [[ "${args[i]}" == -i ]] && input="${args[i+1]}"
   [[ "${args[i]}" == -frames:v ]] && frames="${args[i+1]}"
 done
+if [[ "$input" == testsrc2=size=128x64* ]]; then
+  if [[ "${SMOKE_STUB_ALPHA_CODEC:-}" == hap && "$out" == *.mov || "${SMOKE_STUB_ALPHA_CODEC:-}" == liboapv && "$out" == *.mkv ]]; then
+    [[ "${SMOKE_STUB_ALPHA_FAULT:-}" == missing ]] && exit 57
+  fi
+  : > "$out"
+  exit 0
+fi
+if [[ "$*" == *alphaextract* ]]; then
+  scale=1; codec=hap
+  [[ "$input" == *.mkv ]] && { scale=4; codec=liboapv; }
+  low=0; high=$((250*scale)); mean=$((126*scale)); count=3
+  if [[ "${SMOKE_STUB_ALPHA_CODEC:-}" == "$codec" ]]; then
+    case "${SMOKE_STUB_ALPHA_FAULT:-}" in
+      opaque) low=$((255*scale)); high=$low; mean=$low ;;
+      flat) low=$((127*scale)); high=$low; mean=$low ;;
+      truncated) count=2 ;;
+      empty) exit 0 ;;
+      malformed) mean=invalid ;;
+      decode) exit 58 ;;
+    esac
+  fi
+  for ((frame=0; frame<count; frame++)); do
+    printf 'lavfi.signalstats.YMIN=%s\nlavfi.signalstats.YMAX=%s\nlavfi.signalstats.YAVG=%s\n' "$low" "$high" "$mean"
+  done
+  exit 0
+fi
 if [[ "$input" == testsrc=size=64x48* ]]; then
   dd if=/dev/zero of="$out" bs=12288 count="$frames" 2>/dev/null
   exit $?
@@ -162,6 +188,17 @@ SMOKE_STUB_CORRUPT_JXL=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/corrupt
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'changed pixels, alpha or frame count' "${WORK}/corrupt.log"; expect "corrupted alpha fails despite successful commands" 0 $?
 SMOKE_STUB_DEFAULT_JXL_CRASH=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/defaults.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'JPEG XL round-trip: test_jpegxl_defaults' "${WORK}/defaults.log"; expect "crashing default encoder settings fail at the defaults gate" 0 $?
+
+for codec in hap liboapv; do
+  gate=test_hap_alpha
+  [[ "$codec" == liboapv ]] && gate=test_apv_alpha
+  for fault in missing opaque flat truncated empty malformed decode; do
+    SMOKE_STUB_ALPHA_CODEC="$codec" SMOKE_STUB_ALPHA_FAULT="$fault" bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/alpha.log" 2>&1
+    rc=$?
+    [[ $rc -ne 0 ]] && grep -q "Alpha codec round-trip: $gate" "${WORK}/alpha.log"
+    expect "$codec $fault fails at its alpha gate" 0 $?
+  done
+done
 
 echo "----"; echo "passed=$PASS failed=$FAIL"
 [[ $FAIL -eq 0 ]]
