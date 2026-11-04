@@ -314,8 +314,8 @@ bool ggml_backend_is_cpu(ggml_backend_t backend)
  * The polarity matters and is deliberate: a build that FORGETS to say anything
  * gets the guard, i.e. one wasted fork. A build that forgets the other way
  * round would get a segfault on a Mesa machine. 48-whisper.sh defines
- * NM_NO_VULKAN on exactly the platforms where it sets NM_VULKAN=0 (darwin),
- * so those stop forking for a Vulkan they do not carry.
+ * NM_NO_VULKAN wherever it sets NM_VULKAN=0 (Darwin and Linux x64 CPU),
+ * so those builds stop forking for a Vulkan backend they do not carry.
  */
 #if !defined(_WIN32) && !defined(__APPLE__) && !defined(NM_NO_VULKAN)
 #define NM_VK_ICD_GUARD 1

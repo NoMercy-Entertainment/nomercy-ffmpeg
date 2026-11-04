@@ -116,7 +116,7 @@ EOF
 # dispatcher-enabled binary. crash_on_override=1 makes it exit non-zero
 # whenever NOMERCY_GGML_CPU is set at all, simulating a dispatcher that
 # bricks itself on an override — what cpu_variant_startup_ok exists to catch.
-make_dispatcher_stub() {  # dir, name, version_string, exit_code, crash_on_override(0|1)
+make_dispatcher_stub() {  # dir, name, version_string, exit_code, crash_on_override(0|1), variant(hardware|cpu)
   local dir="$1" name="$2" ver="$3" code="$4" crash="$5"
   cat > "${dir}/${name}" <<EOF
 #!/usr/bin/env bash
@@ -126,7 +126,7 @@ if [[ "${crash}" == "1" && -n "\${NOMERCY_GGML_CPU:-}" ]]; then
   exit 9
 fi
 EOF
-  add_backend_markers "${dir}/${name}"
+  [[ "${6:-hardware}" == cpu ]] || add_backend_markers "${dir}/${name}"
   if [[ "$code" == 0 ]]; then add_codec_stub "${dir}/${name}"; fi
   printf 'echo "%s version %s Copyright (c) the FFmpeg developers"\nexit %s\n' "$name" "$ver" "$code" >> "${dir}/${name}"
   chmod +x "${dir}/${name}"
@@ -169,20 +169,42 @@ expect() {  # description, expected_rc, actual_rc
 # the ggml cpu dispatcher is compiled in (see Case 7), so a stub meant to
 # represent an overall-passing binary has to carry that marker too.
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; expect "correct version passes" 0 $?
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >/dev/null 2>&1; expect "correct version passes" 0 $?
+
+# The canonical archive is CPU-only. Absence is required, not a skipped check.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"
+make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0 cpu
+make_dispatcher_stub "$d" ffprobe 8.1.1 0 0 cpu
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1
+expect "Linux CPU archive passes without a Vulkan backend or guard" 0 $?
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/hardware-missing.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'does not carry the ggml Vulkan backend' "${WORK}/hardware-missing.log"
+expect "Linux hardware archive cannot omit the Vulkan backend" 0 $?
+echo '# ggml_vulkan vkGetInstanceProcAddr' >>"$d/ffmpeg"
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/cpu-backend.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'CPU archive must not carry a Vulkan backend' "${WORK}/cpu-backend.log"
+expect "Linux CPU archive rejects a linked Vulkan backend" 0 $?
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/hardware-guard.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'ICD guard is missing from linux-x86_64-hardware' "${WORK}/hardware-guard.log"
+expect "Linux hardware archive cannot omit the ICD guard" 0 $?
+make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0 cpu
+echo '# crash a statically linked' >>"$d/ffmpeg"
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/cpu-guard.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'CPU archive must not carry an ICD guard' "${WORK}/cpu-guard.log"
+expect "Linux CPU archive rejects a compiled ICD guard" 0 $?
 
 # Case 2: wrong version → fail (rc != 0)
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 7.0.0 0 0; make_dispatcher_stub "$d" ffprobe 7.0.0 0 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/version.log" 2>&1
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/version.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'expected version' "${WORK}/version.log"; expect "wrong version fails at the version gate" 0 $?
 
 # Case 3: non-zero ffmpeg exit (not exec-format) → fail
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 3 0; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "non-zero ffmpeg exit fails" 1 $rc
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "non-zero ffmpeg exit fails" 1 $rc
 
 # Case 4: missing binary → fail
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_stub "$d" ffprobe 8.1.1 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "missing ffmpeg fails" 1 $rc
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "missing ffmpeg fails" 1 $rc
 
 # Case 5: valid cross-arch ELF headers pass without executing the binary.
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_elf_stub "$d" ffmpeg; make_elf_stub "$d" ffprobe
@@ -207,40 +229,40 @@ done
 
 # Case 6: SAME exec-format failure on a NATIVE platform → must FAIL (not masked as cross-arch)
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_execfmt_stub "$d" ffmpeg; make_execfmt_stub "$d" ffprobe
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "exec-format on native platform fails" 1 $rc
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >/dev/null 2>&1; rc=$?; [[ $rc -ne 0 ]] && rc=1; expect "exec-format on native platform fails" 1 $rc
 
 # Case 7: correct version, but no ggml cpu dispatcher compiled in (plain
 # make_stub, no marker) → must FAIL. This is the case that matters most:
 # without it, a binary that predates the dispatcher entirely would sail
 # through smoke.sh exactly like it did before this feature existed.
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_stub "$d" ffmpeg 8.1.1 0; make_stub "$d" ffprobe 8.1.1 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/dispatcher.log" 2>&1
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/dispatcher.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'does not carry the ggml cpu dispatcher' "${WORK}/dispatcher.log"; expect "no dispatcher marker fails at the presence gate" 0 $?
 
 # Case 8: dispatcher marker present, but the binary bricks itself when
 # NOMERCY_GGML_CPU is set → must FAIL. Proves cpu_variant_startup_ok's own
 # failure path actually fires, not just the presence check's.
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 1; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
-bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/override.log" 2>&1
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/override.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'did not start with NOMERCY_GGML_CPU' "${WORK}/override.log"; expect "crash-on-override fails at the startup gate" 0 $?
 
 # A binary that starts and reports the right version must still fail if the
 # codec is missing, or returns success while damaging the decoded alpha.
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
-SMOKE_STUB_NO_JXL=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/missing.log" 2>&1
+SMOKE_STUB_NO_JXL=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/missing.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'JPEG XL round-trip' "${WORK}/missing.log"; expect "missing JPEG XL fails at the codec gate" 0 $?
-SMOKE_STUB_NO_JXL_ANIM=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/missing-animation.log" 2>&1
+SMOKE_STUB_NO_JXL_ANIM=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/missing-animation.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'JPEG XL round-trip: test_jpegxl_animation' "${WORK}/missing-animation.log"; expect "missing animated JPEG XL fails at the animation gate" 0 $?
-SMOKE_STUB_CORRUPT_JXL=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/corrupt.log" 2>&1
+SMOKE_STUB_CORRUPT_JXL=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/corrupt.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'changed pixels, alpha or frame count' "${WORK}/corrupt.log"; expect "corrupted alpha fails despite successful commands" 0 $?
-SMOKE_STUB_DEFAULT_JXL_CRASH=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/defaults.log" 2>&1
+SMOKE_STUB_DEFAULT_JXL_CRASH=1 bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/defaults.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'JPEG XL round-trip: test_jpegxl_defaults' "${WORK}/defaults.log"; expect "crashing default encoder settings fail at the defaults gate" 0 $?
 
 for codec in hap liboapv; do
   gate=test_hap_alpha
   [[ "$codec" == liboapv ]] && gate=test_apv_alpha
   for fault in missing opaque flat truncated empty malformed decode; do
-    SMOKE_STUB_ALPHA_CODEC="$codec" SMOKE_STUB_ALPHA_FAULT="$fault" bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/alpha.log" 2>&1
+    SMOKE_STUB_ALPHA_CODEC="$codec" SMOKE_STUB_ALPHA_FAULT="$fault" bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/alpha.log" 2>&1
     rc=$?
     [[ $rc -ne 0 ]] && grep -q "Alpha codec round-trip: $gate" "${WORK}/alpha.log"
     expect "$codec $fault fails at its alpha gate" 0 $?
@@ -261,7 +283,7 @@ for code in 138 139 124; do
   WHISPER_TEST_MODEL= SMOKE_STUB_WHISPER_LATE_EXIT=$code _vulkan_filter_probe "$d/ffmpeg" lavfi >"${WORK}/whisper-teardown.log" 2>&1
   expect "fatal status $code wins over the earlier model-open proof" 1 $?
 done
-SMOKE_STUB_WHISPER_LATE_EXIT=139 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/teardown-smoke.log" 2>&1
+SMOKE_STUB_WHISPER_LATE_EXIT=139 bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/teardown-smoke.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'crashes or times out initialising a ggml filter' "${WORK}/teardown-smoke.log"
 expect "late startup crash fails the smoke gate despite model-open proof" 0 $?
 _vulkan_write_silence "${WORK}/fallback.wav"

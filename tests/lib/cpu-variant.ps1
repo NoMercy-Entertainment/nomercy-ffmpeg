@@ -253,18 +253,18 @@ function Test-CpuVariant {
 # precisely that it asserts ABSENCE, and a hard-coded "Windows has no guard"
 # would assert nothing at all.
 
-# Five platforms carry Vulkan. FreeBSD uses its dynamic base system runtime
-# with static codec libraries so dlopen can open the host's loader and driver.
-# Both Darwin targets omit Vulkan; arm64 uses Metal.
+# Linux x64's fully static CPU archive omits Vulkan; its hardware archive and
+# FreeBSD use the system runtime with static codec libraries. Both Darwin
+# targets omit Vulkan; arm64 uses Metal.
 function Test-VulkanPlatformHasBackend {
     param([string]$Platform)
-    return ($Platform -notmatch 'darwin')
+    return ($Platform -ne 'linux-x86_64' -and $Platform -notmatch 'darwin')
 }
 
 # The fork-and-probe ICD guard is compiled only for non-Windows, non-Apple.
 function Test-VulkanPlatformHasGuard {
     param([string]$Platform)
-    return ($Platform -notmatch 'windows' -and $Platform -notmatch 'darwin')
+    return ($Platform -ne 'linux-x86_64' -and $Platform -notmatch 'windows' -and $Platform -notmatch 'darwin')
 }
 
 # Both halves must be there: ggml-vulkan itself, and the loader shim that

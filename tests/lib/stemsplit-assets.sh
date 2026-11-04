@@ -51,6 +51,9 @@ set -euo pipefail
 
 PLATFORM="${1:?usage: stemsplit-assets.sh <platform> <dir>}"
 DIR="${2:?usage: stemsplit-assets.sh <platform> <dir>}"
+REF_PLATFORM="${PLATFORM}"
+# The new hardware variant shares the existing pinned x64 CPU reference.
+[[ "${REF_PLATFORM}" != linux-x86_64-hardware ]] || REF_PLATFORM=linux-x86_64
 
 STEMSPLIT_TAG=v1.1.0
 FORGEJO=https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit
@@ -118,7 +121,7 @@ native() {
 	if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi
 }
 
-ref_sha="$(ref_digest "${PLATFORM}")" || die "no reference digest for platform '${PLATFORM}'"
+ref_sha="$(ref_digest "${REF_PLATFORM}")" || die "no reference digest for platform '${REF_PLATFORM}'"
 case "${PLATFORM}" in
 windows-*) ref_ext=zip; ref_bin=ffmpeg.exe ;;
 *)         ref_ext=tar.gz; ref_bin=ffmpeg ;;
@@ -160,9 +163,9 @@ fi
 fetch "${SPLEETER_URL}" "${DIR}/spleeter-2stems-f16.gguf" "${SPLEETER_SHA}"
 
 # 4. The previous release's binary for this platform.
-ref_archive="${DIR}/ffmpeg-${PLATFORM}-${REF_VERSION}.${ref_ext}"
-fetch "${REF_BASE}/ffmpeg-9.0-${PLATFORM}-${REF_VERSION}.${ref_ext}" "${ref_archive}" "${ref_sha}"
-ref_dir="${DIR}/ref/${PLATFORM}"
+ref_archive="${DIR}/ffmpeg-${REF_PLATFORM}-${REF_VERSION}.${ref_ext}"
+fetch "${REF_BASE}/ffmpeg-9.0-${REF_PLATFORM}-${REF_VERSION}.${ref_ext}" "${ref_archive}" "${ref_sha}"
+ref_dir="${DIR}/ref/${REF_PLATFORM}"
 if [[ ! -f "${ref_dir}/${ref_bin}" ]]; then
 	rm -rf "${ref_dir}"
 	mkdir -p "${ref_dir}"
@@ -171,7 +174,7 @@ if [[ ! -f "${ref_dir}/${ref_bin}" ]]; then
 	tar.gz) tar -xzf "${ref_archive}" -C "${ref_dir}" "./${ref_bin}" ;;
 	esac
 	chmod +x "${ref_dir}/${ref_bin}" 2>/dev/null || true
-	say "unpacked: ref/${PLATFORM}/${ref_bin} (${REF_VERSION})"
+	say "unpacked: ref/${REF_PLATFORM}/${ref_bin} (${REF_VERSION})"
 fi
 [[ -f "${ref_dir}/${ref_bin}" ]] || die "the ${REF_VERSION} archive did not yield ${ref_bin}"
 

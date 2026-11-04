@@ -138,6 +138,12 @@ assert_vulkan_backend_present() {  # bin, platform
   local bin="$1" platform="$2" diag
 
   if ! vulkan_platform_has_backend "${platform}"; then
+    if [[ "${platform}" == linux-x86_64 ]]; then
+      vulkan_backend_compiled_in "${bin}" && fail "vulkan: the fully static CPU archive must not carry a Vulkan backend"
+      vulkan_guard_compiled_in "${bin}" && fail "vulkan: the fully static CPU archive must not carry an ICD guard"
+      ok "vulkan: backend and ICD guard correctly absent from the CPU archive"
+      return 0
+    fi
     note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin-arm64 gets Metal instead, asserted separately below)"
     return 0
   fi

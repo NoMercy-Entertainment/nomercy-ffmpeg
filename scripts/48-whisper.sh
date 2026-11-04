@@ -46,8 +46,8 @@ fi
 # ggml's Vulkan backend needs three symbols from the Vulkan loader. Linking the
 # real loader would make these static binaries depend on a shared library most
 # machines do not have, so scripts/includes/vk_loader_shim.c supplies those three
-# and opens the system loader at first use instead. The binary stays static and
-# Vulkan stays optional: no driver simply means the CPU backend is used.
+# and opens the system loader at first use instead. The backend stays built in
+# and Vulkan stays optional: no driver means the CPU backend is used.
 #
 # find_package(Vulkan) still has to be satisfied at configure time. ggml-vulkan is
 # built as a static archive, so Vulkan_LIBRARY is never linked - it only has to
@@ -68,9 +68,12 @@ NM_VULKAN=0
 if [[ ${TARGET_OS} != darwin ]]; then
     NM_VULKAN=1
 fi
+if [[ ${TARGET_OS} == linux && ${ARCH} == x86_64 && ${LINUX_BUILD_VARIANT:-hardware} == cpu ]]; then
+    NM_VULKAN=0
+fi
 
 # Told to ggml_cpu_dispatch.c so its fork-based Vulkan guard compiles out where
-# there is no Vulkan to guard: darwin would otherwise fork a child
+# there is no Vulkan to guard: Darwin and the Linux x86_64 CPU build would fork a child
 # per process to probe a backend that is not linked.
 #
 # The polarity is deliberate. A build that says NOTHING gets the guard - one

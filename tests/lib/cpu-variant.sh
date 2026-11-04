@@ -213,12 +213,12 @@ test_cpu_variant() {
 # tests/smoke.sh -- the script CI actually runs on every platform -- and
 # tests/tests.sh can assert the same things in their own reporting voice.
 #
-# Five platforms carry Vulkan. FreeBSD keeps codec libraries static and links
-# its base system runtime dynamically, so dlopen can open the host's Vulkan
-# loader and driver. Both Darwin targets omit Vulkan; arm64 uses Metal.
+# Linux x64's fully static CPU archive omits Vulkan. Its hardware archive and
+# FreeBSD use the system runtime with static codec libraries. Both Darwin
+# targets omit Vulkan; arm64 uses Metal.
 vulkan_platform_has_backend() {
 	case "$1" in
-	*darwin*) return 1 ;;
+	linux-x86_64 | *darwin*) return 1 ;;
 	*) return 0 ;;
 	esac
 }
@@ -257,7 +257,7 @@ vulkan_guard_compiled_in() {
 
 vulkan_platform_has_guard() {
 	case "$1" in
-	*windows* | *darwin*) return 1 ;;
+	linux-x86_64 | *windows* | *darwin*) return 1 ;;
 	*) return 0 ;;
 	esac
 }

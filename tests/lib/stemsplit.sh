@@ -58,7 +58,9 @@ _stemsplit_inputs() {
 	SS_MODEL=spleeter-2stems-f16.gguf
 	# The previous release's binary for THIS platform (one directory each;
 	# a machine testing two platforms must not have them overwrite each other).
-	case "${FFMPEG}" in *.exe) SS_REF="ref/${Platform:-unknown}/ffmpeg.exe" ;; *) SS_REF="ref/${Platform:-unknown}/ffmpeg" ;; esac
+	local ref_platform="${Platform:-unknown}"
+	[[ "${ref_platform}" != linux-x86_64-hardware ]] || ref_platform=linux-x86_64
+	case "${FFMPEG}" in *.exe) SS_REF="ref/${ref_platform}/ffmpeg.exe" ;; *) SS_REF="ref/${ref_platform}/ffmpeg" ;; esac
 	local f
 	for f in "${SS_TESTS}/run_tests.sh" "${SS_TESTS}/gen_audio.py" "${SS_TINY}/tiny-mel-v1.gguf" "${SS_MODEL}"; do
 		if [[ ! -f "${SS_ASSETS}/${f}" ]]; then

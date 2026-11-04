@@ -162,6 +162,12 @@ if ((Get-Item $ffprobe).Length -eq 0) { Fail 'ffprobe.exe is empty' }
 # evidence behind it.
 function Assert-VulkanBackendPresent($bin, $platform) {
     if (-not (Test-VulkanPlatformHasBackend $platform)) {
+        if ($platform -eq 'linux-x86_64') {
+            if (Test-VulkanBackendPresent -Bin $bin) { Fail 'the fully static CPU archive must not carry a Vulkan backend' }
+            if (Test-VulkanGuardPresent -Bin $bin) { Fail 'the fully static CPU archive must not carry an ICD guard' }
+            Write-Host '✅ Vulkan backend and ICD guard correctly absent from the CPU archive'
+            return
+        }
         Note "$(Split-Path $bin -Leaf): $platform carries no Vulkan by design; check skipped"
         return
     }
