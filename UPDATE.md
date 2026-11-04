@@ -4,6 +4,10 @@
 
 ### Unreleased
 
+- FreeBSD: skip the Vulkan/libplacebo dependency stack, including shaderc and
+  SPIRV-Cross, and explicitly disable Vulkan and libplacebo in FFmpeg. Keep
+  the fully static build and the existing CPU backends for whisper/stemsplit
+  (#125).
 - HAP/APV alpha: statically link Snappy 1.3.1 and OpenAPV 1.1.3.0 across all
   platforms (`--enable-libsnappy`, `--enable-liboapv`). Backport FFmpeg's OpenAPV
   API-set 1 metadata descriptor support. Both manual suites and executable CI

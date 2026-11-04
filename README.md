@@ -526,7 +526,7 @@ runs the filters on the CPU as before.
 | windows-x86_64 | ✅ | Verified with a GPU, on an RTX 3070. The only row where GPU selection itself was measured. |
 | linux-aarch64 | ✅ | Built and verified under emulation; no ARM GPU has been measured. |
 | windows-aarch64 | ✅ | Built and statically verified; not yet executed on Windows-on-ARM hardware. |
-| freebsd-x86_64 | ❌ | These binaries link statically, and FreeBSD's static `dlopen` always fails, so a loader could never be opened. |
+| freebsd-x86_64 | ❌ | Vulkan and libplacebo are disabled; their dependency build is skipped. These binaries stay fully static, so FreeBSD's `dlopen` cannot open a loader or driver. `whisper` and `stemsplit` use the CPU. |
 | darwin-x86_64 | ❌ | No Vulkan, and deliberately no Metal either — see below. |
 | darwin-arm64 | ❌ | No Vulkan; gets **Metal** instead — see below. |
 
@@ -802,7 +802,7 @@ which is easy to get wrong.
 | **HAP / HAP Alpha** | ✅ Static Snappy 1.3.1 encoding, native decoding | ⚠️ Optional encoder dependency |
 | **APV / APV Alpha** | ✅ Static OpenAPV 1.1.3.0 encoding, native decoding | ⚠️ Optional encoder dependency |
 | **Hardware Acceleration** | ✅ NVENC/NVDEC/CUDA/AMF/QSV (libvpl)/VAAPI | ⚠️ Platform dependent |
-| **Vulkan + libplacebo + shaderc** | ✅ Full integration | ⚠️ Optional/experimental |
+| **Vulkan + libplacebo + shaderc** | ✅ Linux / Windows; skipped on FreeBSD / macOS | ⚠️ Optional/experimental |
 | **Advanced Scaling** | ✅ libzimg + placebo | ⚠️ Basic only |
 | **Frei0r / AviSynth** | ✅ Included | ⚠️ Optional |
 

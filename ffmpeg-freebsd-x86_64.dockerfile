@@ -204,6 +204,8 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --prefix=${PREFIX} \
     --enable-cross-compile \
     --disable-shared \
+    --disable-vulkan \
+    --disable-libplacebo \
     --enable-ffplay \
     --enable-static \
     --enable-gpl \
