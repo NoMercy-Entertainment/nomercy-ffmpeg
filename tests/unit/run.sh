@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds and runs every tests/unit/test_*.c against the headers in
-# scripts/includes. Plain C, no FFmpeg build needed; CI runs this on ubuntu.
+# Builds/runs tests/unit/test_*.c against scripts/includes and executes
+# test_*.sh. No FFmpeg build needed; CI runs this on ubuntu.
 #
 # Usage: tests/unit/run.sh            (uses $CC, default cc)
 set -uo pipefail
@@ -32,9 +32,22 @@ for src in "${HERE}"/test_*.c; do
 	fi
 done
 
+for src in "${HERE}"/test_*.sh; do
+	[[ -f "${src}" ]] || continue
+	name="$(basename "${src}" .sh)"
+	ran=$((ran + 1))
+	echo "== ${name}"
+	if bash "${src}"; then
+		echo "✅ ${name}"
+	else
+		echo "❌ ${name}"
+		failed=$((failed + 1))
+	fi
+done
+
 # A run that found nothing to test must not read as green.
 if [[ ${ran} -eq 0 ]]; then
-	echo "❌ no tests/unit/test_*.c found"
+	echo "❌ no tests/unit/test_*.c or test_*.sh found"
 	exit 1
 fi
 echo "${ran} unit test program(s), ${failed} failed"

@@ -46,8 +46,8 @@ fi
 # ggml's Vulkan backend needs three symbols from the Vulkan loader. Linking the
 # real loader would make these static binaries depend on a shared library most
 # machines do not have, so scripts/includes/vk_loader_shim.c supplies those three
-# and opens the system loader at first use instead. The binary stays static and
-# Vulkan stays optional: no driver simply means the CPU backend is used.
+# and opens the system loader at first use instead. The backend stays built in
+# and Vulkan stays optional: no driver means the CPU backend is used.
 #
 # find_package(Vulkan) still has to be satisfied at configure time. ggml-vulkan is
 # built as a static archive, so Vulkan_LIBRARY is never linked - it only has to
@@ -61,26 +61,19 @@ fi
 # levels into throwaway prefixes and never touches Vulkan at all, so setting
 # these flags there instead would silently build nothing Vulkan-related.
 #
-# freebsd-x86_64 is excluded too, alongside darwin, because vk_loader_shim.c
-# could never open a real Vulkan loader there: these binaries are linked
-# statically, and FreeBSD's libc.a supplies dlopen() as a stub that sets
-# "Service unavailable" and returns NULL, unconditionally. Not a guess and not
-# a property of FreeBSD in general -- FreeBSD's DYNAMIC libc has a working
-# dlopen, and an earlier version of this comment wrongly said the base system
-# libc was static-only. Verified for Task 5 on the same FreeBSD 14.3 sysroot
-# this target builds against: libc.a's dlfcn.o carries the string, and the
-# disassembly of dlopen in a statically linked FreeBSD binary is four
-# instructions -- load that string, call _rtld_error, return 0.
-#
-# So building Vulkan in here would cost ~59 MB of dead weight that can never do
-# anything but return the shim's own stub failures.
+# FreeBSD uses its dynamic base runtime with static codec/C++ libraries, so
+# its real runtime linker can open the system Vulkan loader and ICDs (#125).
+# Darwin uses Metal instead of Vulkan.
 NM_VULKAN=0
-if [[ ${TARGET_OS} != darwin && ${TARGET_OS} != freebsd ]]; then
+if [[ ${TARGET_OS} != darwin ]]; then
     NM_VULKAN=1
+fi
+if [[ ${TARGET_OS} == linux && ${ARCH} == x86_64 && ${LINUX_BUILD_VARIANT:-hardware} == cpu ]]; then
+    NM_VULKAN=0
 fi
 
 # Told to ggml_cpu_dispatch.c so its fork-based Vulkan guard compiles out where
-# there is no Vulkan to guard: darwin and freebsd would otherwise fork a child
+# there is no Vulkan to guard: Darwin and the Linux x86_64 CPU build would fork a child
 # per process to probe a backend that is not linked.
 #
 # The polarity is deliberate. A build that says NOTHING gets the guard - one
@@ -326,8 +319,8 @@ else
             fi
         fi
     elif [[ ${TARGET_OS} == "freebsd" ]]; then
-        # FreeBSD base ships libomp.so but no libomp.a, so clang's -fopenmp
-        # cannot survive the fully static ffmpeg link; use ggml's own threadpool
+        # Keep libomp.so out of the binary's base-runtime-only dependencies;
+        # FreeBSD ships no libomp.a, so use ggml's own threadpool.
         WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_OPENMP=OFF"
     fi
     mkdir build && cd build

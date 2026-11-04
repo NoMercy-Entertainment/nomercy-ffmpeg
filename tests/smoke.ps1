@@ -162,6 +162,12 @@ if ((Get-Item $ffprobe).Length -eq 0) { Fail 'ffprobe.exe is empty' }
 # evidence behind it.
 function Assert-VulkanBackendPresent($bin, $platform) {
     if (-not (Test-VulkanPlatformHasBackend $platform)) {
+        if ($platform -eq 'linux-x86_64') {
+            if (Test-VulkanBackendPresent -Bin $bin) { Fail 'the fully static CPU archive must not carry a Vulkan backend' }
+            if (Test-VulkanGuardPresent -Bin $bin) { Fail 'the fully static CPU archive must not carry an ICD guard' }
+            Write-Host '✅ Vulkan backend and ICD guard correctly absent from the CPU archive'
+            return
+        }
         Note "$(Split-Path $bin -Leaf): $platform carries no Vulkan by design; check skipped"
         return
     }
@@ -206,7 +212,7 @@ function Assert-VulkanStartup($bin, $platform) {
         Write-Host "✅ $(Split-Path $bin -Leaf): a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with the GPU switched off"
     } elseif ($result.Crash) {
         Write-Host $result.Output
-        Fail "$(Split-Path $bin -Leaf): crashes initialising a ggml filter on a machine with no usable GPU driver"
+        Fail "$(Split-Path $bin -Leaf): crashes or times out initialising a ggml filter on a machine with no usable GPU driver"
     } else {
         Write-Host $result.Output
         Note "$(Split-Path $bin -Leaf): could not instantiate a ggml filter on this build - the no-GPU guarantee is NOT asserted here"

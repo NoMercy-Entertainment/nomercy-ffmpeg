@@ -76,6 +76,15 @@ Resolution order for each tool:
 | macOS | arm64 | `darwin-arm64.tar.gz` |
 | macOS | x64 | `darwin-x86_64.tar.gz` |
 
+For releases with both Linux x64 variants, automatic downloads continue to
+select the canonical, fully static CPU archive `linux-x86_64.tar.gz`. For GPU
+use on glibc 2.39 or newer, download and extract the
+`linux-x86_64-hardware.tar.gz` release archive explicitly, then set
+`NOMERCY_FFMPEG` and `NOMERCY_FFPROBE` to the extracted executables' absolute
+paths. These existing overrides select your supplied binaries; there is no
+automatic hardware-variant selection. See the
+[Linux artifact choice](../../README.md#linux-x86_64-artifact-choice).
+
 On an unsupported platform, resolution throws with the supported list and a
 pointer to `NOMERCY_FFMPEG`. Set that env var to use a binary you supply.
 

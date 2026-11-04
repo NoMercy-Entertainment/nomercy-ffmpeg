@@ -241,7 +241,9 @@ run_hw_test() {
 	local expected_output=$4
 	local reason
 
-	if reason=$(hw_capability_reason "$capability"); then
+	if [[ "${Platform}" == linux-x86_64 ]]; then
+		reason='hardware acceleration is intentionally omitted from the fully static CPU archive; use linux-x86_64-hardware'
+	elif reason=$(hw_capability_reason "$capability"); then
 		run_test "$name" "$command" "$expected_output"
 		return
 	fi
@@ -369,7 +371,7 @@ run_custom_test "jpegxl_animation" "test_jpegxl_animation"
 run_custom_test "jpegxl_defaults" "test_jpegxl_defaults"
 run_custom_test "hap_alpha" "test_hap_alpha"
 run_custom_test "apv_alpha" "test_apv_alpha"
-run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
+run_platform_test "librsvg" "linux-x86_64 linux-x86_64-hardware windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"
 

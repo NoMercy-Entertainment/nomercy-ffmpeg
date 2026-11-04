@@ -4,6 +4,23 @@
 
 ### Unreleased
 
+- Linux x86_64: retain the canonical `linux-x86_64` artifact as a fully static
+  CPU build for older Linux hosts. Add `linux-x86_64-hardware` for hardware
+  acceleration with the host's glibc 2.39 or newer. Codecs, C++ and OpenMP stay
+  static; neither archive ships `.so` files. Disable GPU dependencies/backends
+  in the CPU artifact to avoid GPU-processing driver loads into static glibc.
+  Matching the host's glibc version does not make that combination safe. Both
+  production archives pass ELF, package and smoke gates. CPU whisper/stemsplit
+  inference passes on glibc 2.35/2.36/2.39/2.43 hosts; final hardware NVENC/CUDA
+  execution and whisper Vulkan inference pass on an RTX 3070 under WSL2. FFmpeg's
+  tested Vulkan upload/scale/download video path fails cleanly through Dozen;
+  Linux ARM64 and FreeBSD are unchanged.
+- FreeBSD: enable Vulkan/libplacebo and ggml Vulkan for whisper/stemsplit by
+  linking the FreeBSD base runtime dynamically. Codec libraries remain static,
+  and no `.so` files are shipped with FFmpeg. FreeBSD 14.3 is the supported
+  baseline; GPU use requires the host's Vulkan loader and driver. Enable the
+  fork-and-probe guard and retain CPU fallback. Native FreeBSD GPU verification
+  is still required (#125).
 - HAP/APV alpha: statically link Snappy 1.3.1 and OpenAPV 1.1.3.0 across all
   platforms (`--enable-libsnappy`, `--enable-liboapv`). Backport FFmpeg's OpenAPV
   API-set 1 metadata descriptor support. Both manual suites and executable CI

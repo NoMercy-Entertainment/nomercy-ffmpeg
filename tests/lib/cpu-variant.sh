@@ -213,19 +213,12 @@ test_cpu_variant() {
 # tests/smoke.sh -- the script CI actually runs on every platform -- and
 # tests/tests.sh can assert the same things in their own reporting voice.
 #
-# DEVIATION from the task-6 plan snippet, which excluded only darwin and said
-# "Vulkan lands in five of the seven platforms". It lands in FOUR of seven.
-# freebsd-x86_64 is excluded too, and has been since Task 2: these binaries
-# link statically and FreeBSD's libc.a supplies dlopen() as a stub that sets
-# "Service unavailable" and returns NULL unconditionally (verified for Task 5
-# by disassembling dlopen in a statically linked FreeBSD 14.3 binary), so the
-# loader shim could never open a real loader there. scripts/48-whisper.sh sets
-# NM_VULKAN=0 for darwin AND freebsd. Shipping the plan's snippet as written
-# would have failed every freebsd build for carrying no Vulkan, which is the
-# correct state.
+# Linux x64's fully static CPU archive omits Vulkan. Its hardware archive and
+# FreeBSD use the system runtime with static codec libraries. Both Darwin
+# targets omit Vulkan; arm64 uses Metal.
 vulkan_platform_has_backend() {
 	case "$1" in
-	*darwin* | *freebsd*) return 1 ;;
+	linux-x86_64 | *darwin*) return 1 ;;
 	*) return 0 ;;
 	esac
 }
@@ -264,7 +257,7 @@ vulkan_guard_compiled_in() {
 
 vulkan_platform_has_guard() {
 	case "$1" in
-	*windows* | *darwin* | *freebsd*) return 1 ;;
+	linux-x86_64 | *windows* | *darwin*) return 1 ;;
 	*) return 0 ;;
 	esac
 }
@@ -349,12 +342,13 @@ vulkan_guard_vocabulary_intact() {
 # advertises coverage it does not have is the fifth instance of that shape on
 # this branch; it is not going to be the one that ships.
 #
-# The probe therefore instantiates the whisper filter for real. af_whisper.c's
-# init() calls nm_ggml_gpu_usable() and ggml_backend_load_all() BEFORE it
-# rejects a missing model (af_whisper.c:168-182), so this needs no model file
-# and no media -- and the "No whisper model path specified" error it comes back
-# with is positive proof that ggml init was reached and survived, which is
-# stronger than merely not crashing.
+# The probe supplies a nonempty nonexistent model path. A bare "whisper"
+# rejects its missing path in init(), before backend discovery. With a path,
+# init() reaches config_input(), which calls nm_ggml_gpu_usable() and
+# ggml_backend_load_all() before trying to open the model. The later "Failed
+# to initialize whisper context from model" error proves discovery returned.
+# It needs no downloaded model or media, but does not prove inference; when a
+# real model is supplied, the probe instead requires a completed run.
 
 # 0.1 s of 16 kHz mono silence, written by hand. Only used when the binary has
 # no lavfi input device: the shipped builds do, but the ggml harness builds are
@@ -381,13 +375,13 @@ _vulkan_write_silence() {
 
 # Runs the whisper filter once, under whatever environment the caller has set,
 # and classifies what came back. Echoes a diagnostic; returns:
-#   0 - reached ggml init and returned (proved by the model rejection)
-#   1 - died on a signal: a crash, which is exactly what is being tested for
+#   0 - backend discovery returned (proved by the later model-open failure)
+#   1 - crashed or reported a watchdog timeout
 #   2 - the filter could not be instantiated here at all, for an unrelated
 #       reason. Never reported as a pass.
 # $1 = ffmpeg, $2 = "lavfi" or a path to a wav.
 _vulkan_filter_probe() {
-	local ffmpeg="$1" input="$2" out code filter="whisper" proof="No whisper model path specified"
+	local ffmpeg="$1" input="$2" out code filter="whisper=model=/nonexistent.bin:use_gpu=0" proof="Failed to initialize whisper context from model:"
 
 	# With a model (WHISPER_TEST_MODEL, as CI sets it on linux-x86_64) the
 	# probe transcribes, which is what reached the crash the model-less probe
@@ -417,12 +411,25 @@ _vulkan_filter_probe() {
 	fi
 	code=$?
 
-	# Positive proof FIRST, and it is the real discriminator. Without a model,
-	# af_whisper.c prints the rejection only after nm_ggml_gpu_usable() and
-	# ggml_backend_load_all() have both returned (af_whisper.c:168-182), so
-	# seeing it means the process reached ggml init and came back. With a
-	# model, the proof is the run finishing with exit 0. A crash gets to
-	# neither.
+	# A model error can be printed before crashing during teardown. Check fatal
+	# status first, without using ">=128": ordinary AVERROR(EINVAL/EIO) exits
+	# are 234/251. SIGBUS is 7 on Linux and 10 on FreeBSD (135/138).
+	# Recognize a watchdog's status 124; this helper does not install a watchdog.
+	case ${code} in
+	124)
+		echo 'timed out: watchdog exit 124'
+		echo "${out}" | tail -6
+		return 1 ;;
+	132 | 134 | 135 | 136 | 137 | 138 | 139)
+		echo "crashed: exit ${code} (killed by signal $((code - 128)))"
+		echo "${out}" | tail -6
+		return 1 ;;
+	esac
+
+	# A bare "whisper" fails in init() before backend discovery. The explicit
+	# nonexistent model reaches config_input(), where nm_ggml_gpu_usable() and
+	# ggml_backend_load_all() run before model opening fails. That later failure
+	# proves discovery returned; with a real model require a completed run.
 	if [[ -z "${proof}" && ${code} -eq 0 ]]; then
 		return 0
 	fi
@@ -430,26 +437,12 @@ _vulkan_filter_probe() {
 		return 0
 	fi
 
-	# Only then the exit code, and NOT as ">= 128". That rule is wrong here:
-	# ffmpeg exits with 256+AVERROR, so a perfectly ordinary
-	# AVERROR(EINVAL) is 234 and AVERROR(EIO) is 251 -- measured, this probe
-	# returns 234 for the missing model. Reading those as "signal 106" and
-	# "signal 123" would turn every healthy run into a reported crash, which
-	# is the same kind of wrong as the bug this rewrite fixes, pointing the
-	# other way. Only the signals a crash actually arrives as.
-	case ${code} in
-	132 | 134 | 135 | 136 | 137 | 139)
-		echo "crashed: exit ${code} (killed by signal $((code - 128)))"
-		echo "${out}" | tail -6
-		return 1 ;;
-	esac
-
 	echo "could not instantiate the whisper filter here (exit ${code}); this configuration proved nothing"
 	echo "${out}" | tail -4
 	return 2
 }
 
-# $1 = ffmpeg path. Echoes diagnostics; returns 0 on proof, 1 on a crash in a
+# $1 = ffmpeg path. Returns 0 on proof, 1 on crash/watchdog timeout in a
 # configuration that promises not to crash, 2 if the filter could not be
 # instantiated at all on this build.
 #
@@ -475,13 +468,21 @@ vulkan_startup_ok() {
 	# lavfi first: no temp file, and it is what a shipped build uses. The
 	# ggml harness builds are --disable-everything and have no lavfi indev,
 	# so fall back to a silent wav rather than quietly proving nothing.
-	if ! _vulkan_filter_probe "${ffmpeg}" lavfi >/dev/null 2>&1; then
+	if diag="$(_vulkan_filter_probe "${ffmpeg}" lavfi 2>&1)"; then rc=0; else rc=$?; fi
+	case ${rc} in
+	0) ;;
+	1)
+		echo 'FAIL: the binary crashed or timed out instantiating a ggml filter (lavfi)'
+		echo "${diag}" | sed 's/^/    /'
+		return 1 ;;
+	2)
 		tmp="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/nm-vk-$$")"
 		mkdir -p "${tmp}"
 		if _vulkan_write_silence "${tmp}/silence.wav"; then
 			input="${tmp}/silence.wav"
-		fi
-	fi
+		fi ;;
+	*) echo "${diag}"; return 2 ;;
+	esac
 
 	# label:may-crash:env
 	local -a envs=(
@@ -505,9 +506,9 @@ vulkan_startup_ok() {
 		case ${rc} in
 		0) ;;
 		1) if [[ ${may_crash} == yes ]]; then
-			   echo "note: ${label}: this machine's drivers do kill a static binary, so the guard is load-bearing here - which is what opting out of it means, not a failure"
+			   echo "note: ${label}: the Vulkan path crashed or timed out with protection disabled; opting out of the guard permits this failure"
 		   else
-			   echo "FAIL: the binary died instantiating a ggml filter (${label})"
+			   echo "FAIL: the binary crashed or timed out instantiating a ggml filter (${label})"
 			   echo "${diag}" | sed 's/^/    /'
 			   return 1
 		   fi ;;

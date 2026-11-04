@@ -145,6 +145,10 @@ jobs:
             ext: tar.gz
             labels: '["self-hosted","ffmpeg-verify","linux-x86_64"]'
             via: native
+          - platform: linux-x86_64-hardware
+            ext: tar.gz
+            labels: '["self-hosted","ffmpeg-verify","linux-x86_64"]'
+            via: native
           - platform: linux-aarch64
             ext: tar.gz
             labels: '["self-hosted","ffmpeg-verify","linux-aarch64"]'

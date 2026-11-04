@@ -28,6 +28,18 @@ services:
       - tmp:/tmp
       - ./output:/output
 
+  ffmpeg-linux-x86_64-hardware:
+    container_name: ffmpeg-linux-x86_64-hardware
+    build:
+      context: .
+      dockerfile: ffmpeg-linux-x86_64.dockerfile
+      args:
+        LINUX_BUILD_VARIANT: hardware
+    depends_on:
+      - ffmpeg-base
+    volumes:
+      - ./output:/output
+
   ffmpeg-linux-aarch64:
     container_name: ffmpeg-linux-aarch64
     privileged: true

@@ -78,12 +78,16 @@ cd /ffmpeg/${TARGET_OS}/${ARCH}
 # the single source of truth for the artifact version — bumping ffmpeg_version
 # there flows through to every artifact filename produced here.
 : "${ffmpeg_version:?ffmpeg_version env var must be set by the base image}"
-if [[ ${TARGET_OS} == "windows" ]]; then
-    zip -r /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.zip . >/dev/null || exit 1
-else
-    tar -czf /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.tar.gz . >/dev/null || exit 1
+artifact_platform="${TARGET_OS}-${ARCH}"
+if [[ ${TARGET_OS} == linux && ${ARCH} == x86_64 && ${LINUX_BUILD_VARIANT:-cpu} == hardware ]]; then
+    artifact_platform="${artifact_platform}-hardware"
 fi
-cp /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.* /output || exit 1
+if [[ ${TARGET_OS} == "windows" ]]; then
+    zip -r /build/ffmpeg-${ffmpeg_version}-${artifact_platform}.zip . >/dev/null || exit 1
+else
+    tar -czf /build/ffmpeg-${ffmpeg_version}-${artifact_platform}.tar.gz . >/dev/null || exit 1
+fi
+cp /build/ffmpeg-${ffmpeg_version}-${artifact_platform}.* /output || exit 1
 
 if [[ ${TARGET_OS} == "windows" ]]; then
     text_with_padding "✅ FFmpeg zip file created successfully" ""
