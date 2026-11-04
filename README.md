@@ -38,8 +38,9 @@ codec libraries built in. No separate codec `.so`, `.dll` or `.dylib` files
 need to be shipped. The canonical `linux-x86_64` artifact is fully static and
 CPU-only, retaining compatibility with older Linux systems. The additional
 `linux-x86_64-hardware` artifact uses the host's glibc 2.39 or newer, with codec,
-C++ and OpenMP libraries still static. Linux ARM64 retains its existing static
-runtime policy. Windows uses Windows system DLLs, and macOS uses Apple's system libraries and
+C++ and OpenMP libraries still static. Linux ARM64 is one fully static build
+that keeps its hardware paths and Vulkan, as every Linux build did before the
+x86_64 split. Windows uses Windows system DLLs, and macOS uses Apple's system libraries and
 frameworks. FreeBSD links its base system runtime dynamically to support
 Vulkan driver loading, while keeping codec libraries static. Its supported
 baseline is FreeBSD 14.3.
@@ -91,6 +92,13 @@ unticked. **A release PR therefore stays blocked until a human runs
 `tests/tests.ps1` on real hardware and records a verdict.** That is deliberate:
 the box is the only thing standing between an unexecuted binary and a release.
 
+An emulated runner (an ARM64 Windows guest under QEMU on x86) was tried in
+October 2026 and was the first machine ever to execute a windows-aarch64
+`ffmpeg.exe`. It was also far too slow to be a gate: libx264 took 80x its
+native time and libx265 was still running after 18 hours. Its workflows are
+kept but disabled, and the box stays hand-ticked until there is real ARM64
+Windows hardware.
+
 When running it by hand, pass the platform explicitly:
 
 ```powershell
@@ -114,7 +122,7 @@ Capability differences from `windows-x86_64`, all deliberate:
 | Component | windows-x86_64 | windows-aarch64 | Why |
 |---|---|---|---|
 | NVENC / CUDA / AMF / QSV | ✅ | ➖ | No NVIDIA, AMD or Intel GPU exists on Windows-on-ARM |
-| OpenBLAS (whisper) | ✅ | ➖ | Builds x86 kernels regardless of `TARGET`; whisper falls back to ggml's own kernels, as on linux/darwin/freebsd |
+| OpenBLAS (whisper) | ➖ | ➖ | No longer built on either. It only ever helped because ggml had no SIMD; the per-CPU ggml variants below replaced that, and OpenBLAS committed 487 MiB per ffmpeg process before `main()` (#70) |
 | SVT-AV1 dotprod/i8mm | n/a | ➖ | Optional aarch64 extension kernels; baseline NEON is on. Enabling them would raise the hardware floor for every WoA device |
 | Everything else | ✅ | ✅ | x264, x265, AV1, VPx, opus, xavs2, zimg, Vulkan, and all NoMercy filters/muxers |
 
@@ -122,7 +130,7 @@ Capability differences from `windows-x86_64`, all deliberate:
 - 🔒 **Security Scanning**: Trivy vulnerability assessment on all platform images
 - 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection. On every platform the runner can execute, the smoke job also runs the stemsplit release gates: the filter's own test suite with its tiny RoFormer models, 20/20 clean exits, and Spleeter stems byte-identical with the previous release (`tests/lib/stemsplit.sh`; assets via `tests/lib/stemsplit-assets.sh`). Linux x86_64 checks distinguish the fully static CPU artifact from the system-runtime hardware artifact. Older-glibc CPU checks apply to the static artifact; the hardware artifact must satisfy its glibc 2.39 minimum and explicit system-library allowlist.
 - 📦 **Artifact Management**: Version-stamped archives with SHA-256 sidecars and a GPG-signed `manifest.json`
-- 🔄 **Smart Builds**: Change detection rebuilds only the platforms affected by a commit
+- 🔄 **Change Detection**: Decides whether a commit needs a build at all. When anything needs building, every platform is rebuilt, so a release always carries all of them; a narrowed release once handed the npm client a 404 on every platform it left out
 - 🚦 **RC Pipeline**: Every master build publishes a Release Candidate prerelease before promotion to a final release
 
 ## 🚀 CI/CD Pipeline
@@ -160,7 +168,7 @@ graph TD
 ```
 
 ### Workflow Components
-- **Change Detection** ([detect-changes.yml](.github/workflows/detect-changes.yml)): Single source of truth for the platform list; only builds what's changed
+- **Change Detection** ([detect-changes.yml](.github/workflows/detect-changes.yml)): Single source of truth for the platform list; decides whether a build is needed and then builds every platform, never a subset
 - **Reusable Docker Builds** ([reusable-docker-build.yml](.github/workflows/reusable-docker-build.yml)): Parallel compilation on self-hosted runners
 - **Smoke Testing**: Binaries are executed on matching GitHub-hosted runners; non-native architectures get archive and ELF-header validation
 - **Security Scanning**: Trivy scans with SARIF upload to GitHub code scanning (master builds and the dev→master release PR, so the RC is scanned before the release)
@@ -242,7 +250,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 | **OmniDrive protocol** | Protocol | Direct I/O against NoMercy OmniDrive storage (Linux/Windows/FreeBSD) |
 | **`dvdread:` protocol** | Protocol | `dvdread://` URI input (byte-stream over libdvdread title VOBs, symmetric with `bluray://`) |
 | **Auto-create directories** | Core patch | Output muxers automatically create missing parent directories |
-| **HEVC alpha layer** | Decoder patch | Decodes the alpha channel of HEVC-with-alpha video from Apple VideoToolbox (single `hvc1` track, two-layer bitstream) instead of silently dropping it. Backports upstream `eedf8f0165fe` + `3befae81f1dc`, neither of which reached 8.1.x, plus a NoMercy change so `ffprobe` reports `yuva420p` at stream level and not just per frame ([ticket #7965](https://trac.ffmpeg.org/ticket/7965)) |
+| **HEVC alpha layer** | Decoder patch | Decodes the alpha channel of HEVC-with-alpha video from Apple VideoToolbox (single `hvc1` track, two-layer bitstream) instead of silently dropping it. On 8.1.x this backported upstream `eedf8f0165fe` + `3befae81f1dc`; FFmpeg 9.0 ships both, so there the script detects them and skips. What remains NoMercy's is the change that makes `ffprobe` report `yuva420p` at stream level and not just per frame ([ticket #7965](https://trac.ffmpeg.org/ticket/7965)) |
 | **`whisper` language detection** | Filter patch | The `whisper` filter exposes the auto-detected spoken language (`lavfi.whisper.language` + `lavfi.whisper.language_confidence` frame metadata, `detected_language` object in JSON output) |
 | **`whisper` word timestamps, prompt, beam search** | Filter patch | Per-word times in JSON output (DTW or token timing), an initial prompt (inline or from a file) and beam search; see the `whisper` section below |
 | **AACS/BD+ static keydb** | Patch | libaacs/libbluray patched for built-in Blu-ray decryption support |
@@ -681,9 +689,11 @@ when they work: they are slower than the CPU backend they would replace.
 
 On GPU-enabled Linux builds and FreeBSD, the binary tests Vulkan drivers in a throwaway child
 process before using them, and switches Vulkan off for itself if they crash,
-hang or expose only software rendering. Some existing diagnostic wording
-refers to a statically linked process; the Linux hardware variant and FreeBSD
-use the installed base runtime dynamically. The diagnostics distinguish three outcomes:
+hang or expose only software rendering. The diagnostics distinguish three
+outcomes. The first one says "statically linked" because the guard was written
+for the static builds; on the Linux hardware variant and FreeBSD, which link
+the base runtime dynamically, the text is the same and means the same thing,
+the driver crashed the probe:
 
 ```
 … drivers crash a statically linked binary; vulkan disabled for this process
@@ -1077,7 +1087,7 @@ that every other part of the binary still supports.
 | **Windows** | DXVA2 + D3D11VA + AMF + NVENC/CUDA + QuickSync |
 | **macOS** | VideoToolbox, ad-hoc code-signed binaries (required on Apple Silicon) |
 | **Linux x86_64** | Canonical artifact: CPU-only. `linux-x86_64-hardware`: VAAPI + NVENC/CUDA + AMF + QuickSync (libvpl) + Vulkan, with host drivers and glibc 2.39+ |
-| **Linux ARM64** | Existing hardware/backend build policy unchanged; no native ARM GPU verification |
+| **Linux ARM64** | Fully static, with VAAPI + NVENC/CUDA + Vulkan compiled in and the Vulkan driver guard; unchanged by the x86_64 split, and no ARM GPU has ever been exercised |
 | **FreeBSD** | Vulkan + libplacebo with static codecs and a dynamic base runtime; physical GPU verification pending |
 
 ### ⚠️ **Limitations vs Official FFmpeg**
@@ -1094,7 +1104,11 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 
 As embedded in the v1.0.45 linux-x86_64 and windows-x86_64 binaries
 (`ffmpeg -version` prints a platform's exact line). The three flags marked
-*next release* are on `dev` and are not in v1.0.45:
+*next release* are on `dev` and are not in v1.0.45. Also from the next
+release, the canonical `linux-x86_64` archive is configured with the whole
+*Hardware Acceleration* block below disabled (`--disable-nvenc`,
+`--disable-vaapi`, `--disable-vulkan`, `--disable-libplacebo` and the rest);
+only `linux-x86_64-hardware` carries it on x86_64 Linux:
 
 ```bash
 # Core Configuration
@@ -1157,7 +1171,7 @@ Security is paramount in our build process:
 ## 📦 Distribution & Integration
 
 ### GitHub Releases
-Version-stamped archives per platform (`ffmpeg-<version>-<platform>.tar.gz` / `.zip` for Windows), published first as an RC prerelease and then promoted to a final release.
+Version-stamped archives per platform (`ffmpeg-<version>-<platform>.tar.gz` / `.zip` for Windows), published first as an RC prerelease and then promoted to a final release. From the first release after v1.0.45 there are eight archives, not seven: `linux-x86_64` (static, CPU) and `linux-x86_64-hardware` (glibc 2.39+, GPU) are both Linux x86_64.
 
 ### npm Package
 [`@nomercy-entertainment/ffmpeg-static`](clients/npm/README.md) fetches the matching binary for the current platform on first use:
@@ -1169,6 +1183,8 @@ const ffmpeg = await ensureFfmpeg(); // absolute path, downloaded on first call
 ```
 
 It also installs `nomercy-ffmpeg-path` / `nomercy-ffprobe-path` CLI bins for non-JS tooling.
+
+On Linux x86_64 it always fetches the canonical static archive. For the hardware variant, extract it yourself and point `NOMERCY_FFMPEG` / `NOMERCY_FFPROBE` at the binaries; the client never picks it on its own.
 
 ### NoMercy MediaServer
 1. **Automated Updates**: New releases trigger MediaServer updates
