@@ -191,6 +191,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.head-sha }}
+          # The PR head is executed here (tests/ and the checklist script), so
+          # the checkout must not leave the job token in .git for it to find.
+          persist-credentials: false
 
       - name: Download RC asset and manifest (unix)
         if: matrix.via != 'windows'
@@ -371,6 +374,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.head-sha }}
+          # The PR head is executed here (tests/ and the checklist script), so
+          # the checkout must not leave the job token in .git for it to find.
+          persist-credentials: false
 
       - name: Download all verdicts
         uses: actions/download-artifact@v8
