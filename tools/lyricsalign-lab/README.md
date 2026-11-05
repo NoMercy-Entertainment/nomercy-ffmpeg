@@ -51,4 +51,17 @@ default.
 
 ## Measured
 
-Filled in by the plan's tasks (`docs/superpowers/plans/2026-11-05-lyricsalign.md`).
+Gate (a), `emit` on `jfk.wav` (550 frames, one 22 s window) against the prototype's
+f32 emissions, 4 threads, lab CPU (haswell-level ggml, 6 vCPUs):
+
+| weights | matmuls | argmax agreement | mean \|Δ\| | max \|Δ\| | window |
+|---|---|---|---|---|---|
+| f16 | f16 (ggml's CPU f16 path rounds the activations too) | 99.45 % | 0.0948 nats | 1.94 | 6.1 s |
+| f16 | f32 (weights cast in the graph; **what ships**) | 100.00 % | 0.0032 nats | 0.010 | 6.4 s |
+| f32 (1.26 GB file) | f32 | 100.00 % | 0.0032 nats | 0.009 | 6.6 s |
+
+The gate is 99 % and 0.05 nats. The f16 path's error sits in the improbable
+columns (mean 0.0045 nats on the argmax column, 0.099 where the reference
+log-probability is under −10), i.e. it is precision, not structure; the cast
+removes it at no cost. Emissions are byte-identical across runs and across
+thread counts (1 and 4).

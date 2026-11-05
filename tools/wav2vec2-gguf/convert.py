@@ -2,6 +2,7 @@
 `lyricsalign` FFmpeg filter loads (nomercy-ffmpeg #126).
 
     python -I convert.py <checkpoint_dir> <out.gguf>      convert, then verify the file that was written
+    python -I convert.py --weights f32 <checkpoint_dir> <out.gguf>  every weight F32 (a measurement aid, 1.26 GB)
     python -I convert.py --verify-only <file.gguf> [<checkpoint_dir>]
                                                           verify an existing file; with the checkpoint, the fold too
 
@@ -25,6 +26,7 @@ from pathlib import Path
 import numpy as np
 
 ARCH = "wav2vec2-ctc"
+WEIGHT_TYPE = "F16"   # --weights f32 stores every weight as F32 (a measurement aid, twice the file)
 NAME = "wav2vec2-xlsr-53-espeak-cv-ft"
 LICENSE = "apache-2.0"
 F16, F32 = "F16", "F32"
@@ -32,6 +34,7 @@ F16, F32 = "F16", "F32"
 
 def expected_tensors(cfg: dict) -> dict[str, tuple[tuple[int, ...], str]]:
     """GGUF tensor name -> (ggml ne shape, type), from config.json. The 2021 checkpoint has conv_bias=true."""
+    F16 = WEIGHT_TYPE
     dims, kernels = cfg["conv_dim"], cfg["conv_kernel"]
     hidden, ffn, layers, vocab = cfg["hidden_size"], cfg["intermediate_size"], cfg["num_hidden_layers"], cfg["vocab_size"]
     pos_k, pos_g = cfg["num_conv_pos_embeddings"], cfg["num_conv_pos_embedding_groups"]
@@ -142,6 +145,7 @@ def fold_pos_conv(g, v):
 
 def map_tensors(cfg: dict, sd: dict) -> dict[str, np.ndarray]:
     """GGUF name -> numpy array in torch layout, with the dtype it is stored as."""
+    F16 = WEIGHT_TYPE
     pre = "wav2vec2."
     out: dict[str, np.ndarray] = {}
 
@@ -265,13 +269,13 @@ def verify(path: Path, cfg: dict | None = None, vocab: list[str] | None = None, 
         import torch
 
         g, v = fold
-        reference = torch._weight_norm(v, g, dim=2).to(torch.float16).numpy()
+        reference = torch._weight_norm(v, g, dim=2).to(torch_dtype(WEIGHT_TYPE)).numpy()
         # GGUFReader hands the data back in numpy (row-major, torch) order already; a flat view is reshaped the same way.
         stored = np.asarray(next(t for t in r.tensors if t.name == "pos.weight").data).reshape(reference.shape)
         mine = fold_pos_conv(g, v)
         torch_fold = torch._weight_norm(v, g, dim=2)
         assert float((mine - torch_fold).abs().max()) < 1e-6, "weight-norm fold differs from torch"
-        assert np.array_equal(stored.astype(np.float16), mine.to(torch.float16).numpy()), "stored pos.weight is not the folded weight"
+        assert np.array_equal(stored.astype(reference.dtype), mine.to(torch_dtype(WEIGHT_TYPE)).numpy()), "stored pos.weight is not the folded weight"
         # Two f32 computations 5e-7 apart round to different f16 values at a rounding boundary (measured: 6945 of
         # 8 388 608 elements), so against torch's own fold the test is "within one f16 ulp", not bit equality.
         assert np.allclose(stored.astype(np.float32), torch_fold.numpy(), rtol=2 ** -10, atol=1e-7),             "stored pos.weight is more than an f16 ulp away from torch's weight norm"
@@ -280,6 +284,11 @@ def verify(path: Path, cfg: dict | None = None, vocab: list[str] | None = None, 
 
 
 def main(argv: list[str]) -> int:
+    global WEIGHT_TYPE
+    if len(argv) >= 3 and argv[1] == "--weights":
+        WEIGHT_TYPE = argv[2].upper()
+        assert WEIGHT_TYPE in (F16, F32), WEIGHT_TYPE
+        argv = [argv[0]] + argv[3:]
     if len(argv) in (3, 4) and argv[1] == "--verify-only":
         fold = None
         if len(argv) == 4:  # with the checkpoint, the weight-norm fold is re-checked too
