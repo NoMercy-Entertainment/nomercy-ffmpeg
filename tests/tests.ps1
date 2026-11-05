@@ -15,6 +15,7 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/cpu-variant.ps1"
 . "$HERE/lib/whisper.ps1"
 . "$HERE/lib/stemsplit.ps1"
+. "$HERE/lib/lyricsalign.ps1"
 . "$HERE/lib/jpegxl.ps1"
 . "$HERE/lib/alpha-codecs.ps1"
 
@@ -355,6 +356,17 @@ run_custom_test "whisper_segment_ends" { Test-WhisperSegmentEnds -FFmpegExe "$Wo
 run_custom_test "stemsplit_suite" { Test-StemsplitSuite -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 run_custom_test "stemsplit_clean_exit" { Test-StemsplitCleanExit -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 run_custom_test "stemsplit_spleeter_ab" { Test-StemsplitSpleeterAB -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+
+# lyricsalign (#126, lib/lyricsalign.ps1, through Git Bash): the filter is
+# present, and with the assets tests/lib/lyricsalign-assets.sh fetches
+# (LYRICSALIGN_ASSETS_DIR, or a lyricsalign-assets\ directory next to the
+# binary) the real-model checks of lib/lyricsalign.sh. Without the assets, or
+# without Git Bash, every check skips with a reason.
+run_test "lyricsalign" "-hide_banner -filters | findstr lyricsalign" "lyricsalign"
+foreach ($fn in (Get-LyricsalignFunctions)) {
+    $label = $fn -replace '^test_', ''
+    run_custom_test $label { Test-Lyricsalign -Function $fn -FFmpegExe "$Workspacefmpeg.exe" -Platform $Platform }.GetNewClosure()
+}
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

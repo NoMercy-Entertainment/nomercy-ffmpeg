@@ -283,6 +283,21 @@ jobs:
             echo "WHISPER_TEST_REQUIRED=1"
           } >> "$GITHUB_ENV"
 
+      # The lyricsalign checks (#126) need the phoneme model (about 630 MB,
+      # from the org's public models release) and the JFK clip, both pinned
+      # by digest in tests/lib/lyricsalign-assets.sh, plus the fixture files
+      # from the checkout. Linux x64 only, like the whisper checks; the
+      # numpy the stemsplit step installed serves gate (a).
+      # LYRICSALIGN_TEST_REQUIRED makes smoke.sh fail rather than skip.
+      - name: Fetch lyricsalign test assets (Linux x64 variants)
+        if: startsWith(matrix.platform, 'linux-x86_64')
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tests/lib/lyricsalign-assets.sh
+          tests/lib/lyricsalign-assets.sh "${RUNNER_TEMP}/lyricsalign-assets" >> "$GITHUB_ENV"
+          echo "LYRICSALIGN_TEST_REQUIRED=1" >> "$GITHUB_ENV"
+
       - name: Smoke test (unix)
         if: matrix.kind == 'unix'
         shell: bash

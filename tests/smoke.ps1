@@ -18,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/cpu-variant.ps1"
 . "$HERE/lib/stemsplit.ps1"
+. "$HERE/lib/lyricsalign.ps1"
 . "$HERE/lib/jpegxl.ps1"
 . "$HERE/lib/alpha-codecs.ps1"
 
@@ -154,6 +155,14 @@ $ffprobe = Join-Path $Workspace 'ffprobe.exe'
 if (-not (Test-Path $ffmpeg))  { Fail "ffmpeg.exe not found at $ffmpeg" }
 if (-not (Test-Path $ffprobe)) { Fail "ffprobe.exe not found at $ffprobe" }
 if ((Get-Item $ffmpeg).Length  -eq 0) { Fail 'ffmpeg.exe is empty' }
+
+# espeak-ng's data (#126) ships next to the binary in every platform archive;
+# the lyricsalign filter reads it from there by default. A file check, so it
+# runs for windows-aarch64 too.
+foreach ($f in @('phontab', 'phonindex', 'phondata', 'intonations', 'en_dict', 'nl_dict', 'lang/gmw/en-US')) {
+    if (-not (Test-Path (Join-Path $Workspace "espeak-ng-data/$f"))) { Fail "espeak-ng-data/$f is missing from the archive (lyricsalign needs it)" }
+}
+Write-Host "✅ espeak-ng-data is in the archive ($((Get-ChildItem (Join-Path $Workspace 'espeak-ng-data') -Filter '*_dict').Count) dictionaries)"
 if ((Get-Item $ffprobe).Length -eq 0) { Fail 'ffprobe.exe is empty' }
 
 # ggml Vulkan GPU backend, mirroring smoke.sh. The presence checks are string
@@ -318,6 +327,30 @@ function Invoke-StemsplitCheck($name, [scriptblock]$block) {
 Invoke-StemsplitCheck 'stemsplit v1.1.0 suite with the tiny RoFormer models and Spleeter' { Test-StemsplitSuite -FFmpegExe $ffmpeg -Platform $Platform }
 Invoke-StemsplitCheck 'stemsplit 20/20 clean exits, Spleeter and RoFormer' { Test-StemsplitCleanExit -FFmpegExe $ffmpeg -Platform $Platform }
 Invoke-StemsplitCheck 'stemsplit Spleeter stems byte-identical with the previous release' { Test-StemsplitSpleeterAB -FFmpegExe $ffmpeg -Platform $Platform }
+
+# lyricsalign (#126): the real-model checks of tests/lib/lyricsalign.sh
+# through lib/lyricsalign.ps1, the same shape as the stemsplit checks. CI
+# fetches the assets on Linux only, so here they skip with a reason unless
+# LYRICSALIGN_ASSETS_DIR is set; LYRICSALIGN_TEST_REQUIRED=1 turns a skip
+# into a failure where a workflow does provide them.
+function Invoke-LyricsalignCheck($name, $fn) {
+    $r = Test-Lyricsalign -Function $fn -FFmpegExe $ffmpeg -Platform $Platform
+    switch ($r.Status) {
+        'Pass' {
+            ($r.Output -split "`r?`n" | Where-Object { $_ }) | ForEach-Object { Write-Host "   $_" }
+            Write-Host "✅ $name"
+        }
+        'Skip' {
+            if ($env:LYRICSALIGN_TEST_REQUIRED -eq '1' -and $fn -ne 'test_lyricsalign_gpu') { Write-Host $r.Output; Fail "${name}: skipped, but LYRICSALIGN_TEST_REQUIRED=1" }
+            Note "${name}: $($r.Reason)"
+        }
+        default {
+            Write-Host $r.Output
+            Fail "${name}: $($r.Reason)"
+        }
+    }
+}
+foreach ($fn in (Get-LyricsalignFunctions)) { Invoke-LyricsalignCheck "lyricsalign $($fn -replace '^test_lyricsalign_', '' -replace '_', ' ')" $fn }
 
 Write-Host '✅ Smoke test passed.'
 exit 0

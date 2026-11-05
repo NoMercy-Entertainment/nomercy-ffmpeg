@@ -264,6 +264,15 @@ ffprobe_bin="${WORKSPACE}/ffprobe"
 [[ -s "${ffprobe_bin}" ]] || fail "ffprobe binary is empty"
 chmod +x "${ffmpeg_bin}" "${ffprobe_bin}" 2>/dev/null || true
 
+# espeak-ng's data (#126) ships next to the binary in every platform archive;
+# the lyricsalign filter reads it from there by default. A file check, so it
+# runs for the cross-exec platforms too: a tarball that lost the directory
+# would make the filter fail on every machine it reaches.
+for f in phontab phonindex phondata intonations en_dict nl_dict lang/gmw/en-US; do
+  [[ -e "${WORKSPACE}/espeak-ng-data/${f}" ]] || fail "espeak-ng-data/${f} is missing from the archive (lyricsalign needs it)"
+done
+ok "espeak-ng-data is in the archive ($(ls "${WORKSPACE}/espeak-ng-data" | grep -c '_dict$') dictionaries)"
+
 # Runs regardless of whether this runner can execute the binary at all — see
 # the comment on assert_cpu_variant_dispatcher_present above for why it has
 # to come before the cross-exec early-return, not after it.
@@ -378,5 +387,41 @@ run_stemsplit_check() {  # name, function
 run_stemsplit_check "stemsplit v1.1.0 suite with the tiny RoFormer models and Spleeter" test_stemsplit_suite
 run_stemsplit_check "stemsplit 20/20 clean exits, Spleeter and RoFormer" test_stemsplit_clean_exit
 run_stemsplit_check "stemsplit Spleeter stems byte-identical with the previous release" test_stemsplit_spleeter_ab
+
+# lyricsalign (#126): the real-model checks of tests/lib/lyricsalign.sh, the
+# same shape as the whisper checks. They need the assets
+# tests/lib/lyricsalign-assets.sh fetches, which the workflow provides on the
+# Linux x64 jobs, where LYRICSALIGN_TEST_REQUIRED=1 turns a skip into a
+# failure for the same reason as above.
+run_lyricsalign_check() {  # name, function
+  local name="$1" func="$2" out rc
+  out="$(FFMPEG="${ffmpeg_bin}" Platform="${PLATFORM}" "${func}" 2>&1)"; rc=$?
+  case ${rc} in
+  0) echo "${out}" | sed 's/^/   /'
+     ok "${name}" ;;
+  2) if [[ "${LYRICSALIGN_TEST_REQUIRED:-0}" == "1" && "${func}" != test_lyricsalign_gpu ]]; then
+       echo "${out}"
+       fail "${name}: skipped, but LYRICSALIGN_TEST_REQUIRED=1"
+     fi
+     note "${name}: $(echo "${out}" | sed -n 's/^SKIP: //p' | head -1)" ;;
+  *) echo "${out}"
+     fail "${name} (exit ${rc})" ;;
+  esac
+}
+run_lyricsalign_check "lyricsalign JSON shape, one line per text line, ordered times" test_lyricsalign_shape
+run_lyricsalign_check "lyricsalign JFK gate (c): every word within 40 ms of the prototype" test_lyricsalign_jfk_gate_c
+run_lyricsalign_check "lyricsalign JFK gate (a): emissions within 0.05 nats of the prototype" test_lyricsalign_gate_a
+run_lyricsalign_check "lyricsalign two runs are byte-identical" test_lyricsalign_deterministic
+run_lyricsalign_check "lyricsalign init failures name their cause" test_lyricsalign_init_failures
+run_lyricsalign_check "lyricsalign destination=- equals pipe:1; none logs" test_lyricsalign_destination_pipe
+run_lyricsalign_check "lyricsalign an empty text line is an empty marker" test_lyricsalign_empty_line
+run_lyricsalign_check "lyricsalign blend=0 writes every line" test_lyricsalign_blend_zero
+run_lyricsalign_check "lyricsalign text longer than the audio is no_alignment, exit 0" test_lyricsalign_no_alignment
+run_lyricsalign_check "lyricsalign BOM, CRLF and blank lines" test_lyricsalign_text_forms
+run_lyricsalign_check "lyricsalign lines espeak cannot speak" test_lyricsalign_odd_lines
+run_lyricsalign_check "lyricsalign backing shorter and longer than the vocals" test_lyricsalign_backing_lengths
+run_lyricsalign_check "lyricsalign half a second of audio" test_lyricsalign_short_audio
+run_lyricsalign_check "lyricsalign frame metadata" test_lyricsalign_metadata
+run_lyricsalign_check "lyricsalign use_gpu=1 within 40 ms of the CPU (GPU runners)" test_lyricsalign_gpu
 
 ok "Smoke test passed."

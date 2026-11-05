@@ -18,6 +18,8 @@ source "${HERE}/lib/cpu-variant.sh"
 source "${HERE}/lib/whisper.sh"
 # shellcheck source=lib/stemsplit.sh
 source "${HERE}/lib/stemsplit.sh"
+# shellcheck source=lib/lyricsalign.sh
+source "${HERE}/lib/lyricsalign.sh"
 # shellcheck source=lib/jpegxl.sh
 source "${HERE}/lib/jpegxl.sh"
 # shellcheck source=lib/alpha-codecs.sh
@@ -426,6 +428,29 @@ run_custom_test "whisper_segment_ends" "test_whisper_segment_ends"
 run_custom_test "stemsplit_suite" "test_stemsplit_suite"
 run_custom_test "stemsplit_clean_exit" "test_stemsplit_clean_exit"
 run_custom_test "stemsplit_spleeter_ab" "test_stemsplit_spleeter_ab"
+
+# lyricsalign (#126): the filter is present, and with the assets
+# tests/lib/lyricsalign-assets.sh fetches (LYRICSALIGN_ASSETS_DIR, or a
+# lyricsalign-assets/ directory next to the binary) the real-model checks of
+# lib/lyricsalign.sh: the JFK port gates, determinism, the init failures and
+# the behaviours of the issue. Without the assets every check SKIPs with a
+# reason; use_gpu=1 runs only with LYRICSALIGN_TEST_GPU=1.
+run_test "lyricsalign" "-hide_banner -filters | grep lyricsalign" "lyricsalign"
+run_custom_test "lyricsalign_shape" "test_lyricsalign_shape"
+run_custom_test "lyricsalign_jfk_gate_c" "test_lyricsalign_jfk_gate_c"
+run_custom_test "lyricsalign_gate_a" "test_lyricsalign_gate_a"
+run_custom_test "lyricsalign_deterministic" "test_lyricsalign_deterministic"
+run_custom_test "lyricsalign_init_failures" "test_lyricsalign_init_failures"
+run_custom_test "lyricsalign_destination_pipe" "test_lyricsalign_destination_pipe"
+run_custom_test "lyricsalign_empty_line" "test_lyricsalign_empty_line"
+run_custom_test "lyricsalign_blend_zero" "test_lyricsalign_blend_zero"
+run_custom_test "lyricsalign_no_alignment" "test_lyricsalign_no_alignment"
+run_custom_test "lyricsalign_text_forms" "test_lyricsalign_text_forms"
+run_custom_test "lyricsalign_odd_lines" "test_lyricsalign_odd_lines"
+run_custom_test "lyricsalign_backing_lengths" "test_lyricsalign_backing_lengths"
+run_custom_test "lyricsalign_short_audio" "test_lyricsalign_short_audio"
+run_custom_test "lyricsalign_metadata" "test_lyricsalign_metadata"
+run_custom_test "lyricsalign_gpu" "test_lyricsalign_gpu"
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).
