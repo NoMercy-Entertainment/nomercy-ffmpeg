@@ -236,6 +236,15 @@ The `whisper` option tests need `ggml-base.en.bin` and whisper.cpp's
 to the binary. The default-output check also needs a v1.0.44 build in
 `WHISPER_TEST_REFERENCE_FFMPEG`. Without them those tests skip with a reason.
 
+The `lyricsalign` tests need the phoneme model, `jfk.wav` and the JFK fixture:
+`tests/lib/lyricsalign-assets.sh <dir>` fetches them by digest and prints the
+`LYRICSALIGN_ASSETS_DIR=<dir>` line to export (or put a `lyricsalign-assets/`
+directory next to the binary). Without them every `lyricsalign_*` check skips
+with a reason; `LYRICSALIGN_TEST_GPU=1` adds the `use_gpu=1` check on a GPU
+machine. On Windows the same checks run through Git Bash
+(`tests/lib/lyricsalign.ps1`). `tools/lyricsalign-lab/` builds a minimal
+ffmpeg with the filter in minutes for working on it.
+
 The JPEG XL and HAP/APV alpha tests generate their input with `lavfi`, so they
 need no assets and never skip: on a binary without one of those encoders they
 fail. `tests/smoke.test.sh` runs the smoke harness against stub binaries and
@@ -257,6 +266,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 | **`beatdetect`** | Audio filter | Tempo, beat grid and confidence as `lavfi.beatdetect.*` frame metadata; octave decided from the onsets, not from a preferred range |
 | **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems on ggml: Spleeter 2stems, and since v1.0.45 (stemsplit 1.1.0) Mel-Band RoFormer and BS-RoFormer ensembles with StemForge's presets |
 | **`trailingsilence`** | Audio filter | Reports where a stream's audible content ends as `lavfi.trailingsilence.*` frame metadata (and an optional JSON report); never cuts anything itself |
+| **`lyricsalign`** | Audio filter | Time-synced lyrics by CTC forced alignment: known lyric text placed on a vocal stem with a wav2vec2 phoneme model on ggml and espeak-ng phonemes; writes JSON Lines, skips a line it is not sure of, never invents a time (#126) |
 | **OCR subtitle encoder** | Codec | Converts bitmap subtitles (DVD/Blu-ray) to WebVTT text using Tesseract OCR |
 | **Sprite-sheet muxer** | Muxer | Generates thumbnail sprite sheets with a WebVTT timeline for player scrubbing |
 | **Chapter VTT muxer** | Muxer | Exports chapter metadata as WebVTT |
@@ -932,6 +942,104 @@ consuming `recommended_end` blindly must check for.
 - Silence that sits in the middle of the stream but does not reach the end.
 - Live input: the report is produced at end-of-stream, which live input
   never reaches.
+
+#### 🎤 **`lyricsalign` — time-synced lyrics by forced alignment**
+
+`lyricsalign` takes **known, correct lyric text** and places it on a vocal
+stem. It does not transcribe: espeak-ng turns every line into IPA phones, a
+wav2vec2 phoneme model (`facebook/wav2vec2-xlsr-53-espeak-cv-ft`, Apache-2.0,
+on the ggml whisper.cpp already carries) gives per-frame phone probabilities,
+and a Viterbi over the blank-interleaved phone chain places every phone, with
+a "star" that absorbs ad-libs and backing vocals between lines. It then
+aligns a second time on *vocals + blend × backing* and **writes a line only
+when both alignments agree**; a line that fails any test is skipped with its
+reason. It never invents a time. The method and every constant are the Lyrics
+Creator plugin's prototype, measured on a hand-verified reference set
+(97.7 % of lines within 0.2 s, worst written line 0.65 s; see #126).
+
+It is an offline filter: it buffers both inputs to EOF, aligns once, writes
+the result, then forwards EOF. Its output is input 0, unchanged, streamed as
+it arrives, so `-f null -` works and so does chaining.
+
+```bash
+# the stems from stemsplit, the lyrics as a text file, JSON Lines on stdout
+ffmpeg -i song.flac -filter_complex \
+  "[0:a]stemsplit=model=spleeter-2stems-f16.gguf:stem=all[v][a];[v][a]lyricsalign=model=wav2vec2-xlsr-53-espeak-cv-ft-f16.gguf:text_file=lyrics.txt:language=en-us:destination=-" \
+  -f null - > lyrics.jsonl
+
+# no stem split: feed silence as the backing; every line then passes the agreement check
+ffmpeg -i vocals.wav -filter_complex \
+  "anullsrc=r=16000:cl=mono[b];[0:a][b]lyricsalign=model=wav2vec2-xlsr-53-espeak-cv-ft-f16.gguf:text_file=lyrics.txt:language=nl:destination=-" \
+  -f null - > lyrics.jsonl
+```
+
+Two audio inputs (`vocals`, the stem the lines are placed on; `backing`, the
+accompaniment the check listens to as well), one output. An endless backing
+such as `anullsrc` ends with the vocals.
+
+| Option | Type | Default | Effect |
+|---|---|---|---|
+| `model` | string | *required* | Path to the GGUF model (below) |
+| `text_file` | string | *required* | UTF-8 lyric text, one lyric line per text line. An empty line is an instrumental marker: it is kept in the output with `start:null` and reason `empty`. A UTF-8 BOM, CRLF line endings and trailing blanks are ignored. A file with no non-blank line fails init |
+| `language` | string | *required* | espeak-ng voice name or language code (`en-us`, `en-gb`, `nl`, `de`, `fr`, `ja`, ...), resolved the way `espeak-ng -v` resolves it. An unknown one fails init naming it; the filter never guesses |
+| `espeak_data` | string | `""` | Path to `espeak-ng-data`. Empty: the `espeak-ng-data` directory next to the ffmpeg binary, which every platform archive carries. Missing data fails init with the path |
+| `blend` | float | `0.5` | Share of `backing` mixed into the check signal. `0` disables the agreement check (every line passes it; the first-gap and stray-prefix tests still apply) |
+| `destination` | string | `""` | Where the JSON Lines go. `-` is stdout (`pipe:1`), as `whisper` does it. Empty: the lines are logged at `AV_LOG_INFO` |
+| `threads` | int | `0` | ggml CPU threads, with the `whisper`/`stemsplit` rule: half the physical cores, capped by `-filter_threads` when that is set lower. Never changes the output |
+| `use_gpu` | int | `0` | `1` allows the ggml GPU backend (Vulkan, Metal), with the same guard and the same `NOMERCY_GGML_GPU=0` override as `stemsplit`. Off by default: the acceptance numbers were measured on CPU emissions |
+| `gpu_device` | int | `0` | As on `whisper` and `stemsplit` |
+
+Every forwarded frame carries `lavfi.lyricsalign.backend`,
+`lavfi.lyricsalign.cpu_variant` and `lavfi.lyricsalign.version`.
+
+**Output: JSON Lines.** First the header, then one line per text line, in
+text order, times in seconds with 3 decimals:
+
+```json
+{"model":"wav2vec2-xlsr-53-espeak-cv-ft","language":"en-us","lines":42,"written":39,"mapping_misses":0,"check":"backing"}
+{"index":5,"text":"ask not what your country can do for you","start":3.360,"end":7.860,"score":0.740,"lead_in":0.000,"words":[{"text":"ask","start":3.360,"end":4.020,"score":0.870},{"text":"not","start":4.020,"end":5.420,"score":0.810}]}
+{"index":6,"text":"...","start":null,"end":null,"score":0,"reason":"disagree","vocals_start":12.340,"check_start":14.020,"words":[]}
+```
+
+`mapping_misses` counts espeak phones the model's vocabulary does not have
+(dropped, never replaced by `<unk>`; 0 on English and Dutch). `check` is
+`backing`, `none` (`blend=0`) or `failed` (the second alignment found no
+path). `lead_in` is how far the written start was walked back from the first
+phone to the vocal onset after a pause. A skipped line still reports the two
+candidate starts so a review UI can show them. The reasons:
+
+| `reason` | meaning |
+|---|---|
+| `empty` | the text line is empty (an instrumental marker) |
+| `no_phones` | nothing of the line maps onto the model's vocabulary (punctuation only, for example) |
+| `disagree` | the vocals and the check placed the line more than 0.3 s apart |
+| `first_gap` | the line's first phone sits more than 0.5 s before its second |
+| `stray_prefix` | a few unheard first phones were dumped more than 0.8 s early |
+| `check_failed` | the check alignment had no path at all |
+| `no_alignment` | the whole track has no path (text longer than the audio can hold, or no voice at all): the header says `written:0` and the filter still exits 0 |
+
+The filter exits non-zero only on bad input: a missing model, an unknown
+voice, missing espeak data, an unreadable or empty `text_file`.
+
+**Model.** `wav2vec2-xlsr-53-espeak-cv-ft-f16.gguf` (about 630 MB, f16
+weights, computed in f32) is released on
+[nomercy-lyricsalign-models](https://github.com/NoMercy-Entertainment/nomercy-lyricsalign-models)
+with its `.sha256`, downloaded the same way the whisper and stemsplit models
+are, never bundled in a platform archive. `tools/wav2vec2-gguf` converts the
+checkpoint and verifies the result. The filter reads the vocabulary and every
+layer size from the file.
+
+**espeak-ng.** espeak-ng 1.52.0 (GPL-3.0-or-later, covered by
+`--enable-version3`) is linked statically; its data (every voice, about
+19 MB) ships as `espeak-ng-data` next to the binary in all seven platform
+archives, and the smoke test checks it is there.
+
+**Measured.** On the lab CPU the 11 s JFK clip (model load included) takes
+29.9 s with one thread and 12.4 s with four, once per model pass; a run with a
+real backing makes two passes. *(desktop numbers: measured in Task 13)*. The
+port places every phone of the JFK fixture on the prototype's frame and its
+emissions sit 0.003 nats from the prototype's (gate: 0.05); the lab's README
+has the table. No speed gate: it is an offline filter like `stemsplit`.
 
 #### 🗣️ **`whisper` — word timestamps, prompt and beam search**
 
