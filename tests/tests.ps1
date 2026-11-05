@@ -43,7 +43,9 @@ New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out
 # read "[3/26]". Anchored at line start so the definitions above never count.
 function get_test_runs_count {
     $lines = Get-Content -Path $PSCommandPath
-    return @($lines | Where-Object { $_ -match '^(run_test|run_hw_test|run_platform_test|run_custom_test) "' }).Count
+    $listed = @($lines | Where-Object { $_ -match '^(run_test|run_hw_test|run_platform_test|run_custom_test) "' }).Count
+    # The lyricsalign checks run from a loop over Get-LyricsalignFunctions.
+    return $listed + @(Get-LyricsalignFunctions).Count
 }
 
 $TOTAL_RUNS = get_test_runs_count
@@ -365,7 +367,7 @@ run_custom_test "stemsplit_spleeter_ab" { Test-StemsplitSpleeterAB -FFmpegExe "$
 run_test "lyricsalign" "-hide_banner -filters | findstr lyricsalign" "lyricsalign"
 foreach ($fn in (Get-LyricsalignFunctions)) {
     $label = $fn -replace '^test_', ''
-    run_custom_test $label { Test-Lyricsalign -Function $fn -FFmpegExe "$Workspacefmpeg.exe" -Platform $Platform }.GetNewClosure()
+    run_custom_test $label { Test-Lyricsalign -Function $fn -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }.GetNewClosure()
 }
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the

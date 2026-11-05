@@ -54,7 +54,7 @@ function Test-Lyricsalign {
         return @{ Status = 'Skip'; Reason = 'Git Bash is needed to run the lyricsalign checks (they are bash with python3) and was not found'; Output = '' }
     }
     if (-not (Test-Path $FFmpegExe)) {
-        return @{ Status = 'Skip'; Reason = "no ffmpeg at $FFmpegExe"; Output = '' }
+        return @{ Status = 'Fail'; Reason = "no ffmpeg at $FFmpegExe"; Output = '' }
     }
     $here = Split-Path -Parent $PSCommandPath
     $lib = ($here -replace '\\', '/')

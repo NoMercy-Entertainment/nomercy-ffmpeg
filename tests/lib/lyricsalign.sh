@@ -42,6 +42,7 @@ _la_inputs() {
 		return 1
 	fi
 	LA_ASSETS="$(cd "${LA_ASSETS}" && pwd)"
+	LA_ASSETS="$(_la_native "${LA_ASSETS}")"
 	local f
 	for f in "${LA_MODEL_NAME}" jfk.wav jfk.txt jfk-alignment.json; do
 		if [[ ! -f "${LA_ASSETS}/${f}" ]]; then
@@ -66,14 +67,21 @@ _la_inputs() {
 	return 0
 }
 
+# Under Git Bash the python3 on PATH is the Windows one, which cannot open a
+# /f/... path: hand it (and bash, which accepts both) the F:/... spelling.
+_la_native() {
+	if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
 # The work directory, and the relative names of the assets from inside it.
 _la_workdir() {
 	if LA_DIR="$(mktemp -d "${LA_ASSETS}/la-work.XXXXXX" 2>/dev/null)"; then
+		LA_DIR="$(_la_native "${LA_DIR}")"
 		LA_MODEL="../${LA_MODEL_NAME}"
 		LA_AUDIO="../jfk.wav"
 		LA_TEXT="../jfk.txt"
 	else
-		LA_DIR="$(mktemp -d)"
+		LA_DIR="$(_la_native "$(mktemp -d)")"
 		ln -s "${LA_ASSETS}/${LA_MODEL_NAME}" "${LA_DIR}/model.gguf" 2>/dev/null || cp "${LA_ASSETS}/${LA_MODEL_NAME}" "${LA_DIR}/model.gguf"
 		cp "${LA_ASSETS}/jfk.wav" "${LA_DIR}/jfk.wav"
 		cp "${LA_ASSETS}/jfk.txt" "${LA_DIR}/jfk.txt"
