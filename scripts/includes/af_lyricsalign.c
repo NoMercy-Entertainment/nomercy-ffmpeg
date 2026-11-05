@@ -62,6 +62,14 @@
 #include <ggml.h>
 #include <ggml-backend.h>
 #include <ggml-cpu.h>
+/* speak_lib.h declares its API __declspec(dllimport) on Windows unless the
+ * library itself is being built. We link the static archive, so the
+ * symbols are plain functions: tell the header so, or the link asks for
+ * __imp_espeak_* thunks no archive provides. The exe gains a small export
+ * table listing the espeak_* entries, which is harmless. */
+#if defined(_WIN32) && !defined(LIBESPEAK_NG_EXPORT)
+#define LIBESPEAK_NG_EXPORT 1
+#endif
 #include <espeak-ng/speak_lib.h>
 
 #include "libavutil/avutil.h"
