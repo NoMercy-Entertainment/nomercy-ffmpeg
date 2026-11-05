@@ -99,7 +99,15 @@ if [[ -z "${lib_a}" || -z "${ucd_a}" ]]; then
     exit 1
 fi
 # The one symbol the filter needs must be in the archive, for this target.
-if ! ${NM_NM:-${NM:-nm}} --defined-only "${lib_a}" 2>/dev/null | grep -q 'espeak_TextToPhonemes'; then
+# Plain nm output only: the osxcross (cctools) nm has no --defined-only, and
+# a flag it rejects must not read as a missing symbol. A defined function is
+# a T/t line; darwin prefixes an underscore.
+if ! nm_out=$(${NM_NM:-${NM:-nm}} "${lib_a}" 2>&1); then
+    log "  ✗ ERROR: ${NM_NM:-${NM:-nm}} cannot read ${lib_a}: $(tail -n 2 <<<"${nm_out}" | tr '
+' ' ')"
+    exit 1
+fi
+if ! grep -Eq ' [Tt] _?espeak_TextToPhonemes$' <<<"${nm_out}"; then
     log "  ✗ ERROR: libespeak-ng.a does not define espeak_TextToPhonemes"
     exit 1
 fi
