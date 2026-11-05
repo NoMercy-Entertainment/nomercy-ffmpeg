@@ -1041,8 +1041,11 @@ archives, and the smoke test checks it is there.
 
 **Measured.** On the lab CPU the 11 s JFK clip (model load included) takes
 29.9 s with one thread and 12.4 s with four, once per model pass; a run with a
-real backing makes two passes. *(desktop numbers: measured in Task 13)*. The
-port places every phone of the JFK fixture on the prototype's frame and its
+real backing makes two passes. On a desktop i7-10700K (8 cores, the Windows
+build, vocals doubling as backing through `asplit`, so two passes) the JFK
+clip takes 15.3 s with `threads=0` (four threads) and 9.2 s with `threads=8`;
+a 253 s stereo track takes 304 s and 194 s, about 1.2x and 0.8x its own
+length. The port places every phone of the JFK fixture on the prototype's frame and its
 emissions sit 0.003 nats from the prototype's (gate: 0.05); the lab's README
 has the table. No speed gate: it is an offline filter like `stemsplit`.
 
