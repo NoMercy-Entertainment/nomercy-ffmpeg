@@ -1025,7 +1025,12 @@ voice, missing espeak data, an unreadable or empty `text_file`.
 weights, computed in f32) is released on
 [nomercy-lyricsalign-models](https://github.com/NoMercy-Entertainment/nomercy-lyricsalign-models)
 with its `.sha256`, downloaded the same way the whisper and stemsplit models
-are, never bundled in a platform archive. `tools/wav2vec2-gguf` converts the
+are, never bundled in a platform archive:
+
+```
+https://github.com/NoMercy-Entertainment/nomercy-lyricsalign-models/releases/download/v2026.11.05/wav2vec2-xlsr-53-espeak-cv-ft-f16.gguf
+sha256 b1474de65e4a966046d390f191af092e718e5e773dcedc5398f31057ee2d38b4
+``` `tools/wav2vec2-gguf` converts the
 checkpoint and verifies the result. The filter reads the vocabulary and every
 layer size from the file.
 

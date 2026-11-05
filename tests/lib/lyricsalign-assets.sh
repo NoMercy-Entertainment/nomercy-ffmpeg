@@ -30,10 +30,12 @@ DIR="${1:?usage: lyricsalign-assets.sh <dir>}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES="${HERE}/../unit/fixtures/jfk"
 
-# Pinned by Task 12 of docs/superpowers/plans/2026-11-05-lyricsalign.md once
-# the release exists; until then the model is only found when already in <dir>.
+# The model release: the digest is the one the converter reproduces (its
+# README has the recipe); bump the three lines together when a new release
+# ships. LYRICSALIGN_MODEL_URL overrides the URL for a release under test.
 MODEL_NAME=wav2vec2-xlsr-53-espeak-cv-ft-f16.gguf
-MODEL_URL="${LYRICSALIGN_MODEL_URL:-}"
+MODEL_RELEASE=v2026.11.05
+MODEL_URL="${LYRICSALIGN_MODEL_URL:-https://github.com/NoMercy-Entertainment/nomercy-lyricsalign-models/releases/download/${MODEL_RELEASE}/${MODEL_NAME}}"
 MODEL_SHA=b1474de65e4a966046d390f191af092e718e5e773dcedc5398f31057ee2d38b4
 JFK_URL=https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.1/samples/jfk.wav
 JFK_SHA=59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e
