@@ -169,22 +169,21 @@ jobs:
             ext: zip
             labels: '["self-hosted","ffmpeg-verify","windows-x86_64"]'
             via: windows
-          # windows-aarch64 is built and released but deliberately absent here,
-          # so no verdict is produced, sync-checklist.js leaves its box unticked
-          # and a human ticks it after testing by hand. That is the honest state.
+          # windows-aarch64 runs on GitHub's hosted ARM64 Windows runner: real
+          # arm64 silicon (not emulation), 4 CPU / 16 GB on a public repo, free
+          # and outside the included minutes. tests/tests.ps1 and verify-rc.ps1
+          # run there unchanged, and the verdict says `native` because it is.
           #
-          # It was wired to github-windows-arm64-1 for two days in October 2026.
-          # That runner is a Windows 11 ARM64 guest under QEMU TCG on an x86 host,
-          # and the suite does not finish on it: sample generation took 870 s,
-          # the x264 test 234 s, and the x265 test was still running after
-          # eighteen hours (run 38056397474). An entry here would hold the RC
-          # verification for the five-day job limit and then fail. The owner's
-          # decision: hand-ticked until there is a real ARM64 Windows machine.
-          #
-          # When one exists, add it back with `via: windows` and, if it is not
-          # native hardware, `execution: <what it is>` -- verify-rc.ps1 writes that
-          # into the verdict so the bot's evidence never claims native hardware.
-          # tests/tests.ps1 runs there unchanged.
+          # History: this entry was absent for weeks because the only ARM64
+          # Windows machine was github-windows-arm64-1, a QEMU TCG guest on an
+          # x86 host, where the x265 test did not finish in eighteen hours
+          # (run 38056397474). That runner is gone. Hosted jobs are hard-capped
+          # at six hours by GitHub; the suite is well inside that on native
+          # hardware, so a hit on the cap is a real regression, not slowness.
+          - platform: windows-aarch64
+            ext: zip
+            labels: '["windows-11-arm"]'
+            via: windows
     runs-on: ${{ fromJSON(matrix.labels) }}
     timeout-minutes: 7200
     steps:

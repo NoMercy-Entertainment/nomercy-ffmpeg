@@ -84,31 +84,34 @@ and [verification record](docs/superpowers/plans/2026-11-04-linux-gpu-runtime.md
 ### Windows on ARM (windows-aarch64)
 
 Built and released like every other platform, with one difference that matters:
-**no automated test ever executes it.**
+**the build pipeline never executes it.** Only the release gate does, on a
+hosted ARM64 runner (below).
 
 It uses a different toolchain from the rest — llvm-mingw (clang/lld) rather than
 GCC, because the GCC cross-compiler for this target crashes on
 `-fstack-protector-strong` and ships a CRT header that does not parse.
 
-Nothing in CI can run an ARM64 Windows binary. `windows-latest` is x64, and
-Windows-on-ARM emulates x64 rather than the reverse, so `tests/smoke.ps1`
+Nothing in the build pipeline can run an ARM64 Windows binary. `windows-latest`
+is x64, and Windows-on-ARM emulates x64 rather than the reverse, so `tests/smoke.ps1`
 downgrades to validating the PE header (`Machine == 0xAA64`) instead of
 executing — the same treatment `smoke.sh` gives `linux-aarch64` and
 `freebsd-x86_64`. That proves the artifact is a well-formed ARM64 binary
 carrying the expected symbols. It does not prove it decodes a single frame.
 
-There is also no Windows-on-ARM machine in the verify fleet, so `verify-rc.yml`
-produces no verdict for it and `sync-checklist.js` leaves its checklist box
-unticked. **A release PR therefore stays blocked until a human runs
-`tests/tests.ps1` on real hardware and records a verdict.** That is deliberate:
-the box is the only thing standing between an unexecuted binary and a release.
+The release gate for it runs on GitHub's hosted `windows-11-arm` runner: real
+ARM64 silicon, 4 CPU / 16 GB on a public repository, free and outside the
+included minutes. `verify-rc.yml` has a matrix entry for it, `tests/tests.ps1`
+runs there unchanged, and `sync-checklist.js` ticks the windows-aarch64 box
+from that verdict like every other platform. The runner has no GPU, which
+matches the platform: no GPU encoder exists in the windows-aarch64 build.
 
-An emulated runner (an ARM64 Windows guest under QEMU on x86) was tried in
+Before that, no Windows-on-ARM machine was in the verify fleet, so the box
+stayed unticked until a human ran `tests/tests.ps1` on real hardware. An
+emulated runner (an ARM64 Windows guest under QEMU on x86) was tried in
 October 2026 and was the first machine ever to execute a windows-aarch64
 `ffmpeg.exe`. It was also far too slow to be a gate: libx264 took 80x its
-native time and libx265 was still running after 18 hours. Its workflows are
-kept but disabled, and the box stays hand-ticked until there is real ARM64
-Windows hardware.
+native time and libx265 was still running after 18 hours. That runner is
+gone; its workflows are kept but disabled.
 
 When running it by hand, pass the platform explicitly:
 
@@ -120,10 +123,10 @@ When running it by hand, pass the platform explicitly:
 labelled for the wrong platform — which `sync-checklist.js` will then match
 against the wrong checklist box.
 
-To close the gap, add a runner labelled
-`["self-hosted","ffmpeg-verify","windows-aarch64"]`, then add the matrix entry
-in `.github/workflows/verify-rc.yml` and the name in the `REQUIRED` list in
-`.github/workflows/fleet-health.yml`. Both carry comments pointing back here.
+The hosted runner is not an org self-hosted runner, so it is deliberately
+absent from the `REQUIRED` list in `.github/workflows/fleet-health.yml`: that
+check reads the org runner registry, and a hosted label would never appear
+there.
 
 Meanwhile Windows-on-ARM users are not stranded: the `windows-x86_64` build runs
 under Windows' x64 emulation. The native build is a performance improvement.
