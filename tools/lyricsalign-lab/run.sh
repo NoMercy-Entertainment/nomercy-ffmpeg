@@ -31,8 +31,10 @@ build|suite|shell)
 	mounts=(-v "$(host "${ROOT}"):/repo" -v lyricsalign-lab-prefix:/opt/nm -v lyricsalign-lab-build:/build)
 	if [[ -d "${ASSETS}" ]]; then mounts+=(-v "$(host "$(cd "${ASSETS}" && pwd)"):/assets:ro"); fi
 	case "${cmd}" in
-	build) docker run --rm "${mounts[@]}" "${IMAGE}" /lab/build.sh "$@" ;;
-	suite) docker run --rm "${mounts[@]}" "${IMAGE}" /lab/suite.sh "$@" ;;
+	# The scripts run from the mounted checkout, not the copies baked into the
+	# image, so an edit is live without rebuilding the image.
+	build) docker run --rm "${mounts[@]}" "${IMAGE}" bash /repo/tools/lyricsalign-lab/build.sh "$@" ;;
+	suite) docker run --rm "${mounts[@]}" "${IMAGE}" bash /repo/tools/lyricsalign-lab/suite.sh "$@" ;;
 	shell) tty=(); [[ -t 0 ]] && tty=(-it); docker run --rm "${tty[@]}" "${mounts[@]}" "${IMAGE}" bash "$@" ;;
 	esac
 	;;

@@ -111,27 +111,39 @@ else
 	echo "– scripts/66-lyricsalign.sh not present yet"
 fi
 
-# 4. ffmpeg, minimal. Reconfigure when the enable set changed or --fresh.
+# 4. ffmpeg, minimal. Always reconfigured: 66-lyricsalign.sh's throwaway
+#    configure (its Step 4) runs in-tree and leaves ITS minimal config behind,
+#    which the platform builds never see (their real configure runs later)
+#    but which made the lab's make link an ffmpeg without the helper filters.
+#    To keep make incremental, generated files that configure rewrote with
+#    the same content get their old copy (and mtime) back.
 say "ffmpeg configure + make"
 cd ${FF}
-want="$(cat /build/enable.txt | tr '\n' ' ') filters=${FILTERS} libs=$(cat /build/extra_libflags.txt | tr '\n' ' ')"
-if [[ ${FRESH} == 1 || ! -f ${FF}/config.h || "$(cat /build/lab-configure.txt 2>/dev/null)" != "${want}" ]]; then
-	make distclean >/dev/null 2>&1 || true
-	./configure --pkg-config-flags=--static \
-		--disable-everything --disable-doc --disable-ffplay --disable-ffprobe \
-		--enable-gpl --enable-version3 --enable-static --disable-shared \
-		--enable-avfilter --enable-swresample --enable-whisper \
-		--enable-filter="${FILTERS}" \
-		--enable-demuxer=wav,pcm_f32le --enable-decoder=pcm_s16le,pcm_f32le \
-		--enable-muxer=null,wav,pcm_f32le --enable-encoder=pcm_s16le,pcm_f32le \
-		--enable-protocol=file,pipe \
-		--extra-cflags="-I${PREFIX}/include $(cat /build/cflags.txt | tr '\n' ' ')" \
-		--extra-ldflags="-L${PREFIX}/lib $(cat /build/ldflags.txt | tr '\n' ' ')" \
-		--extra-libs="$(cat /build/extra_libflags.txt | tr '\n' ' ') -lpthread -lm -lstdc++" \
-		>/build/lab-configure.log 2>&1 || { tail -n 40 /build/lab-configure.log; tail -n 30 ${FF}/ffbuild/config.log; fail "configure"; }
-	echo "${want}" >/build/lab-configure.txt
-	echo "✓ configured"
-fi
+# One --enable-<kind>=<name> per name: configure matches the value as a
+# shell pattern against the component list, so a comma-separated value
+# enables nothing but a component literally named that way (measured: only
+# the first name landed).
+expand() { local opt="$1" v; for v in ${2//,/ }; do printf -- '--enable-%s=%s\n' "${opt}" "${v}"; done; }
+mapfile -t enable_args < <(expand filter "${FILTERS}"; expand demuxer wav,pcm_f32le; expand decoder pcm_s16le,pcm_f32le; expand muxer null,wav,pcm_f32le; expand encoder pcm_s16le,pcm_f32le; expand protocol file,pipe)
+saved=/build/lab-config-save
+gen="config.h config_components.h ffbuild/config.mak ffbuild/config.sh libavutil/avconfig.h libavutil/ffversion.h"
+rm -rf ${saved}; mkdir -p ${saved}/ffbuild ${saved}/libavutil
+for f in ${gen}; do [[ -f ${f} ]] && cp -p ${f} ${saved}/${f}; done
+[[ ${FRESH} == 1 ]] && { make distclean >/dev/null 2>&1 || true; rm -rf ${saved}; mkdir -p ${saved}/ffbuild ${saved}/libavutil; }
+extra_cflags="-I${PREFIX}/include $(cat /build/cflags.txt | tr '\n' ' ')"
+extra_ldflags="-L${PREFIX}/lib $(cat /build/ldflags.txt | tr '\n' ' ')"
+extra_libs="$(cat /build/extra_libflags.txt | tr '\n' ' ') -lpthread -lm -lstdc++"
+./configure --pkg-config-flags=--static \
+	--disable-everything --disable-doc --disable-ffplay --disable-ffprobe \
+	--enable-gpl --enable-version3 --enable-static --disable-shared \
+	--enable-avfilter --enable-swresample --enable-whisper \
+	"${enable_args[@]}" \
+	--extra-cflags="${extra_cflags}" --extra-ldflags="${extra_ldflags}" --extra-libs="${extra_libs}" \
+	>/build/lab-configure.log 2>&1 || { tail -n 40 /build/lab-configure.log; tail -n 30 ${FF}/ffbuild/config.log; fail "configure"; }
+for f in ${gen}; do
+	if [[ -f ${saved}/${f} ]] && cmp -s ${f} ${saved}/${f}; then cp -p ${saved}/${f} ${f}; fi
+done
+echo "✓ configured"
 make -j"$(nproc)" ffmpeg >/build/lab-make.log 2>&1 || { grep -n "error\|Error" /build/lab-make.log | head -40; tail -n 30 /build/lab-make.log; fail "make"; }
 echo "✓ ${FF}/ffmpeg"
 ${FF}/ffmpeg -hide_banner -filters 2>/dev/null | grep -E ' (whisper|lyricsalign) '
