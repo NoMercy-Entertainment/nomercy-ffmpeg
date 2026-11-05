@@ -65,3 +65,15 @@ columns (mean 0.0045 nats on the argmax column, 0.099 where the reference
 log-probability is under −10), i.e. it is precision, not structure; the cast
 removes it at no cost. Emissions are byte-identical across runs and across
 thread counts (1 and 4).
+
+The whole filter on `jfk.wav` (11 s, model load included, lab CPU), wall clock:
+
+| graph | threads | time |
+|---|---|---|
+| `anullsrc` backing (one model pass) | 1 | 29.9 s |
+| `anullsrc` backing (one model pass) | 4 | 12.4 s |
+| the vocals as backing through `asplit` (two model passes) | 4 | 22.6 s |
+
+Gate (c): every JFK word within 40 ms of the prototype (measured worst 0.000 s:
+the port places every phone on the prototype's frame), line start 0.340 and
+lead-in 0.020 as in the fixture.

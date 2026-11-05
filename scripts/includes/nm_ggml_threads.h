@@ -7,7 +7,8 @@
  *
  * FFmpeg-only (libavfilter/avfilter.h, filters.h, libavutil/cpu.h); it is
  * not part of tests/unit. Memory through NM_GT_MALLOC / NM_GT_FREE, which
- * default to av_malloc / av_free.
+ * default to av_malloc / av_free. On Linux the including file must define
+ * _GNU_SOURCE before its first system header (sched_getaffinity).
  */
 #ifndef NM_GGML_THREADS_H
 #define NM_GGML_THREADS_H

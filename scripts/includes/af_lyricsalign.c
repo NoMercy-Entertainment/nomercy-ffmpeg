@@ -69,6 +69,7 @@
 #include "libavutil/bprint.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/cpu.h"
+#include "libavutil/getenv_utf8.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/samplefmt.h"
@@ -466,38 +467,305 @@ static void la_write_header(AVFilterContext *ctx, int written, const char *check
 }
 
 /* A line that is not written: start/end null, its reason, the two candidate
- * starts (frames, -1 = none), no words. */
-static void la_write_skipped(AVFilterContext *ctx, int index, enum NMLaReason reason, int vocals_frame, int check_frame)
+ * starts (frames, -1 = none), no words. Appended to b with its newline. */
+static void la_write_skipped_to(AVFilterContext *ctx, AVBPrint *b, int index, enum NMLaReason reason,
+                                int vocals_frame, int check_frame)
 {
     LyricsAlignContext *s = ctx->priv;
+
+    av_bprintf(b, "{\"index\":%d,\"text\":", index);
+    la_json_str(b, s->lines[index].text);
+    av_bprintf(b, ",\"start\":null,\"end\":null,\"score\":0,\"reason\":\"%s\",\"vocals_start\":", nm_la_reason_name(reason));
+    la_json_time(b, vocals_frame, -1);
+    av_bprintf(b, ",\"check_start\":");
+    la_json_time(b, check_frame, -1);
+    av_bprintf(b, ",\"words\":[]}\n");
+}
+
+static void la_write_skipped(AVFilterContext *ctx, int index, enum NMLaReason reason, int vocals_frame, int check_frame)
+{
     AVBPrint b;
 
     av_bprint_init(&b, 0, AV_BPRINT_SIZE_UNLIMITED);
-    av_bprintf(&b, "{\"index\":%d,\"text\":", index);
-    la_json_str(&b, s->lines[index].text);
-    av_bprintf(&b, ",\"start\":null,\"end\":null,\"score\":0,\"reason\":\"%s\",\"vocals_start\":", nm_la_reason_name(reason));
-    la_json_time(&b, vocals_frame, -1);
-    av_bprintf(&b, ",\"check_start\":");
-    la_json_time(&b, check_frame, -1);
-    av_bprintf(&b, ",\"words\":[]}");
+    la_write_skipped_to(ctx, &b, index, reason, vocals_frame, check_frame);
+    if (b.len && b.str[b.len - 1] == '\n')
+        b.str[--b.len] = 0;
     la_emit(ctx, &b);
     av_bprint_finalize(&b, NULL);
 }
 
 /* ---------------------------------------------------------------------------
- * The alignment: skeleton (every line no_alignment) until the real one lands.
+ * The alignment (processing steps 2 to 7).
  * ------------------------------------------------------------------------- */
+
+/* The undocumented debug hook of the lab and the CI gate: the vocals'
+ * log-probs, raw little-endian f32, T x vocab, before the star column. */
+static void la_dump_emissions(AVFilterContext *ctx, const float *logp, int frames, int vocab)
+{
+    char *path = getenv_utf8("NOMERCY_LYRICSALIGN_EMISSIONS");
+    AVIOContext *pb = NULL;
+
+    if (!path)
+        return;
+    if (*path && avio_open(&pb, path, AVIO_FLAG_WRITE) >= 0) {
+        avio_write(pb, (const unsigned char *) logp, (int) (sizeof(*logp) * (size_t) frames * vocab));
+        avio_closep(&pb);
+        av_log(ctx, AV_LOG_INFO, "lyricsalign: emissions (%d x %d) written to %s\n", frames, vocab, path);
+    }
+    freeenv_utf8(path);
+}
+
+/* Place the token chain on one signal: emissions, star column, Viterbi.
+ * Returns 1 placed (out filled), 0 no path, <0 error. */
+static int la_place(AVFilterContext *ctx, const float *pcm, int n, const int *tokens, int n_tokens,
+                    NMLaPlace *out, int dump)
+{
+    LyricsAlignContext *s = ctx->priv;
+    const int V = nm_w2v2_vocab_n(s->model);
+    float *logp = NULL, *star;
+    int frames = 0, rc;
+
+    if (nm_w2v2_emissions(s->model, pcm, n, &logp, &frames)) {
+        av_log(ctx, AV_LOG_ERROR, "lyricsalign: the model failed on %d samples\n", n);
+        return AVERROR(ENOMEM);
+    }
+    if (frames <= 0) {
+        av_free(logp);
+        return 0;
+    }
+    if (dump)
+        la_dump_emissions(ctx, logp, frames, V);
+    star = nm_la_add_star(logp, frames, V);
+    av_free(logp);
+    if (!star)
+        return AVERROR(ENOMEM);
+    rc = nm_la_viterbi(star, frames, V + 1, tokens, n_tokens, nm_w2v2_blank(s->model), V,
+                       NM_LA_LINE_BLANK_PENALTY, out);
+    av_free(star);
+    return rc < 0 ? AVERROR(ENOMEM) : rc;
+}
+
+static double la_frame_s(int frame20)
+{
+    return frame20 * (double) NM_LA_HOP / NM_LA_RATE;
+}
+
+/* One written line: its JSON object into b. */
+static void la_json_written(AVFilterContext *ctx, AVBPrint *b, int index, const NMLaPlace *tok, double start_s,
+                            double lead_in_s)
+{
+    LyricsAlignContext *s = ctx->priv;
+    const LaLine *l = &s->lines[index];
+    double score = 0.0;
+    int k = 0;
+
+    for (int i = 0; i < l->n_ids; i++)
+        score += tok[i].post;
+    score /= l->n_ids;
+    av_bprintf(b, "{\"index\":%d,\"text\":", index);
+    la_json_str(b, l->text);
+    av_bprintf(b, ",\"start\":%.3f,\"end\":%.3f,\"score\":%.3f,\"lead_in\":%.3f,\"words\":[",
+               start_s, la_frame_s(tok[l->n_ids - 1].last + 1), score, lead_in_s);
+    for (int w = 0; w < l->n_words; w++) {
+        const int n = l->word_n[w];
+        char *text = NULL;
+        AVBPrint wt;
+
+        /* the word's text: espeak's phones back to the text are not kept, so the
+         * word is the text's w-th whitespace-separated token */
+        av_bprint_init(&wt, 0, AV_BPRINT_SIZE_UNLIMITED);
+        {
+            const char *p = l->text;
+            int seen = 0;
+            while (*p) {
+                while (*p && nm_lp_is_space((unsigned char) *p))
+                    p++;
+                if (!*p)
+                    break;
+                if (seen == w) {
+                    while (*p && !nm_lp_is_space((unsigned char) *p))
+                        av_bprint_chars(&wt, *p++, 1);
+                    break;
+                }
+                while (*p && !nm_lp_is_space((unsigned char) *p))
+                    p++;
+                seen++;
+            }
+        }
+        av_bprint_finalize(&wt, &text);
+        av_bprintf(b, "%s{\"text\":", w ? "," : "");
+        la_json_str(b, text ? text : "");
+        av_free(text);
+        if (n > 0) {
+            double ws = 0.0;
+            for (int i = 0; i < n; i++)
+                ws += tok[k + i].post;
+            av_bprintf(b, ",\"start\":%.3f,\"end\":%.3f,\"score\":%.3f}", la_frame_s(tok[k].first),
+                       la_frame_s(tok[k + n - 1].last + 1), ws / n);
+        } else {
+            av_bprintf(b, ",\"start\":null,\"end\":null,\"score\":0}");
+        }
+        k += n;
+    }
+    av_bprintf(b, "]}");
+}
+
 static int la_align_and_write(AVFilterContext *ctx)
 {
     LyricsAlignContext *s = ctx->priv;
-    const char *check = s->blend == 0.0f ? "none" : "backing";
+    const int V = nm_w2v2_vocab_n(s->model);
+    int *tokens = NULL, *line_first = NULL;
+    int n_tokens = 0, written = 0, rc_v, rc_c = 1, ret = 0;
+    NMLaPlace *placed_v = NULL, *placed_c = NULL;
+    float *check = NULL, *env = NULL;
+    int n_env = 0, common, backing_silent = 1, prev_end = -1;
+    const char *check_name;
+    AVBPrint body;
 
-    la_write_header(ctx, 0, check);
+    av_bprint_init(&body, 0, AV_BPRINT_SIZE_UNLIMITED);
+
+    /* step 4: the token sequence [star] (phones [star])* */
     for (int i = 0; i < s->n_lines; i++)
-        la_write_skipped(ctx, i, NM_LA_NO_ALIGNMENT, -1, -1);
+        n_tokens += s->lines[i].n_ids ? s->lines[i].n_ids + 1 : 0;
+    n_tokens += 1;
+    tokens = av_malloc_array(n_tokens, sizeof(*tokens));
+    line_first = av_malloc_array(s->n_lines + 1, sizeof(*line_first));
+    placed_v = av_malloc_array(n_tokens, sizeof(*placed_v));
+    placed_c = av_malloc_array(n_tokens, sizeof(*placed_c));
+    if (!tokens || !line_first || !placed_v || !placed_c) {
+        ret = AVERROR(ENOMEM);
+        goto done;
+    }
+    n_tokens = 0;
+    tokens[n_tokens++] = V;
+    for (int i = 0; i < s->n_lines; i++) {
+        const LaLine *l = &s->lines[i];
+        line_first[i] = l->n_ids ? n_tokens : -1;
+        for (int k = 0; k < l->n_ids; k++)
+            tokens[n_tokens++] = l->ids[k];
+        if (l->n_ids)
+            tokens[n_tokens++] = V;
+    }
+
+    /* steps 2, 3, 5 on the vocals */
+    rc_v = la_place(ctx, s->pcm[0], s->n[0], tokens, n_tokens, placed_v, 1);
+    if (rc_v < 0) {
+        ret = rc_v;
+        goto done;
+    }
+    if (rc_v == 0) {
+        av_log(ctx, AV_LOG_WARNING, "lyricsalign: no alignment path (%d samples, %d tokens): nothing written\n",
+               s->n[0], n_tokens);
+        la_write_header(ctx, 0, s->blend == 0.0f ? "none" : "backing");
+        for (int i = 0; i < s->n_lines; i++)
+            la_write_skipped(ctx, i, NM_LA_NO_ALIGNMENT, -1, -1);
+        goto done;
+    }
+
+    /* step 6: the check signal, vocals + blend * backing over the common length */
+    common = FFMIN(s->n[0], s->n[1]);
+    for (int i = 0; i < common && backing_silent; i++)
+        if (s->pcm[1][i] != 0.0f)
+            backing_silent = 0;
+    if (s->blend == 0.0f) {
+        check_name = "none";
+    } else if (backing_silent) {
+        /* identical signals place identically: the second pass would only cost time */
+        check_name = "backing";
+    } else {
+        check = av_malloc_array(FFMAX(common, 1), sizeof(*check));
+        if (!check) {
+            ret = AVERROR(ENOMEM);
+            goto done;
+        }
+        for (int i = 0; i < common; i++)
+            check[i] = s->pcm[0][i] + s->blend * s->pcm[1][i];
+        rc_c = la_place(ctx, check, common, tokens, n_tokens, placed_c, 0);
+        if (rc_c < 0) {
+            ret = rc_c;
+            goto done;
+        }
+        check_name = rc_c ? "backing" : "failed";
+        if (!rc_c)
+            av_log(ctx, AV_LOG_WARNING, "lyricsalign: the check alignment has no path; every line is check_failed\n");
+    }
+
+    /* step 7 needs the vocals' envelope */
+    env = nm_la_envelope_db(s->pcm[0], s->n[0], &n_env);
+    if (!env) {
+        ret = AVERROR(ENOMEM);
+        goto done;
+    }
+
+    for (int i = 0; i < s->n_lines; i++) {
+        const LaLine *l = &s->lines[i];
+        const NMLaPlace *line, *chk;
+        enum NMLaReason reason;
+        int spike, start_hop = -1;
+        double start_s, lead_in_s = 0.0;
+
+        if (line_first[i] < 0) {
+            la_write_skipped_to(ctx, &body, i, l->text[0] ? NM_LA_NO_PHONES : NM_LA_EMPTY, -1, -1);
+            continue;
+        }
+        line = placed_v + line_first[i];
+        /* the check placement: the check's own, the line itself when there is
+         * no check (blend=0, or a silent backing), none when the check failed */
+        chk = !check ? line : (rc_c ? placed_c + line_first[i] : NULL);
+        reason = nm_la_verdict(line, l->n_ids, chk);
+        spike = line[0].first;
+        if (reason != NM_LA_OK) {
+            la_write_skipped_to(ctx, &body, i, reason, spike, chk ? chk[0].first : -1);
+            prev_end = line[l->n_ids - 1].first;
+            continue;
+        }
+        if (nm_la_pause_before(spike, prev_end)) {
+            start_hop = nm_la_walk_back(env, n_env, spike, prev_end);
+            start_s = start_hop * 0.01;
+            lead_in_s = la_frame_s(spike) - start_s;
+            if (lead_in_s < 0)
+                lead_in_s = 0;
+        } else {
+            start_s = la_frame_s(spike);
+        }
+        la_json_written(ctx, &body, i, line, start_s, lead_in_s);
+        av_bprint_chars(&body, '\n', 1);
+        written++;
+        prev_end = line[l->n_ids - 1].first;
+    }
+    if (!av_bprint_is_complete(&body)) {
+        ret = AVERROR(ENOMEM);
+        goto done;
+    }
+    la_write_header(ctx, written, check_name);
+    {
+        /* the per-line objects, one per line, already newline-terminated */
+        char *p = body.str, *nl;
+        AVBPrint one;
+        while (p && *p) {
+            nl = strchr(p, '\n');
+            if (!nl)
+                break;
+            *nl = 0;
+            av_bprint_init(&one, 0, AV_BPRINT_SIZE_UNLIMITED);
+            av_bprintf(&one, "%s", p);
+            la_emit(ctx, &one);
+            av_bprint_finalize(&one, NULL);
+            p = nl + 1;
+        }
+    }
+    av_log(ctx, AV_LOG_INFO, "lyricsalign: %d of %d lines written (check: %s)\n", written, s->n_lines, check_name);
+done:
+    av_bprint_finalize(&body, NULL);
+    av_free(tokens);
+    av_free(line_first);
+    av_free(placed_v);
+    av_free(placed_c);
+    av_free(check);
+    av_free(env);
     if (s->out)
         avio_flush(s->out);
-    return 0;
+    return ret;
 }
 
 /* ---------------------------------------------------------------------------
