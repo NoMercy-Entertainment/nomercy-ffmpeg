@@ -83,8 +83,18 @@ jobs:
             exit 1
           fi
           echo "guest: ${guest}" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
           [[ "$guest" == *aarch64* ]] || { echo "::error::Lima guest is not aarch64: ${guest}"; exit 1; }
+
+          # The guest disk is 16 GiB and every aborted verify run used to leave
+          # its archive and work dir in /tmp. A full disk is what breaks sshd
+          # in the guest, and that is what the probe above then reports -- so
+          # report the disk while it can still be read.
+          "$LIMACTL" shell "$LIMA_INSTANCE" -- df -h / /tmp | tee -a "$GITHUB_STEP_SUMMARY"
+          stale=$("$LIMACTL" shell "$LIMA_INSTANCE" -- sh -c 'ls -d /tmp/ffmpeg-verify-* 2>/dev/null | wc -l')
+          echo "stale verify dirs: ${stale}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          used=$("$LIMACTL" shell "$LIMA_INSTANCE" -- sh -c "df -P / | tail -1 | tr -s ' ' | cut -d' ' -f5 | tr -d %")
+          [[ "$used" -lt 90 ]] || { echo "::error::Lima guest root disk is ${used}% full"; exit 1; }
 
       - name: Probe capabilities (windows)
         if: matrix.shell == 'pwsh'

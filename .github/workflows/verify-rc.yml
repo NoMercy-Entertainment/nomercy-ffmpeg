@@ -259,7 +259,12 @@ jobs:
           LIMACTL="${LIMA_BIN:-limactl}"
           REMOTE="/tmp/ffmpeg-verify-${GITHUB_RUN_ID}"
 
-          "$LIMACTL" shell "$LIMA_INSTANCE" -- rm -rf "$REMOTE"
+          # Wipe every verify directory before AND after the run, not just
+          # this run's: a step that aborted before its own cleanup (guest
+          # killed, copy failed) left a 252 MB archive plus the extracted work
+          # dir behind each time, on a 16 GiB guest disk. One runner carries
+          # this label and runs one job at a time, so nothing else is in there.
+          "$LIMACTL" shell "$LIMA_INSTANCE" -- sh -c 'rm -rf /tmp/ffmpeg-verify-*'
           "$LIMACTL" shell "$LIMA_INSTANCE" -- mkdir -p "$REMOTE/rc"
           "$LIMACTL" copy -r tests "${LIMA_INSTANCE}:${REMOTE}/tests"
           "$LIMACTL" copy "rc/${ARCHIVE}" "${LIMA_INSTANCE}:${REMOTE}/rc/${ARCHIVE}"
@@ -277,10 +282,12 @@ jobs:
             --tag "${{ needs.resolve.outputs.tag }}" \
             --commit "${{ needs.resolve.outputs.head-sha }}"
           status=$?
-          set -e
 
-          "$LIMACTL" copy "${LIMA_INSTANCE}:${REMOTE}/verdict.json" "verdict-${{ matrix.platform }}.json"
-          "$LIMACTL" shell "$LIMA_INSTANCE" -- rm -rf "$REMOTE"
+          # Still under set +e: a failed verdict copy must not skip the
+          # cleanup, or the guest fills up one aborted run at a time.
+          "$LIMACTL" copy "${LIMA_INSTANCE}:${REMOTE}/verdict.json" "verdict-${{ matrix.platform }}.json"             || echo "::warning::no verdict retrieved from the Lima guest"
+          "$LIMACTL" shell "$LIMA_INSTANCE" -- sh -c 'rm -rf /tmp/ffmpeg-verify-*'
+          set -e
           exit $status
 
       # FreeBSD has no official Actions runner build, so a Linux runner drives a
@@ -297,7 +304,9 @@ jobs:
           REMOTE="/tmp/ffmpeg-verify-${GITHUB_RUN_ID}"
 
           # shellcheck disable=SC2086
-          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf ${REMOTE}; mkdir -p ${REMOTE}/rc"
+          # Wipe every verify directory before and after, as in the Lima step:
+          # an aborted run must not leave its archive and work dir behind.
+          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf /tmp/ffmpeg-verify-*; mkdir -p ${REMOTE}/rc"
           tar -cf - tests | ssh $SSH_OPTS "$SSH_TARGET" "tar -xf - -C ${REMOTE}"
           scp $SSH_OPTS "rc/${ARCHIVE}" rc/manifest.json "${SSH_TARGET}:${REMOTE}/rc/"
 
@@ -311,10 +320,11 @@ jobs:
             --tag ${{ needs.resolve.outputs.tag }} \
             --commit ${{ needs.resolve.outputs.head-sha }}"
           status=$?
-          set -e
 
-          scp $SSH_OPTS "${SSH_TARGET}:${REMOTE}/verdict.json" "verdict-${{ matrix.platform }}.json"
-          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf ${REMOTE}" || true
+          # Still under set +e so a failed verdict copy cannot skip the cleanup.
+          scp $SSH_OPTS "${SSH_TARGET}:${REMOTE}/verdict.json" "verdict-${{ matrix.platform }}.json"             || echo "::warning::no verdict retrieved from the FreeBSD guest"
+          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf /tmp/ffmpeg-verify-*"
+          set -e
           exit $status
 
       - name: Download RC asset and manifest (windows)
