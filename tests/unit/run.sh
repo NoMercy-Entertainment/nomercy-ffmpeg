@@ -9,6 +9,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${HERE}/../.." && pwd)"
 CC="${CC:-cc}"
 OUT="$(mktemp -d)"
+# Fixture files the tests read at run time (tests/unit/fixtures/<name>/...).
+export NM_UNIT_FIXTURES="${HERE}/fixtures"
 trap 'rm -rf "${OUT}"' EXIT
 
 failed=0
@@ -19,7 +21,7 @@ for src in "${HERE}"/test_*.c; do
 	ran=$((ran + 1))
 	echo "== ${name}"
 	if ! "${CC}" -std=c11 -Wall -Wextra -Werror -O2 -I "${ROOT}/scripts/includes" \
-		"${src}" -o "${OUT}/${name}"; then
+		"${src}" -o "${OUT}/${name}" -lm; then
 		echo "❌ ${name}: does not compile cleanly"
 		failed=$((failed + 1))
 		continue
