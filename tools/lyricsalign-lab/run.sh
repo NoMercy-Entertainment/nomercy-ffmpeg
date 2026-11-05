@@ -33,7 +33,7 @@ build|suite|shell)
 	case "${cmd}" in
 	build) docker run --rm "${mounts[@]}" "${IMAGE}" /lab/build.sh "$@" ;;
 	suite) docker run --rm "${mounts[@]}" "${IMAGE}" /lab/suite.sh "$@" ;;
-	shell) docker run --rm -it "${mounts[@]}" "${IMAGE}" bash "$@" ;;
+	shell) tty=(); [[ -t 0 ]] && tty=(-it); docker run --rm "${tty[@]}" "${mounts[@]}" "${IMAGE}" bash "$@" ;;
 	esac
 	;;
 *)

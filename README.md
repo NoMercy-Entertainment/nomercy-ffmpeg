@@ -1113,6 +1113,7 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 | **Shared Libraries** | Codec libraries built in; OS and GPU libraries supplied by the host | ⚪ No separate codec libraries to ship; platform runtime requirements still apply |
 | **Debug Symbols** | Stripped for production | ⚪ Smaller binary size |
 | **Licensing** | GPL + version3 + nonfree | ⚪ Not redistributable as LGPL; internal use |
+| **espeak-ng 1.52.0** (phonemes for `lyricsalign`) | Statically linked, GPL-3.0-or-later; its `espeak-ng-data` (about 19 MB, every espeak voice) ships next to the binary | ⚪ Covered by `--enable-version3`; the data directory is part of every platform archive |
 
 ### 🔧 **Build Configuration Summary**
 

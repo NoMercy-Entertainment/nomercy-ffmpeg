@@ -40,6 +40,20 @@ fi
 
 find ${PREFIX} -name '*.jar' -exec cp {} /ffmpeg/${TARGET_OS}/${ARCH}/ \;
 
+# espeak-ng's data (scripts/65-espeak-ng.sh) ships next to the binary: that is
+# where the lyricsalign filter looks for it by default. Copied here, before
+# the ${PREFIX} cleanup below removes the only other copy, and checked by its
+# key file so a tarball can never ship an empty directory.
+if [ -d ${PREFIX}/share/espeak-ng-data ]; then
+    rm -rf /ffmpeg/${TARGET_OS}/${ARCH}/espeak-ng-data
+    cp -r ${PREFIX}/share/espeak-ng-data /ffmpeg/${TARGET_OS}/${ARCH}/espeak-ng-data || exit 1
+    if [ ! -f /ffmpeg/${TARGET_OS}/${ARCH}/espeak-ng-data/phontab ]; then
+        text_with_padding "❌ espeak-ng-data copied without phontab" ""
+        exit 1
+    fi
+    text_with_padding "✅ espeak-ng-data copied next to the binary" ""
+fi
+
 text_with_padding "✅ FFmpeg binaries copied successfully" ""
 hr
 
