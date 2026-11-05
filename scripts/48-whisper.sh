@@ -805,6 +805,9 @@ if [[ -f /scripts/includes/af_whisper.c ]]; then
     # build, so fail here, where the cause is obvious.
     cp /scripts/includes/nm_whisper_words.h /build/ffmpeg/libavfilter/nm_whisper_words.h \
         || { log "Error: copying nm_whisper_words.h next to af_whisper.c failed"; exit 1; }
+    # The ggml thread rule (#115), shared with af_lyricsalign.c since #126.
+    cp /scripts/includes/nm_ggml_threads.h /build/ffmpeg/libavfilter/nm_ggml_threads.h \
+        || { log "Error: copying nm_ggml_threads.h next to af_whisper.c failed"; exit 1; }
 fi
 
 add_enable "--enable-whisper"
