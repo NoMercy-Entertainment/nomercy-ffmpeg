@@ -23,6 +23,8 @@ source "${HERE}/lib/cpu-variant.sh"
 source "${HERE}/lib/whisper.sh"
 # shellcheck source=lib/stemsplit.sh
 source "${HERE}/lib/stemsplit.sh"
+# shellcheck source=lib/lyricsalign.sh
+source "${HERE}/lib/lyricsalign.sh"
 # shellcheck source=lib/jpegxl.sh
 source "${HERE}/lib/jpegxl.sh"
 # shellcheck source=lib/alpha-codecs.sh

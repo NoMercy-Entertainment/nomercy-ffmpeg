@@ -49,7 +49,13 @@ _la_inputs() {
 			return 1
 		fi
 	done
-	if ! "${FFMPEG}" -hide_banner -filters 2>/dev/null | grep -q ' lyricsalign '; then
+	# Captured first, then searched: under smoke.sh's pipefail, `ffmpeg | grep -q`
+	# fails when grep closes the pipe on its first match and ffmpeg takes the
+	# SIGPIPE (this repository has hit that before), and the check would skip
+	# a build that has the filter.
+	local filters
+	filters="$("${FFMPEG}" -hide_banner -filters 2>/dev/null)" || true
+	if ! grep -q ' lyricsalign ' <<<"${filters}"; then
 		echo "SKIP: no lyricsalign filter in this build"
 		return 1
 	fi
