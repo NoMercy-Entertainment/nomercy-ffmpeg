@@ -475,3 +475,64 @@ Per [[feedback-local-build-before-push]]: one platform at a time, commit only on
 
 - [ ] **Step 1: Write `docs/superpowers/plans/2026-11-05-lyricsalign.md` → "Done" section** with: build tag, measured gates, the eight numbers the benchmark needs, and the exact filter graph the `ffmpeg-lyricsalign` pipeline in `nomercy-lyrics-creator-plugin` must run (`stemsplit=...:stem=all[v][a];[v][a]lyricsalign=model=...:text_file=...:language=...:destination=-`), and that the benchmark (last acceptance box) runs there, on the owner's machine, with the plugin's `python -m lyrics_eval bench`.
 - [ ] **Step 2: Save a memory note** for this project: state, lab path, asset dir, the calls made, what the owner still decides.
+
+---
+
+## Done (2026-11-06)
+
+**Build.** Every platform image was built locally from this tree, one at a
+time, as `nomercy-ffmpeg-<platform>:lyricsalign` (linux-x86_64 cpu and
+hardware, linux-aarch64, windows-x86_64, windows-aarch64, darwin-x86_64,
+darwin-arm64, freebsd-x86_64); every archive carries `espeak-ng-data`
+(18 MB, 114 dictionaries) next to the binary. Two cross-build facts came out
+of it: espeak-ng's header declares its API `dllimport` on Windows unless
+`LIBESPEAK_NG_EXPORT` is set (the filter sets it), and the osxcross `nm` has
+no `--defined-only` (script 65 reads plain `nm` output).
+
+**Measured gates.** (a) emissions: argmax agreement 100 %, mean |delta|
+0.0032 nats against the prototype (bar 0.05), on the lab binary and the
+Windows binary; (b) every phone of the JFK fixture on the prototype's frame
+(unit test, exact); (c) every JFK word within 0.000 s of the prototype, line
+start and lead-in within 0.010 s; determinism: two runs give the same bytes;
+`use_gpu=1` on an RTX 3070 (Dozen under Linux, native Vulkan on Windows):
+every word within 0.000 s of the CPU run. Suites: lab 15/15, `tests/smoke.sh`
+in ubuntu:22.04 with `LYRICSALIGN_TEST_REQUIRED=1`, `tests/tests.ps1` under
+pwsh 7 and Windows PowerShell 5.1 (46 passed, lyricsalign 14 pass + gpu
+skipped by design).
+
+**The eight numbers for the benchmark** (CPU, `use_gpu=0`, model load
+included; a run with a backing makes two model passes):
+
+| clip | where | threads | wall clock |
+|---|---|---|---|
+| jfk 11 s, one pass | lab (haswell, Docker) | 1 | 29.9 s |
+| jfk 11 s, one pass | lab | 4 | 12.4 s |
+| jfk 11 s, two passes | lab | 4 | 22.6 s |
+| jfk 11 s, two passes (`asplit`) | i7-10700K, Windows build | 0 (= 4) | 15.3 s |
+| jfk 11 s, two passes | i7-10700K | 8 | 9.2 s |
+| 253 s stereo (jfk x22), two passes | i7-10700K | 0 (= 4) | 304 s (1.2x length) |
+| 253 s stereo, two passes | i7-10700K | 8 | 194 s (0.77x length) |
+| model file | — | — | 632 378 944 B, f16, sha256 b1474de6…38b4 |
+
+**The pipeline `ffmpeg-lyricsalign` in `nomercy-lyrics-creator-plugin` must run:**
+
+```
+ffmpeg -nostdin -hide_banner -i song.flac -filter_complex \
+  "[0:a]stemsplit=preset=full:model_dir=<models>:stem=all[v][a];\
+   [v][a]lyricsalign=model=<models>/wav2vec2-xlsr-53-espeak-cv-ft-f16.gguf:text_file=lyrics.txt:language=en-us:destination=-" \
+  -f null - > lines.jsonl
+```
+
+`stem=all` yields the vocals pad first, then the accompaniment; the
+accompaniment is the backing the check signal needs (`blend` default). The
+JSON Lines arrive on stdout (`destination=-`), one header then one line per
+written text line; skipped lines carry their reason. `espeak-ng-data` is
+found next to the binary, so `espeak_data` is only needed when the binary is
+moved without it. A Windows path with a drive colon inside the graph must be
+quoted the FFmpeg way (`model='C\:/models/...gguf'`), or the plugin runs
+from the models directory with relative names. The model comes from
+`NoMercy-Entertainment/nomercy-lyricsalign-models` release `v2026.11.05`.
+
+**The benchmark** (the last acceptance box of the spec) runs in the plugin
+repository on the owner's machine: `python -m lyrics_eval bench`. It is not
+part of this repository's gates.
