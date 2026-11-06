@@ -1006,7 +1006,14 @@ text order, times in seconds with 3 decimals:
 `backing`, `none` (`blend=0`) or `failed` (the second alignment found no
 path). `lead_in` is how far the written start was walked back from the first
 phone to the vocal onset after a pause. A skipped line still reports the two
-candidate starts so a review UI can show them. The reasons:
+candidate starts so a review UI can show them. `words[]` has one entry per
+whitespace token of the text line, spanning the espeak words the token makes
+(`1999` is one entry over "nineteen ninety nine"); a token espeak does not
+speak (`-`, `...`) gets no entry. When espeak's words cannot be tied to the
+tokens the entries follow espeak's words and their `text` is `null`. When the
+graph ends before the vocals do (an output `-t`, for instance) the audio
+received so far is aligned and written, with a warning. A destination that
+cannot be written fails the run. The reasons:
 
 | `reason` | meaning |
 |---|---|
@@ -1030,7 +1037,9 @@ are, never bundled in a platform archive:
 ```
 https://github.com/NoMercy-Entertainment/nomercy-lyricsalign-models/releases/download/v2026.11.05/wav2vec2-xlsr-53-espeak-cv-ft-f16.gguf
 sha256 b1474de65e4a966046d390f191af092e718e5e773dcedc5398f31057ee2d38b4
-``` `tools/wav2vec2-gguf` converts the
+```
+
+`tools/wav2vec2-gguf` converts the
 checkpoint and verifies the result. The filter reads the vocabulary and every
 layer size from the file.
 

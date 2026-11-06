@@ -58,6 +58,9 @@
 #include <unistd.h>
 #endif
 #include <sys/stat.h>
+#if defined(_WIN32)
+#include "libavutil/wchar_filename.h"
+#endif
 
 #include <ggml.h>
 #include <ggml-backend.h>
@@ -120,6 +123,9 @@ typedef struct LaLine {
     int *word_n;
     int *ids;                   /* every mapped id of the line, in order */
     int n_ids;
+    int *tok_words;             /* per whitespace token of the text, espeak's word count;
+                                 * NULL when the counts do not add up to n_words */
+    int n_tok;
 } LaLine;
 
 typedef struct LyricsAlignContext {
@@ -212,20 +218,71 @@ static int la_exe_dir(char *buf, size_t size)
     return 0;
 }
 
+/* Does the path exist? Through UTF-16 on Windows: the C library's narrow
+ * stat() takes the ANSI code page, and these paths are UTF-8. */
+static int la_path_exists(const char *path)
+{
+#if defined(_WIN32)
+    wchar_t *w = NULL;
+    struct _stati64 st;
+    int ok;
+    if (utf8towchar(path, &w) < 0 || !w)
+        return 0;
+    ok = _wstati64(w, &st) == 0;
+    av_free(w);
+    return ok;
+#else
+    struct stat st;
+    return stat(path, &st) == 0;
+#endif
+}
+
 static int la_is_dir_with(const char *dir, const char *file)
 {
     char path[2048];
-    struct stat st;
     snprintf(path, sizeof(path), "%s/%s", dir, file);
-    return stat(path, &st) == 0;
+    return la_path_exists(path);
 }
 
-/* Phonemize one line with the already-initialised espeak (lock held):
- * clause by clause, joined by a space, then parsed. */
-static int la_phonemize_line(LaLine *line)
+/* The data directory as espeak-ng gets it. espeak-ng opens its files with the
+ * C library's narrow fopen, which takes the ANSI code page on Windows: a
+ * directory name outside that code page is handed over as its 8.3 short
+ * name, which is ASCII whenever the volume keeps short names. */
+static char *la_espeak_data_arg(AVFilterContext *ctx, const char *dir)
+{
+#if defined(_WIN32)
+    const unsigned char *p;
+    for (p = (const unsigned char *) dir; *p && *p < 0x80; p++)
+        ;
+    if (*p) {
+        wchar_t *w = NULL, shortw[MAX_PATH];
+        char *s8 = NULL;
+        DWORD n;
+        if (utf8towchar(dir, &w) >= 0 && w && (n = GetShortPathNameW(w, shortw, MAX_PATH)) > 0 && n < MAX_PATH &&
+            wchartoutf8(shortw, &s8) >= 0 && s8) {
+            for (p = (const unsigned char *) s8; *p && *p < 0x80; p++)
+                ;
+            if (!*p) {
+                av_free(w);
+                av_log(ctx, AV_LOG_VERBOSE, "lyricsalign: espeak-ng data handed over as %s\n", s8);
+                return s8;
+            }
+            av_free(s8);
+        }
+        av_free(w);
+        av_log(ctx, AV_LOG_WARNING, "lyricsalign: the espeak-ng data directory name is outside the ANSI code page and has "
+               "no short name, so espeak-ng may not open it (set espeak_data to an ASCII path)\n");
+    }
+#endif
+    return av_strdup(dir);
+}
+
+/* Phonemize text with the already-initialised espeak (lock held): clause by
+ * clause, joined by a space, then parsed into words of phones. */
+static int la_ipa_words(const char *text, NMLpWord **words, int *n_words)
 {
     AVBPrint ipa;
-    const void *p = line->text;
+    const void *p = text;
     int ret;
 
     av_bprint_init(&ipa, 0, AV_BPRINT_SIZE_UNLIMITED);
@@ -239,9 +296,61 @@ static int la_phonemize_line(LaLine *line)
         av_bprint_finalize(&ipa, NULL);
         return AVERROR(ENOMEM);
     }
-    ret = nm_lp_parse_ipa(ipa.str, &line->words, &line->n_words);
+    ret = nm_lp_parse_ipa(ipa.str, words, n_words);
     av_bprint_finalize(&ipa, NULL);
     return ret ? AVERROR(ENOMEM) : 0;
+}
+
+/* The whole line for the alignment; then every whitespace token on its own,
+ * only to count the words espeak makes of it ("-" makes none, "1999" makes
+ * three), so the JSON can label each lyric token with its own span. When
+ * the counts do not add up to the line's words, the labels are null. */
+static int la_phonemize_line(LaLine *line)
+{
+    const char *p = line->text;
+    int ret, sum = 0, t = 0, cap = 8;
+
+    ret = la_ipa_words(line->text, &line->words, &line->n_words);
+    if (ret < 0)
+        return ret;
+    line->tok_words = av_malloc_array(cap, sizeof(*line->tok_words));
+    if (!line->tok_words)
+        return AVERROR(ENOMEM);
+    while (*p) {
+        const char *tok;
+        char *one;
+        NMLpWord *words = NULL;
+        int n = 0;
+
+        while (*p && nm_lp_is_space((unsigned char) *p))
+            p++;
+        if (!*p)
+            break;
+        tok = p;
+        while (*p && !nm_lp_is_space((unsigned char) *p))
+            p++;
+        one = av_strndup(tok, p - tok);
+        if (!one)
+            return AVERROR(ENOMEM);
+        ret = la_ipa_words(one, &words, &n);
+        av_free(one);
+        if (ret < 0)
+            return ret;
+        nm_lp_free_words(words, n);
+        if (t == cap) {
+            int *grown = av_realloc_array(line->tok_words, cap * 2, sizeof(*grown));
+            if (!grown)
+                return AVERROR(ENOMEM);
+            line->tok_words = grown;
+            cap *= 2;
+        }
+        line->tok_words[t++] = n;
+        sum += n;
+    }
+    line->n_tok = t;
+    if (sum != line->n_words)
+        av_freep(&line->tok_words);
+    return 0;
 }
 
 static int la_phonemize(AVFilterContext *ctx)
@@ -251,7 +360,15 @@ static int la_phonemize(AVFilterContext *ctx)
 
     ff_mutex_lock(&la_espeak_lock);
     if (!la_espeak_users) {
-        if (espeak_Initialize(AUDIO_OUTPUT_SYNCHRONOUS, 0, s->espeak_data, 0) < 0) {
+        char *data = la_espeak_data_arg(ctx, s->espeak_data);
+        int ok;
+        if (!data) {
+            ff_mutex_unlock(&la_espeak_lock);
+            return AVERROR(ENOMEM);
+        }
+        ok = espeak_Initialize(AUDIO_OUTPUT_SYNCHRONOUS, 0, data, 0) >= 0;
+        av_free(data);
+        if (!ok) {
             av_log(ctx, AV_LOG_ERROR, "lyricsalign: espeak-ng could not initialise with its data at %s\n", s->espeak_data);
             ff_mutex_unlock(&la_espeak_lock);
             return AVERROR(EINVAL);
@@ -370,6 +487,7 @@ static void la_free_lines(LyricsAlignContext *s)
         av_free(l->word_ids);
         av_free(l->word_n);
         av_free(l->ids);
+        av_free(l->tok_words);
     }
     av_freep(&s->lines);
     s->n_lines = 0;
@@ -559,7 +677,27 @@ static double la_frame_s(int frame20)
 }
 
 /* One written line: its JSON object into b. */
-static void la_json_written(AVFilterContext *ctx, AVBPrint *b, int index, const NMLaPlace *tok, double start_s,
+/* One word object: text (null when NULL), its span over n placed tokens from
+ * k, or nulls when the word kept no vocabulary id. */
+static void la_json_word(AVBPrint *b, int first, const char *text, const NMLaPlace *tok, int k, int n)
+{
+    av_bprintf(b, "%s{\"text\":", first ? "" : ",");
+    if (text)
+        la_json_str(b, text);
+    else
+        av_bprintf(b, "null");
+    if (n > 0) {
+        double ws = 0.0;
+        for (int i = 0; i < n; i++)
+            ws += tok[k + i].post;
+        av_bprintf(b, ",\"start\":%.3f,\"end\":%.3f,\"score\":%.3f}", la_frame_s(tok[k].first),
+                   la_frame_s(tok[k + n - 1].last + 1), ws / n);
+    } else {
+        av_bprintf(b, ",\"start\":null,\"end\":null,\"score\":0}");
+    }
+}
+
+static void la_json_written(AVFilterContext *ctx, AVBPrint *b, int index, const NMLaPlace *tok_place, double start_s,
                             double lead_in_s)
 {
     LyricsAlignContext *s = ctx->priv;
@@ -568,52 +706,47 @@ static void la_json_written(AVFilterContext *ctx, AVBPrint *b, int index, const 
     int k = 0;
 
     for (int i = 0; i < l->n_ids; i++)
-        score += tok[i].post;
+        score += tok_place[i].post;
     score /= l->n_ids;
     av_bprintf(b, "{\"index\":%d,\"text\":", index);
     la_json_str(b, l->text);
     av_bprintf(b, ",\"start\":%.3f,\"end\":%.3f,\"score\":%.3f,\"lead_in\":%.3f,\"words\":[",
-               start_s, la_frame_s(tok[l->n_ids - 1].last + 1), score, lead_in_s);
-    for (int w = 0; w < l->n_words; w++) {
-        const int n = l->word_n[w];
-        char *text = NULL;
-        AVBPrint wt;
+               start_s, la_frame_s(tok_place[l->n_ids - 1].last + 1), score, lead_in_s);
+    if (l->tok_words) {
+        /* one word per lyric token, spanning the espeak words the token made */
+        const char *p = l->text;
+        int t = 0, w = 0, first = 1;
+        while (*p && t < l->n_tok) {
+            const char *tok;
+            char *text;
+            int cnt, n = 0;
 
-        /* the word's text: espeak's phones back to the text are not kept, so the
-         * word is the text's w-th whitespace-separated token */
-        av_bprint_init(&wt, 0, AV_BPRINT_SIZE_UNLIMITED);
-        {
-            const char *p = l->text;
-            int seen = 0;
-            while (*p) {
-                while (*p && nm_lp_is_space((unsigned char) *p))
-                    p++;
-                if (!*p)
-                    break;
-                if (seen == w) {
-                    while (*p && !nm_lp_is_space((unsigned char) *p))
-                        av_bprint_chars(&wt, *p++, 1);
-                    break;
-                }
-                while (*p && !nm_lp_is_space((unsigned char) *p))
-                    p++;
-                seen++;
-            }
+            while (*p && nm_lp_is_space((unsigned char) *p))
+                p++;
+            if (!*p)
+                break;
+            tok = p;
+            while (*p && !nm_lp_is_space((unsigned char) *p))
+                p++;
+            cnt = l->tok_words[t++];
+            if (!cnt)
+                continue;           /* espeak says nothing for it ("-", "...") */
+            for (int i = 0; i < cnt; i++)
+                n += l->word_n[w + i];
+            text = av_strndup(tok, p - tok);
+            la_json_word(b, first, text, tok_place, k, n);
+            av_free(text);
+            first = 0;
+            w += cnt;
+            k += n;
         }
-        av_bprint_finalize(&wt, &text);
-        av_bprintf(b, "%s{\"text\":", w ? "," : "");
-        la_json_str(b, text ? text : "");
-        av_free(text);
-        if (n > 0) {
-            double ws = 0.0;
-            for (int i = 0; i < n; i++)
-                ws += tok[k + i].post;
-            av_bprintf(b, ",\"start\":%.3f,\"end\":%.3f,\"score\":%.3f}", la_frame_s(tok[k].first),
-                       la_frame_s(tok[k + n - 1].last + 1), ws / n);
-        } else {
-            av_bprintf(b, ",\"start\":null,\"end\":null,\"score\":0}");
+    } else {
+        /* espeak's words could not be tied to the text's tokens: a word per
+         * espeak word, its text null */
+        for (int w = 0; w < l->n_words; w++) {
+            la_json_word(b, !w, NULL, tok_place, k, l->word_n[w]);
+            k += l->word_n[w];
         }
-        k += n;
     }
     av_bprintf(b, "]}");
 }
@@ -771,8 +904,14 @@ done:
     av_free(placed_c);
     av_free(check);
     av_free(env);
-    if (s->out)
+    if (s->out) {
         avio_flush(s->out);
+        if (s->out->error < 0 && ret >= 0) {
+            av_log(ctx, AV_LOG_ERROR, "lyricsalign: writing to %s failed: %s\n", s->destination,
+                   av_err2str(s->out->error));
+            ret = s->out->error;
+        }
+    }
     return ret;
 }
 
@@ -797,12 +936,9 @@ static int init(AVFilterContext *ctx)
         av_log(ctx, AV_LOG_ERROR, "lyricsalign: the language option is required (an espeak-ng voice name)\n");
         return AVERROR(EINVAL);
     }
-    {
-        struct stat st;
-        if (stat(s->model_path, &st)) {
-            av_log(ctx, AV_LOG_ERROR, "lyricsalign: model not found: %s\n", s->model_path);
-            return AVERROR(ENOENT);
-        }
+    if (!la_path_exists(s->model_path)) {
+        av_log(ctx, AV_LOG_ERROR, "lyricsalign: model not found: %s\n", s->model_path);
+        return AVERROR(ENOENT);
     }
 
     /* espeak-ng data: the option, or espeak-ng-data next to the binary. espeak
@@ -846,10 +982,13 @@ static int init(AVFilterContext *ctx)
     return 0;
 }
 
+static int la_align_received(AVFilterContext *ctx, const char *why);
+
 static void uninit(AVFilterContext *ctx)
 {
     LyricsAlignContext *s = ctx->priv;
 
+    la_align_received(ctx, "the graph ended");    /* a failure is logged there */
     if (s->out)
         avio_closep(&s->out);
     for (int i = 0; i < 2; i++) {
@@ -988,25 +1127,45 @@ static int la_append(AVFilterContext *ctx, int i, const AVFrame *frame)
     return 0;
 }
 
-static int la_finish(AVFilterContext *ctx)
+/* Flush the resamplers, align and write, once. */
+static int la_align_now(AVFilterContext *ctx)
 {
     LyricsAlignContext *s = ctx->priv;
-    AVFilterLink *outlink = ctx->outputs[0];
     int ret;
 
-    if (!s->done) {
-        s->done = 1;
-        for (int i = 0; i < 2; i++) {
-            ret = la_append(ctx, i, NULL);
-            if (ret < 0)
-                return ret;
-        }
-        ret = la_align_and_write(ctx);
+    if (s->done)
+        return 0;
+    s->done = 1;
+    for (int i = 0; i < 2; i++) {
+        ret = la_append(ctx, i, NULL);
         if (ret < 0)
             return ret;
     }
-    ff_outlink_set_status(outlink, s->status, s->eof_pts);
+    return la_align_and_write(ctx);
+}
+
+static int la_finish(AVFilterContext *ctx)
+{
+    LyricsAlignContext *s = ctx->priv;
+    int ret = la_align_now(ctx);
+
+    if (ret < 0)
+        return ret;
+    ff_outlink_set_status(ctx->outputs[0], s->status, s->eof_pts);
     return 0;
+}
+
+/* The audio received when the graph ends before the vocals do (the output
+ * was closed early, by -t after the graph for instance) is still aligned. */
+static int la_align_received(AVFilterContext *ctx, const char *why)
+{
+    LyricsAlignContext *s = ctx->priv;
+
+    if (s->done || !s->model || s->n[0] <= 0)
+        return 0;
+    av_log(ctx, AV_LOG_WARNING, "lyricsalign: %s after %.2f s of vocals; aligning what was received\n",
+           why, s->n[0] / (double) NM_LA_RATE);
+    return la_align_now(ctx);
 }
 
 static int activate(AVFilterContext *ctx)
@@ -1017,7 +1176,15 @@ static int activate(AVFilterContext *ctx)
     int ret, status;
     int64_t pts;
 
-    FF_FILTER_FORWARD_STATUS_BACK_ALL(outlink, ctx);
+    status = ff_outlink_get_status(outlink);
+    if (status) {
+        ret = la_align_received(ctx, "output closed");
+        if (ret < 0)
+            return ret;
+        for (unsigned i = 0; i < ctx->nb_inputs; i++)
+            ff_inlink_set_status(ctx->inputs[i], status);
+        return 0;
+    }
 
     /* vocals: copy, stamp, forward */
     if (!s->eof[0]) {

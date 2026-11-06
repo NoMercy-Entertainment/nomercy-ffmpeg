@@ -423,6 +423,11 @@ run_lyricsalign_check "lyricsalign BOM, CRLF and blank lines" test_lyricsalign_t
 run_lyricsalign_check "lyricsalign lines espeak cannot speak" test_lyricsalign_odd_lines
 run_lyricsalign_check "lyricsalign backing shorter and longer than the vocals" test_lyricsalign_backing_lengths
 run_lyricsalign_check "lyricsalign half a second of audio" test_lyricsalign_short_audio
+run_lyricsalign_check "lyricsalign word labels per lyric token" test_lyricsalign_word_labels
+run_lyricsalign_check "lyricsalign output closed early" test_lyricsalign_output_closed
+run_lyricsalign_check "lyricsalign write error fails the run" test_lyricsalign_write_error
+run_lyricsalign_check "lyricsalign non-ASCII paths" test_lyricsalign_unicode_paths
+run_lyricsalign_check "lyricsalign output format unchanged" test_lyricsalign_output_format
 run_lyricsalign_check "lyricsalign frame metadata" test_lyricsalign_metadata
 run_lyricsalign_check "lyricsalign use_gpu=1 within 40 ms of the CPU (GPU runners)" test_lyricsalign_gpu
 

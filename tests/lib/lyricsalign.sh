@@ -110,6 +110,7 @@ _la_graph() {
 }
 
 # _la_run <out> <err> <backing> <text> <opts> [input args...]
+# LA_OUT_ARGS adds output options (such as -t 5) in front of -f null -.
 # Runs the filter over the clip (or the given input args) to -f null -, with
 # stdout in <out> and stderr in <err>; returns ffmpeg's exit code.
 _la_run() {
@@ -118,7 +119,7 @@ _la_run() {
 	local input=("$@")
 	[[ ${#input[@]} -eq 0 ]] && input=(-i "${LA_AUDIO}")
 	(cd "${LA_DIR}" && env ${LA_ENV:-} "${FFMPEG}" -hide_banner -nostdin -nostats ${LA_LOGLEVEL:+-loglevel "${LA_LOGLEVEL}"} \
-		"${input[@]}" -filter_complex "$(_la_graph "${backing}" "${text}" "${opts}")" -f null - >"${out}" 2>"${err}" </dev/null)
+		"${input[@]}" -filter_complex "$(_la_graph "${backing}" "${text}" "${opts}")" ${LA_OUT_ARGS:-} -f null - >"${out}" 2>"${err}" </dev/null)
 }
 
 # _la_check <jsonl> <mode> [args]: the python checks. Modes:
@@ -505,6 +506,127 @@ test_lyricsalign_metadata() {
 		echo "frames carry $(grep -m3 -o 'lavfi.lyricsalign.[a-z_]*=[^ ]*' "${LA_DIR}/meta.txt" | tr '\n' ' ')"
 	else
 		_la_fail "frame metadata" "${LA_DIR}/err.txt"; rc=1
+	fi
+	_la_cleanup
+	return ${rc}
+}
+
+# words[].text per lyric token: a token espeak does not speak ("-") yields no
+# word, a token espeak expands ("1999" = nineteen ninety nine) is one word
+# spanning its phones; the labels never shift.
+test_lyricsalign_word_labels() {
+	_la_inputs || return 2
+	_la_workdir
+	local rc=0
+	printf '%s\n' "and so my fellow americans" "ask not - what your country can do for you 1999" > "${LA_DIR}/labels.txt"
+	if _la_run "${LA_DIR}/out.jsonl" "${LA_DIR}/err.txt" self labels.txt "destination=-" &&
+	   python3 - "${LA_DIR}/out.jsonl" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+line = rows[2]
+if line.get("reason"):
+    sys.exit("line 2 was not written: %s" % line["reason"])
+texts = [w["text"] for w in line["words"]]
+want = ["ask", "not", "what", "your", "country", "can", "do", "for", "you", "1999"]
+if texts != want:
+    sys.exit("word labels %r, want %r" % (texts, want))
+last = line["words"][-1]
+if last["start"] is None or last["end"] is None or last["end"] <= last["start"]:
+    sys.exit("the expanded token has no span: %r" % last)
+print("word labels: hyphen dropped, 1999 spans one word (%.2f..%.2f)" % (last["start"], last["end"]))
+PY
+	then :; else _la_fail "word labels" "${LA_DIR}/err.txt"; rc=1; fi
+	_la_cleanup
+	return ${rc}
+}
+
+# Downstream closes the output early (-t on the output adds a trim after the
+# graph): the audio received so far is still aligned and written, with a
+# warning, and ffmpeg exits 0.
+test_lyricsalign_output_closed() {
+	_la_inputs || return 2
+	_la_workdir
+	local rc=0
+	if LA_OUT_ARGS="-t 5" _la_run "${LA_DIR}/out.jsonl" "${LA_DIR}/err.txt" self "${LA_TEXT}" "destination=-" &&
+	   _la_check "${LA_DIR}/out.jsonl" shape &&
+	   grep -q "output closed" "${LA_DIR}/err.txt"; then
+		echo "output closed after 5 s: header + line written, warning logged"
+	else
+		_la_fail "output closed early" "${LA_DIR}/err.txt"; rc=1
+	fi
+	_la_cleanup
+	return ${rc}
+}
+
+# A destination that cannot take the bytes fails the run instead of leaving
+# a truncated file behind an exit 0.
+test_lyricsalign_write_error() {
+	_la_inputs || return 2
+	# Git Bash shows a /dev/full that the native ffmpeg.exe cannot open.
+	if [[ ! -w /dev/full ]] || command -v cygpath >/dev/null 2>&1; then
+		echo "SKIP: /dev/full is needed to provoke a write error (Linux only)"
+		return 2
+	fi
+	_la_workdir
+	local rc=0
+	if _la_run "${LA_DIR}/out.jsonl" "${LA_DIR}/err.txt" self "${LA_TEXT}" "destination=/dev/full"; then
+		_la_fail "a write error must fail the run (exit 0)" "${LA_DIR}/err.txt"; rc=1
+	elif ! grep -qi "lyricsalign: .*writ" "${LA_DIR}/err.txt"; then
+		_la_fail "the write error is not reported" "${LA_DIR}/err.txt"; rc=1
+	else
+		echo "destination=/dev/full: non-zero exit, error reported"
+	fi
+	_la_cleanup
+	return ${rc}
+}
+
+# The model and the espeak-ng data under a directory whose name is outside
+# the ANSI code page (Windows narrow file APIs): both are found.
+test_lyricsalign_unicode_paths() {
+	_la_inputs || return 2
+	_la_workdir
+	local rc=0 sub="lyrics-ジ" bindir
+	bindir="$(cd "$(dirname "${FFMPEG}")" && pwd)"
+	if [[ ! -f "${bindir}/espeak-ng-data/phontab" ]]; then
+		echo "SKIP: no espeak-ng-data next to ${FFMPEG} to copy"
+		_la_cleanup; return 2
+	fi
+	mkdir -p "${LA_DIR}/${sub}"
+	cp -r "${bindir}/espeak-ng-data" "${LA_DIR}/${sub}/espeak-ng-data"
+	python3 - "${LA_DIR}/${LA_MODEL}" "${LA_DIR}/${sub}/model.gguf" <<'PY'
+import os, shutil, sys
+src, dst = os.path.abspath(sys.argv[1]), sys.argv[2]
+try:
+    os.link(src, dst)
+except OSError:
+    try:
+        os.symlink(src, dst)
+    except OSError:
+        shutil.copyfile(src, dst)
+PY
+	if LA_MODEL="${sub}/model.gguf" _la_run "${LA_DIR}/out.jsonl" "${LA_DIR}/err.txt" self "${LA_TEXT}" "destination=-:espeak_data=${sub}/espeak-ng-data" &&
+	   _la_check "${LA_DIR}/out.jsonl" shape; then
+		echo "model and espeak-ng data under ${sub}/: found"
+	else
+		_la_fail "non-ASCII paths" "${LA_DIR}/err.txt"; rc=1
+	fi
+	_la_cleanup
+	return ${rc}
+}
+
+# The output is input 0 unchanged: a 44.1 kHz stereo vocal with a 16 kHz mono
+# backing (written first in the graph) leaves the output at 44.1 kHz stereo.
+test_lyricsalign_output_format() {
+	_la_inputs || return 2
+	_la_workdir
+	local rc=0
+	if LA_LOGLEVEL=info _la_run "${LA_DIR}/out.jsonl" "${LA_DIR}/err.txt" \
+	     "anullsrc=r=16000:cl=mono[b];[0:a]aresample=44100,aformat=channel_layouts=stereo[v]" "${LA_TEXT}" "destination=-" &&
+	   _la_check "${LA_DIR}/out.jsonl" shape &&
+	   grep -E "Stream #0:0.*44100 Hz, stereo" "${LA_DIR}/err.txt" >/dev/null; then
+		echo "output stays 44100 Hz stereo with a 16 kHz mono backing"
+	else
+		_la_fail "output format" "${LA_DIR}/err.txt"; grep -E "Stream #0:0" "${LA_DIR}/err.txt" | sed 's/^/   | /'; rc=1
 	fi
 	_la_cleanup
 	return ${rc}
