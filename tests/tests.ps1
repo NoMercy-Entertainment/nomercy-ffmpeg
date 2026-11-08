@@ -366,9 +366,14 @@ run_custom_test "stemsplit_spleeter_ab" { Test-StemsplitSpleeterAB -FFmpegExe "$
 # binary) the real-model checks of lib/lyricsalign.sh. Without the assets, or
 # without Git Bash, every check skips with a reason.
 run_test "lyricsalign" "-hide_banner -filters | findstr lyricsalign" "lyricsalign"
+# A plain script block, on purpose: run_custom_test invokes it at once, so $fn
+# still holds this iteration's name. GetNewClosure() would run the block in a
+# module of its own, where the dot-sourced Test-Lyricsalign is not visible once
+# tests.ps1 is itself called from verify-rc.ps1 (the RC verify path): the RC
+# verify of v1.0.46-rc on windows-x86_64 died on exactly that.
 foreach ($fn in (Get-LyricsalignFunctions)) {
     $label = $fn -replace '^test_', ''
-    run_custom_test $label { Test-Lyricsalign -Function $fn -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }.GetNewClosure()
+    run_custom_test $label { Test-Lyricsalign -Function $fn -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 }
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
