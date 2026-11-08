@@ -787,8 +787,21 @@ lib_private_flags="Libs.private: -lstdc++"
     echo "${lib_flags}"
     echo "${lib_private_flags}"
     # OpenMP is off on both windows targets, so consumers must not be told to
-    # compile with -fopenmp either -- same Cflags line on every platform.
-    echo "Cflags: -I\${includedir}"
+    # compile with -fopenmp either -- same Cflags line on every platform,
+    # plus one macro on the Vulkan builds. GGML_USE_VULKAN is how
+    # af_stemsplit.c (1.2.0+) learns at compile time that ggml-vulkan is linked
+    # in: its support statement ("Backends enabled for use_gpu=auto: ...") is
+    # a string literal, and use_gpu=auto takes only the backends it names. A
+    # build that links ggml-vulkan without the macro says "none." and auto
+    # stays on the CPU -- safe, but no GPU is ever used (ffmpeg-stemsplit
+    # docs/integration.md, "For whoever builds the ffmpeg"). No FFmpeg unit
+    # and no installed whisper/ggml header tests the macro; ggml itself only
+    # reads it inside its own compiled registry. Metal is deliberately not
+    # announced the same way: stemsplit enables no Metal backend for auto
+    # (its design G12), so darwin-arm64 keeps the plain line.
+    nm_whisper_cflags="-I\${includedir}"
+    [[ ${NM_VULKAN} == 1 ]] && nm_whisper_cflags="${nm_whisper_cflags} -DGGML_USE_VULKAN"
+    echo "Cflags: ${nm_whisper_cflags}"
     echo "Requires: "
     echo "Requires.private: "
 } >${PREFIX}/lib/pkgconfig/whisper.pc

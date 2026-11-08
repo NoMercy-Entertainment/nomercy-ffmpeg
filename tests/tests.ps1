@@ -348,7 +348,8 @@ run_custom_test "whisper_vad_threads" { Test-WhisperVadThreads -FFmpegExe "$Work
 # #119 segments and words end inside their window (also needs the VAD model).
 run_custom_test "whisper_segment_ends" { Test-WhisperSegmentEnds -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 
-# stemsplit 1.1.0 release gates (lib/stemsplit.ps1, through Git Bash): the
+# stemsplit release gates (lib/stemsplit.ps1, through Git Bash; 1.1.0's
+# three, with 1.2.0's use_gpu=auto runs in the clean-exit loop): the
 # stemsplit tag's own suite with the tiny RoFormer models, 20/20 clean exits,
 # and Spleeter stems byte-identical with the previous release. They need the
 # assets tests/lib/stemsplit-assets.sh fetches (STEMSPLIT_ASSETS_DIR, or a

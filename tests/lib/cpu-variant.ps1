@@ -261,6 +261,25 @@ function Test-VulkanPlatformHasBackend {
     return ($Platform -ne 'linux-x86_64' -and $Platform -notmatch 'darwin')
 }
 
+# The last sentence of stemsplit's support statement, per build flavour: the
+# backends use_gpu=auto may take. stemsplit 1.2.0 fixes it at compile time
+# from GGML_USE_VULKAN in whisper.pc's Cflags (scripts/48-whisper.sh), set on
+# exactly the platforms Test-VulkanPlatformHasBackend names. A string literal
+# in the filter description, so greppable without running the binary. Metal
+# is not enabled for auto in any build (stemsplit design G12).
+function Get-StemsplitAutoBackendsExpected {
+    param([string]$Platform)
+    if (Test-VulkanPlatformHasBackend $Platform) { return 'vulkan' } else { return 'none' }
+}
+
+# True if the binary announces exactly the given list and not the other one.
+function Test-StemsplitAutoBackendsAnnounced {
+    param([string]$Bin, [string]$List)
+    $other = if ($List -eq 'vulkan') { 'none' } else { 'vulkan' }
+    return ((Test-BinaryContainsString -Bin $Bin -Needle "Backends enabled for use_gpu=auto: $List.") -and
+            -not (Test-BinaryContainsString -Bin $Bin -Needle "Backends enabled for use_gpu=auto: $other."))
+}
+
 # The fork-and-probe ICD guard is compiled only for non-Windows, non-Apple.
 function Test-VulkanPlatformHasGuard {
     param([string]$Platform)

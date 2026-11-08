@@ -208,6 +208,20 @@ function Assert-VulkanBackendPresent($bin, $platform) {
     }
 }
 
+# stemsplit's support statement must name the backends use_gpu=auto may take
+# on THIS build: 'vulkan.' where ggml-vulkan is linked in, 'none.' elsewhere.
+# Baked in at compile time from GGML_USE_VULKAN in whisper.pc's Cflags, and
+# the filter trusts it: a Vulkan build that says 'none.' never takes a GPU
+# under auto. A string search, so it runs for windows-aarch64 too.
+function Assert-StemsplitAutoBackends($bin, $platform) {
+    $expected = Get-StemsplitAutoBackendsExpected $platform
+    if (Test-StemsplitAutoBackendsAnnounced -Bin $bin -List $expected) {
+        Write-Host "✅ $(Split-Path $bin -Leaf): stemsplit's support statement enables '$expected' for use_gpu=auto on $platform"
+    } else {
+        Fail "$(Split-Path $bin -Leaf): stemsplit's support statement must end 'Backends enabled for use_gpu=auto: $expected.' on $platform (GGML_USE_VULKAN in whisper.pc's Cflags decides it)"
+    }
+}
+
 # Nothing may regress for a user without a GPU - the constraint that outranks
 # every performance goal on this branch. A CI runner has no GPU.
 function Assert-VulkanStartup($bin, $platform) {
@@ -233,6 +247,7 @@ function Assert-VulkanStartup($bin, $platform) {
 # come before the cross-exec early-return, not after it.
 Assert-CpuVariantDispatcherPresent $ffmpeg $Platform
 Assert-VulkanBackendPresent $ffmpeg $Platform
+Assert-StemsplitAutoBackends $ffmpeg $Platform
 Assert-MetalBackendPresent $ffmpeg $Platform
 
 # Cross-exec platforms: never execute — validate PE headers and stop here.
@@ -300,7 +315,8 @@ if ([string]::IsNullOrEmpty($tsOut)) { Fail 'trailingsilence: empty metadata ext
 if ($tsOut -ne '1') { Fail "trailingsilence did not detect the tail (got '$tsOut')" }
 Write-Host "✅ trailingsilence detected the padded tail (detected=$tsOut)"
 
-# stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; the design is
+# stemsplit release gates, 1.1.0's three plus 1.2.0's use_gpu=auto runs in
+# the clean-exit loop (contract §7 rule 7 and §8; the design is
 # docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md), the
 # same three checks smoke.sh runs, through lib/stemsplit.ps1. They need the
 # assets tests/lib/stemsplit-assets.sh fetches, which the workflow provides
@@ -324,8 +340,8 @@ function Invoke-StemsplitCheck($name, [scriptblock]$block) {
         }
     }
 }
-Invoke-StemsplitCheck 'stemsplit v1.1.0 suite with the tiny RoFormer models and Spleeter' { Test-StemsplitSuite -FFmpegExe $ffmpeg -Platform $Platform }
-Invoke-StemsplitCheck 'stemsplit 20/20 clean exits, Spleeter and RoFormer' { Test-StemsplitCleanExit -FFmpegExe $ffmpeg -Platform $Platform }
+Invoke-StemsplitCheck 'stemsplit suite (the pinned tag) with the tiny RoFormer models and Spleeter' { Test-StemsplitSuite -FFmpegExe $ffmpeg -Platform $Platform }
+Invoke-StemsplitCheck 'stemsplit 20/20 clean exits, Spleeter and RoFormer, and RoFormer under use_gpu=auto' { Test-StemsplitCleanExit -FFmpegExe $ffmpeg -Platform $Platform }
 Invoke-StemsplitCheck 'stemsplit Spleeter stems byte-identical with the previous release' { Test-StemsplitSpleeterAB -FFmpegExe $ffmpeg -Platform $Platform }
 
 # lyricsalign (#126): the real-model checks of tests/lib/lyricsalign.sh

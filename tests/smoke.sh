@@ -176,6 +176,23 @@ assert_vulkan_backend_present() {  # bin, platform
   fi
 }
 
+# stemsplit's support statement must name the backends use_gpu=auto may take
+# on THIS build: "vulkan." where ggml-vulkan is linked in, "none." elsewhere.
+# The list is baked in at compile time from GGML_USE_VULKAN in whisper.pc's
+# Cflags (scripts/48-whisper.sh), and the filter trusts it: a Vulkan build
+# that says "none." never takes a GPU under auto, silently and forever. A grep
+# over the file, so it runs for the cross-exec platforms too.
+assert_stemsplit_auto_backends() {  # bin, platform
+  local bin="$1" platform="$2" expected
+  expected="$(stemsplit_auto_backends_expected "${platform}")"
+  if stemsplit_auto_backends_announced "${bin}" "${expected}"; then
+    ok "stemsplit: the support statement enables '${expected}' for use_gpu=auto on ${platform}"
+  else
+    echo "   found: $(grep -ao 'Backends enabled for use_gpu=auto: [a-z, ]*\.' "${bin}" | sort -u | tr '\n' ' ')"
+    fail "stemsplit: the support statement must end 'Backends enabled for use_gpu=auto: ${expected}.' on ${platform} (GGML_USE_VULKAN in whisper.pc's Cflags decides it)"
+  fi
+}
+
 # Nothing may regress for a user without a GPU — the constraint that outranks
 # every performance goal on this branch. A CI runner has no GPU, which makes it
 # the most representative machine available for the case that produced every
@@ -280,6 +297,7 @@ ok "espeak-ng-data is in the archive ($(ls "${WORKSPACE}/espeak-ng-data" | grep 
 # to come before the cross-exec early-return, not after it.
 assert_cpu_variant_dispatcher_present "${ffmpeg_bin}" "${PLATFORM}"
 assert_vulkan_backend_present "${ffmpeg_bin}" "${PLATFORM}"
+assert_stemsplit_auto_backends "${ffmpeg_bin}" "${PLATFORM}"
 assert_metal_backend_present "${ffmpeg_bin}" "${PLATFORM}"
 
 # Cross-exec platforms: never execute — validate ELF headers and stop here.
@@ -365,7 +383,8 @@ run_whisper_check "whisper default thread count is not slower than one thread (#
 run_whisper_check "whisper vad_model with the default thread count (#115)" test_whisper_vad_threads
 run_whisper_check "whisper segments end inside the window that produced them (#119)" test_whisper_segment_ends
 
-# stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; the design is
+# stemsplit release gates, 1.1.0's three plus 1.2.0's use_gpu=auto runs in
+# the clean-exit loop (contract §7 rule 7 and §8; the design is
 # docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md). The
 # same shape as the whisper checks: they need the assets
 # tests/lib/stemsplit-assets.sh fetches, which the workflow provides on every
@@ -386,8 +405,10 @@ run_stemsplit_check() {  # name, function
      fail "${name} (exit ${rc})" ;;
   esac
 }
-run_stemsplit_check "stemsplit v1.1.0 suite with the tiny RoFormer models and Spleeter" test_stemsplit_suite
-run_stemsplit_check "stemsplit 20/20 clean exits, Spleeter and RoFormer" test_stemsplit_clean_exit
+# The tag whose suite the assets hold, written by tests/lib/stemsplit-assets.sh.
+STEMSPLIT_SUITE_TAG="$(cat "${STEMSPLIT_ASSETS_DIR:-$(dirname "${ffmpeg_bin}")/stemsplit-assets}/ffmpeg-stemsplit/.nm-suite-tag" 2>/dev/null || echo "(pinned tag)")"
+run_stemsplit_check "stemsplit ${STEMSPLIT_SUITE_TAG} suite with the tiny RoFormer models and Spleeter" test_stemsplit_suite
+run_stemsplit_check "stemsplit 20/20 clean exits, Spleeter and RoFormer, and RoFormer under use_gpu=auto" test_stemsplit_clean_exit
 run_stemsplit_check "stemsplit Spleeter stems byte-identical with the previous release" test_stemsplit_spleeter_ab
 
 # lyricsalign (#126): the real-model checks of tests/lib/lyricsalign.sh, the

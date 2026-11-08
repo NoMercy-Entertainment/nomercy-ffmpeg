@@ -4,6 +4,30 @@
 
 ### Unreleased
 
+- stemsplit 1.2.1: `use_gpu=auto` runs the RoFormer models on a Vulkan GPU
+  when the build enables the backend, the device is a real GPU, it beats the
+  CPU in a calibration and passes a self-check against the CPU's output;
+  otherwise the CPU, byte for byte. The default `use_gpu=0`, every Spleeter
+  output and every option's place are unchanged. The support statement ends
+  `Backends enabled for use_gpu=auto: vulkan.` on `linux-x86_64-hardware`,
+  Linux ARM64, Windows and FreeBSD and `none.` on `linux-x86_64` and macOS;
+  the Vulkan builds define `GGML_USE_VULKAN` in whisper's Cflags, which is how
+  the filter learns ggml-vulkan is linked in. New frame metadata
+  `lavfi.stemsplit.device`. The smoke gates run the 1.2.1 suite, twenty clean
+  exits under `use_gpu=auto` held to `use_gpu=0`'s bytes, and the suite's
+  devices block on lavapipe on the Linux hardware job.
+- keydetect 1.6.0: new `minor_profile` option, default `edma`, for the minor
+  row of the key correlation; `minor_profile=shaath` restores 1.5.0's key
+  decision exactly. Chords, every field and every other option are unchanged.
+  beatdetect stays at 1.4.0.
+- lyricsalign (#126): new audio filter for time-synced lyrics by CTC forced
+  alignment, a wav2vec2 phoneme model on ggml with espeak-ng phonemes, JSON
+  Lines output; espeak-ng 1.52.0 is linked statically and its `espeak-ng-data`
+  ships in every platform archive. The model lives in
+  nomercy-lyricsalign-models and is pinned by the test suites.
+- CI: the windows-aarch64 release gate runs on GitHub's hosted windows-11-arm
+  runner (#76); verify-rc leaves no files behind in the Lima and FreeBSD
+  guests, and fleet-health probes the Lima guest.
 - Linux x86_64: retain the canonical `linux-x86_64` artifact as a fully static
   CPU build for older Linux hosts. Add `linux-x86_64-hardware` for hardware
   acceleration with the host's glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and

@@ -14,6 +14,7 @@ trap 'rm -rf "$WORK"' EXIT
 add_backend_markers() {
   cat >> "$1" <<'EOF'
 # ggml_vulkan vkGetInstanceProcAddr
+# Backends enabled for use_gpu=auto: vulkan.
 # crash a statically linked
 # vulkan disabled for this process
 # could not finish identifying which
@@ -88,8 +89,19 @@ if [[ "$*" == *trailingsilence* ]]; then echo 'lavfi.trailingsilence.detected=1'
 EOF
 }
 
+# espeak-ng's data directory (#126): smoke.sh checks these files are in the
+# archive before anything else runs, so every stub workspace carries them.
+add_espeak_data() {  # dir
+  mkdir -p "$1/espeak-ng-data/lang/gmw"
+  local f
+  for f in phontab phonindex phondata intonations en_dict nl_dict lang/gmw/en-US; do
+    : > "$1/espeak-ng-data/${f}"
+  done
+}
+
 make_stub() {  # dir, name, version_string, exit_code
   local dir="$1" name="$2" ver="$3" code="$4"
+  add_espeak_data "${dir}"
   cat > "${dir}/${name}" <<EOF
 #!/usr/bin/env bash
 echo "${name} version ${ver} Copyright (c) the FFmpeg developers"
@@ -100,6 +112,7 @@ EOF
 
 make_execfmt_stub() {  # dir, name — emulates running a foreign-arch binary
   local dir="$1" name="$2"
+  add_espeak_data "${dir}"
   cat > "${dir}/${name}" <<EOF
 #!/usr/bin/env bash
 echo "${name}: cannot execute binary file: Exec format error" >&2
@@ -118,6 +131,7 @@ EOF
 # bricks itself on an override — what cpu_variant_startup_ok exists to catch.
 make_dispatcher_stub() {  # dir, name, version_string, exit_code, crash_on_override(0|1), variant(hardware|cpu)
   local dir="$1" name="$2" ver="$3" code="$4" crash="$5"
+  add_espeak_data "${dir}"
   cat > "${dir}/${name}" <<EOF
 #!/usr/bin/env bash
 # getenv("NOMERCY_GGML_CPU") -- marks this stub as dispatcher-enabled.
@@ -126,13 +140,19 @@ if [[ "${crash}" == "1" && -n "\${NOMERCY_GGML_CPU:-}" ]]; then
   exit 9
 fi
 EOF
-  [[ "${6:-hardware}" == cpu ]] || add_backend_markers "${dir}/${name}"
+  if [[ "${6:-hardware}" == cpu ]]; then
+    # stemsplit's support statement on a build without ggml-vulkan.
+    echo '# Backends enabled for use_gpu=auto: none.' >> "${dir}/${name}"
+  else
+    add_backend_markers "${dir}/${name}"
+  fi
   if [[ "$code" == 0 ]]; then add_codec_stub "${dir}/${name}"; fi
   printf 'echo "%s version %s Copyright (c) the FFmpeg developers"\nexit %s\n' "$name" "$ver" "$code" >> "${dir}/${name}"
   chmod +x "${dir}/${name}"
 }
 
 make_elf_stub() {  # A well-formed header for a cross-exec Linux ARM64 binary.
+  add_espeak_data "$1"
   {
     printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000\002\000\267\000\001\000\000\000'
     dd if=/dev/zero bs=28 count=1 2>/dev/null
@@ -145,6 +165,7 @@ make_elf_stub() {  # A well-formed header for a cross-exec Linux ARM64 binary.
 
 make_freebsd_elf_stub() {  # dir, name, Vulkan markers: all|none|backend|guard
   local dir="$1" name="$2" markers="$3"
+  add_espeak_data "${dir}"
   {
     printf '\177ELF\002\001\001\011\000\000\000\000\000\000\000\000\002\000\076\000\001\000\000\000'
     dd if=/dev/zero bs=28 count=1 2>/dev/null
@@ -192,6 +213,21 @@ echo '# crash a statically linked' >>"$d/ffmpeg"
 bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/cpu-guard.log" 2>&1
 rc=$?; [[ $rc -ne 0 ]] && grep -q 'CPU archive must not carry an ICD guard' "${WORK}/cpu-guard.log"
 expect "Linux CPU archive rejects a compiled ICD guard" 0 $?
+
+# stemsplit's support statement must match the build flavour (stemsplit 1.2.0:
+# GGML_USE_VULKAN in whisper.pc's Cflags decides it). A hardware archive that
+# says "none." would never take a GPU under use_gpu=auto; a CPU archive that
+# says "vulkan." promises a backend it does not carry.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0
+sed -i 's/use_gpu=auto: vulkan\./use_gpu=auto: none./' "$d/ffmpeg"
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64-hardware >"${WORK}/auto-none.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'support statement must end .Backends enabled for use_gpu=auto: vulkan\.' "${WORK}/auto-none.log"
+expect "Linux hardware archive whose stemsplit statement says none. fails" 0 $?
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0 cpu; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0 cpu
+sed -i 's/use_gpu=auto: none\./use_gpu=auto: vulkan./' "$d/ffmpeg"
+bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/auto-vulkan.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q 'support statement must end .Backends enabled for use_gpu=auto: none\.' "${WORK}/auto-vulkan.log"
+expect "Linux CPU archive whose stemsplit statement says vulkan. fails" 0 $?
 
 # Case 2: wrong version → fail (rc != 0)
 d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 7.0.0 0 0; make_dispatcher_stub "$d" ffprobe 7.0.0 0 0

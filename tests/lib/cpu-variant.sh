@@ -223,6 +223,27 @@ vulkan_platform_has_backend() {
 	esac
 }
 
+# The last sentence of stemsplit's support statement, per build flavour: the
+# backends use_gpu=auto may take. stemsplit 1.2.0 fixes it at compile time
+# from the macro GGML_USE_VULKAN, which scripts/48-whisper.sh puts in
+# whisper.pc's Cflags exactly where NM_VULKAN=1 -- the same platforms as
+# above. It is a string literal in the filter's description, so it is
+# greppable without running the binary, and a Vulkan build that lost the
+# macro is caught here: it would say "none." and auto would never take a GPU.
+# Metal is not enabled for auto in any build (stemsplit design G12), so
+# darwin-arm64 expects "none." like the CPU archive.
+stemsplit_auto_backends_expected() {
+	if vulkan_platform_has_backend "$1"; then echo vulkan; else echo none; fi
+}
+
+# True if the binary announces exactly the given list and not the other one.
+stemsplit_auto_backends_announced() { # bin, list
+	local other=vulkan
+	[[ "$2" == vulkan ]] && other=none
+	grep -aq "Backends enabled for use_gpu=auto: $2\." "$1" \
+		&& ! grep -aq "Backends enabled for use_gpu=auto: ${other}\." "$1"
+}
+
 # True if ggml's Vulkan backend is really linked in. Greppable, so it works on
 # the cross-exec platforms a runner cannot execute -- which, as with the CPU
 # dispatcher check above, are the ones with the least other evidence

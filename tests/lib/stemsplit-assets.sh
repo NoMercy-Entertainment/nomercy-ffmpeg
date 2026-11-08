@@ -8,7 +8,7 @@
 #
 # What it fetches, and why each one is pinned:
 #
-#   * the ffmpeg-stemsplit v1.1.0 source archive -- its tests/ directory is the
+#   * the ffmpeg-stemsplit v1.2.1 source archive -- its tests/ directory is the
 #     suite the gates run (design D1). The archive is the tag's, so the checks
 #     are the ones the filter was released with, not whatever the default
 #     branch holds this afternoon.
@@ -55,16 +55,22 @@ REF_PLATFORM="${PLATFORM}"
 # The new hardware variant shares the existing pinned x64 CPU reference.
 [[ "${REF_PLATFORM}" != linux-x86_64-hardware ]] || REF_PLATFORM=linux-x86_64
 
-STEMSPLIT_TAG=v1.1.0
+STEMSPLIT_TAG=v1.2.1
 FORGEJO=https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit
-# The suite comes from this commit on stemsplit's main, not from the tag: it is
-# the tag plus two tests-only commits, one that lets the suite run on Windows
-# and macOS (design D1a) and one that reads a GPU's refusal of the graph as the
-# CPU run it is (design D9). The filter in it is byte-identical with the tag's,
-# and FILTER_SHA is asserted below so that stays provable.
-SUITE_REF=a8b8ea3
-ARCHIVE_SHA=89f438ee54b9b6cc12837c8466a42fcf8d275aa67cc2826d0ed910955a226901
-FILTER_SHA=13d5583478829b97c743f70eb867335d1f75a7fd125018eff7bea34ecd86e3f4
+# The suite comes from the commit the tag points at. It carries the tests-only
+# change that makes the suite's devices block probe for lavapipe first and skip
+# itself loudly where there is none (a runner without a Vulkan loader, or a
+# machine with a real card). FILTER_SHA is asserted below so "the filter in the
+# archive is the tag's file" stays provable even if SUITE_REF ever moves off
+# the tag again.
+SUITE_REF=71d7523
+ARCHIVE_SHA=171c64eec54586f5aa983011da5cbd54e161911cfcceb99e54d9a2af1f0eef4f
+FILTER_SHA=594886e5963b9fc0b2234f5dde96ae463fec8ff9e3a8a2d4c2034ea9629191bb
+# The tiny RoFormer models are the v1.1.0 release asset still: no model file
+# and nothing in tests/make_tiny_models.sh or the converter changed between
+# v1.1.0 and v1.2.1 (git diff --stat v1.1.0..v1.2.1 on those paths is empty),
+# so the 1.2.1 suite's tiny tier runs on the same bytes 1.1.0's did.
+TINY_TAG=v1.1.0
 TINY_SHA=7b04652c855296e7d428ad5a130cf842e4da90eb16d2246fc7393284c42ea235
 SPLEETER_URL=https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/download/v2026.09.09/spleeter-2stems-f16.gguf
 SPLEETER_SHA=155dc9d2e2eef70ad633af98134df29a5273defaeb98ef013d46251faa69d0ad
@@ -72,17 +78,17 @@ SPLEETER_SHA=155dc9d2e2eef70ad633af98134df29a5273defaeb98ef013d46251faa69d0ad
 # The previous release: the one the A/B gate compares against. Bump all eight
 # lines together when a release ships; the digests are the ones GitHub reports
 # for the assets (gh release view --json assets).
-REF_VERSION=v1.0.44
+REF_VERSION=v1.0.45
 REF_BASE=https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/${REF_VERSION}
 ref_digest() {
 	case "$1" in
-	linux-x86_64)    echo 191d9ef68a43b2756b973cb5ca1c6563b876750bfa582ea06271a4977e19008b ;;
-	linux-aarch64)   echo 7072575443c972b947fcf38e488199361f697febd58e476b76993b6e9482701e ;;
-	windows-x86_64)  echo aed6833b59d6b44876841ef6dd6db85946b1f22e39741fd89e3d4f972ff54ec3 ;;
-	windows-aarch64) echo 80ab139dd3e99a9b4ca80c055e3362466c586df94d48474f396f64325ce23796 ;;
-	darwin-x86_64)   echo 515e3792c6f9a3373ccfeda447d845e8266b182d3dc48cd629331027b7667172 ;;
-	darwin-arm64)    echo 3031e87dcf67240ef07e479d9f37e648e537a85676e4c43e3423efac4c8acef0 ;;
-	freebsd-x86_64)  echo e956a5abf82f3fad0ecd32c9ce47bdad40e46e484b8497667980c71ca5567332 ;;
+	linux-x86_64)    echo ca5e9bbd91e028fd043073f063aee32f2315efe121b12cf44c8c8d97eda5eb57 ;;
+	linux-aarch64)   echo b21a4125f92e090f1126cc55068281dffb69d74856bfb6e1e4bb3b82c7786e3b ;;
+	windows-x86_64)  echo 731298b37b013f49f60532f3d1a382db1350a01a21c16c9630c5aea9c0c6d649 ;;
+	windows-aarch64) echo f7e3fd03b61c42840ecc9479f8b933aa25fef7e05669b79c8e0e10f944b77080 ;;
+	darwin-x86_64)   echo 5c05f508db5135bffe7b1d988314b2be1fb15e3e2234c2b70fa086935c238632 ;;
+	darwin-arm64)    echo e172947af99052d5b1bd72c32a1555c53d6a323ef1f93d6bf0b71945e49ec65b ;;
+	freebsd-x86_64)  echo 4d6682c8a3dd174667a6d23ea691fe49e218d047270103bea7ccecff93b72f0a ;;
 	*) return 1 ;;
 	esac
 }
@@ -138,6 +144,7 @@ if [[ ! -f "${DIR}/ffmpeg-stemsplit/tests/run_tests.sh" || "$(cat "${DIR}/ffmpeg
 	rm -rf "${DIR}/ffmpeg-stemsplit"
 	tar -xzf "${DIR}/ffmpeg-stemsplit-${SUITE_REF}.tar.gz" -C "${DIR}"
 	echo "${SUITE_REF}" >"${DIR}/ffmpeg-stemsplit/.nm-suite-ref"
+	echo "${STEMSPLIT_TAG}" >"${DIR}/ffmpeg-stemsplit/.nm-suite-tag"
 	say "unpacked: ffmpeg-stemsplit/ at ${SUITE_REF} (suite for ${STEMSPLIT_TAG})"
 fi
 for f in tests/run_tests.sh tests/gen_audio.py docs/integration.md src/af_stemsplit.c; do
@@ -150,11 +157,11 @@ got="$(sha256_of "${DIR}/ffmpeg-stemsplit/src/af_stemsplit.c")"
 say "verified: src/af_stemsplit.c is the ${STEMSPLIT_TAG} file"
 
 # 2. The tiny RoFormer models.
-fetch "${FORGEJO}/releases/download/${STEMSPLIT_TAG}/stemsplit-tiny-models-${STEMSPLIT_TAG}.tar.xz" \
-	"${DIR}/stemsplit-tiny-models-${STEMSPLIT_TAG}.tar.xz" "${TINY_SHA}"
+fetch "${FORGEJO}/releases/download/${TINY_TAG}/stemsplit-tiny-models-${TINY_TAG}.tar.xz" \
+	"${DIR}/stemsplit-tiny-models-${TINY_TAG}.tar.xz" "${TINY_SHA}"
 if [[ ! -f "${DIR}/tiny/tiny-mel-v1.gguf" ]]; then
 	rm -rf "${DIR}/tiny"
-	tar -xJf "${DIR}/stemsplit-tiny-models-${STEMSPLIT_TAG}.tar.xz" -C "${DIR}"
+	tar -xJf "${DIR}/stemsplit-tiny-models-${TINY_TAG}.tar.xz" -C "${DIR}"
 	say "unpacked: tiny/ ($(ls "${DIR}/tiny" | wc -l | tr -d ' ') entries)"
 fi
 [[ -f "${DIR}/tiny/tiny-mel-v1.gguf" && -f "${DIR}/tiny/tiny-bs-v1.gguf" ]] || die "the tiny tarball did not yield tiny-mel-v1.gguf and tiny-bs-v1.gguf"

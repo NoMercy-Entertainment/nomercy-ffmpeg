@@ -264,7 +264,7 @@ Our custom FFmpeg builds include several features **NOT** available in official 
 |-----------|------|--------------|
 | **`keydetect`** | Audio filter | Musical key and chord detection |
 | **`beatdetect`** | Audio filter | Tempo, beat grid and confidence as `lavfi.beatdetect.*` frame metadata; octave decided from the onsets, not from a preferred range |
-| **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems on ggml: Spleeter 2stems, and since v1.0.45 (stemsplit 1.1.0) Mel-Band RoFormer and BS-RoFormer ensembles with StemForge's presets |
+| **`stemsplit`** | Audio filter | Music source separation into vocal and accompaniment stems on ggml: Spleeter 2stems, and since v1.0.45 (stemsplit 1.1.0) Mel-Band RoFormer and BS-RoFormer ensembles with StemForge's presets; since stemsplit 1.2.1 the RoFormer models run on a Vulkan GPU with `use_gpu=auto` |
 | **`trailingsilence`** | Audio filter | Reports where a stream's audible content ends as `lavfi.trailingsilence.*` frame metadata (and an optional JSON report); never cuts anything itself |
 | **`lyricsalign`** | Audio filter | Time-synced lyrics by CTC forced alignment: known lyric text placed on a vocal stem with a wav2vec2 phoneme model on ggml and espeak-ng phonemes; writes JSON Lines, skips a line it is not sure of, never invents a time (#126) |
 | **OCR subtitle encoder** | Codec | Converts bitmap subtitles (DVD/Blu-ray) to WebVTT text using Tesseract OCR |
@@ -408,8 +408,9 @@ upstream advisory.
 
 #### 🎤 **`stemsplit` 1.1.0 — RoFormer ensembles**
 
-Since v1.0.45 the binaries ship stemsplit 1.1.0, which adds two transformer
-architectures next to Spleeter: **Mel-Band RoFormer** and **BS-RoFormer**,
+Since v1.0.45 the binaries ship stemsplit's RoFormer support (1.1.0 then,
+1.2.1 now), which adds two transformer architectures next to Spleeter:
+**Mel-Band RoFormer** and **BS-RoFormer**,
 with exactly the four models StemForge's "Full" presets use. Same filter,
 same two stems, same output pads; every Spleeter command line keeps working
 unchanged. The full reference, including how every number below was
@@ -426,7 +427,7 @@ repository the filter is fetched from at build time.
 | model files | one, 39 MB | four, 639 MB to 913 MB each, 3.38 GB together |
 | memory | about 194 MiB | the filter asks for 4.63 GB and refuses to run on a machine with less than twice that |
 | speed | 30 s of audio in 3.3 to 4.1 s on an 8-core desktop CPU (7 to 9x realtime, v1.0.45) | one minute of audio in 41 to 43 minutes at 8 threads on a shared Xeon E5-2680 v4 (a lower bound) |
-| GPU | opt-in (`use_gpu=1`) | none in 1.1.0: it runs on the CPU, `use_gpu` only affects Spleeter |
+| GPU | opt-in (`use_gpu=1`) | opt-in (`use_gpu=auto`) since stemsplit 1.2.1: a real Vulkan GPU, when the build enables it and the device computes like the CPU; otherwise the CPU, byte for byte — see [GPU acceleration](#-gpu-acceleration--whisper-and-stemsplit) |
 
 **The presets** are StemForge's recipes. Each takes the four files by their
 published names from `model_dir` (empty, the default, means the working
@@ -487,7 +488,7 @@ so giving a mode with a preset is refused.
 | `median` | per STFT bin, the median of the real parts and of the imaginary parts |
 
 **RoFormer options** (the Spleeter-only options are `highband`, `exponent`,
-`bleed`, `smooth`, `overlap`, `use_gpu` and `gpu_device`; `threads` applies
+`bleed`, `smooth` and `overlap`; `threads`, `use_gpu` and `gpu_device` apply
 to both):
 
 | Option | Type | Default | Description |
@@ -644,7 +645,7 @@ as described below.
 | filter | default | why |
 |---|---|---|
 | `whisper` | **GPU on** (`use_gpu=1`) | Faster, and the transcript is unchanged — see below. |
-| `stemsplit` | **CPU** (`use_gpu=0`) | Opt in with `use_gpu=1`. What that buys you depends on the backend — see below. |
+| `stemsplit` | **CPU** (`use_gpu=0`) | Spleeter: opt in with `use_gpu=1`; what that buys you depends on the backend — see below. RoFormer: pass `use_gpu=auto` (stemsplit 1.2.1), which takes a real Vulkan GPU only when it computes like the CPU — see below. |
 
 **Measured — `stemsplit` on a GPU.** 30 s of audio, twenty runs each on one
 RTX 3070, whole-process wall time including model load, so the filter itself
@@ -687,8 +688,31 @@ is settled, `stemsplit` will not move anyone's audio without being asked:
 ffmpeg -i in.mp3 -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=vocals:use_gpu=1" out.wav
 ```
 
-**Options.** `use_gpu=0|1` on both filters, and `gpu_device=<n>` to pick a GPU
-on a machine with more than one. An out-of-range index does not silently use
+**`use_gpu=auto` — RoFormer on a GPU (stemsplit 1.2.1).** Spleeter stays on
+the CPU under `auto`. The RoFormer models go to the best-ranked device of a
+backend the build enables for `auto`: the support statement's last sentence
+(`ffmpeg -h filter=stemsplit`) says `Backends enabled for use_gpu=auto: vulkan.`
+on `linux-x86_64-hardware`, Linux ARM64, Windows and FreeBSD, and `none.` on
+`linux-x86_64` and macOS, where `auto` is the CPU. Metal is not enabled for
+`auto`. A device is taken only when it is a real GPU (no software rasteriser),
+wins one calibration against the CPU, passes a self-check against the CPU's
+mask on every model (85 dB SNR on 32 frames) and holds the work; anything
+else leaves that model on the CPU with a WARNING and the CPU's bytes, so an
+`auto` run on a machine without a usable GPU gives `use_gpu=0`'s output byte
+for byte. `gpu_device=<n>` other than 0 pins that device. The stemsplit
+project's GPU gate on a GTX 1060 3GB: all four models within 45 dB of the CPU
+(worst 74.3 dB), `preset=full` on ten held-out tracks within 1e-6 dB SDR of
+the CPU run, 40 of 40 clean exits. Frame metadata says what ran per model:
+`lavfi.stemsplit.backend` is `vulkan`, `cpu` or a mix like `vulkan|cpu`, and
+`lavfi.stemsplit.device` names the card.
+
+```bash
+ffmpeg -i song.flac -filter_complex "[0:a]stemsplit=preset=full:use_gpu=auto[voc][acc]" -map "[voc]" vocals.flac -map "[acc]" instrumental.flac
+```
+
+**Options.** `use_gpu=0|1` on both filters (`auto` as well on `stemsplit`), and
+`gpu_device=<n>` to pick a GPU on a machine with more than one. An
+out-of-range index does not silently use
 the wrong GPU — it says so and falls back to the CPU:
 
 ```
