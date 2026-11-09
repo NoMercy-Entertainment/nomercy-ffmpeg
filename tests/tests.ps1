@@ -313,6 +313,12 @@ run_hw_test "VPL" vpl "-y -i $SampleVideo -c:v h264_vpl $TestRoot\test_vpl.mp4" 
 run_hw_test "AMF" amf "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4" "amf"
 run_hw_test "VIDEOTOOLBOX" videotoolbox "-y -i $SampleVideo -c:v h264_videotoolbox $TestRoot\test_vt.mp4" "videotoolbox"
 
+# Direct3D 12 decoding is compiled into every Windows build. Presence only:
+# whether a GPU and a driver are there is the machine's business, the path
+# being in the binary is the build's. It was missing from every x86_64 build
+# up to v1.0.45 without anything saying so.
+run_test "d3d12va" "-hide_banner -hwaccels | findstr d3d12va" "d3d12va"
+
 # Additional format tests
 run_test "libbluray" "-hide_banner -protocols | findstr bluray" "bluray"
 run_test "libdvdread" "-hide_banner -version | findstr dvdread" "dvdread"

@@ -47,6 +47,13 @@
   CUDA decode and whisper Vulkan inference pass on an RTX 3070 under WSL2. FFmpeg's
   tested Vulkan upload/scale/download video path fails cleanly through Dozen;
   Linux ARM64 and FreeBSD are unchanged.
+- Windows x86_64: D3D12VA is now in the build (hardware decoding for H.264,
+  HEVC, AV1, VP9, MPEG-2 and VC-1, the H.264/HEVC/AV1 encoders and the
+  scale/deinterlace/mestimate filters). It was silently missing: the x86_64
+  toolchain's mingw-w64 11.0.1 has no `d3d12video.h`, so FFmpeg's configure
+  left it out. `scripts/47-dxva.sh` now hands FFmpeg the Direct3D 12 headers
+  of mingw-w64 14.0.0, pinned by digest, and enables it explicitly on both
+  Windows builds. Windows ARM64 already had it.
 - FreeBSD: enable Vulkan/libplacebo and ggml Vulkan for whisper/stemsplit by
   linking the FreeBSD base runtime dynamically. Codec libraries remain static,
   and no `.so` files are shipped with FFmpeg. FreeBSD 14.3 is the supported

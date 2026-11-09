@@ -1240,7 +1240,7 @@ that every other part of the binary still supports.
 #### 🔧 **Platform-Specific Optimizations**
 | Platform | Hardware Acceleration |
 |----------|----------------------|
-| **Windows** | DXVA2 + D3D11VA + AMF + NVENC/CUDA + QuickSync |
+| **Windows** | DXVA2 + D3D11VA + D3D12VA + AMF + NVENC/CUDA + QuickSync (x86_64); DXVA2 + D3D11VA + D3D12VA + MediaFoundation (ARM64) |
 | **macOS** | VideoToolbox, ad-hoc code-signed binaries (required on Apple Silicon) |
 | **Linux x86_64** | VAAPI + NVENC/CUDA + AMF + QuickSync (libvpl) + Vulkan, with host drivers and glibc 2.35+; detected at run time |
 | **Linux ARM64** | Fully static, with VAAPI + NVENC/CUDA + Vulkan compiled in and the Vulkan driver guard; no ARM GPU has ever been exercised |
@@ -1260,7 +1260,7 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 ### 🔧 **Build Configuration Summary**
 
 As embedded in the v1.0.45 linux-x86_64 and windows-x86_64 binaries
-(`ffmpeg -version` prints a platform's exact line). The three flags marked
+(`ffmpeg -version` prints a platform's exact line). The flags marked
 *next release* are on `dev` and are not in v1.0.45:
 
 ```bash
@@ -1291,6 +1291,7 @@ As embedded in the v1.0.45 linux-x86_64 and windows-x86_64 binaries
 --enable-libvpl                  # Intel QuickSync
 --enable-vaapi --enable-libdrm   # Linux only
 --enable-dxva2 --enable-d3d11va  # Windows only
+--enable-d3d12va                 # Windows only: decode, H.264/HEVC/AV1 encode, scale/deinterlace filters (next release on x86_64; ARM64 already had it)
 --enable-vulkan --enable-libplacebo   # FFmpeg 9.0 has no --enable-libshaderc: the Vulkan shaders are compiled with a host glslc at build time
 --enable-opencl
 
