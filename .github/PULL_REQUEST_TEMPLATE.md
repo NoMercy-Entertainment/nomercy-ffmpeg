@@ -19,7 +19,6 @@ Run the full manual suite on each platform — `tests/tests.sh` (unix) or `tests
 
 <!-- TEST-CHECKLIST-START -->
 - [ ] linux-x86_64 — tested on real hardware, `tests/tests.sh` ✓, version correct
-- [ ] linux-x86_64-hardware — tested on real hardware, `tests/tests.sh` ✓, version correct
 - [ ] linux-aarch64 — tested on real hardware, `tests/tests.sh` ✓, version correct
 - [ ] windows-x86_64 — tested on real hardware, `tests/tests.ps1` ✓, version correct
 - [ ] windows-aarch64 — tested on real hardware, `tests/tests.ps1` ✓, version correct

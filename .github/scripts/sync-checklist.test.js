@@ -119,7 +119,7 @@ assert.strictEqual(rewriteChecklist('no markers', () => true), null, 'refuses a 
 // rewriteChecklist -- a test shaped that way still passes with a platform
 // missing from the regex, which is the failure it is supposed to catch.
 for (const platform of [
-  'linux-x86_64', 'linux-x86_64-hardware', 'linux-aarch64', 'windows-x86_64', 'windows-aarch64',
+  'linux-x86_64', 'linux-aarch64', 'windows-x86_64', 'windows-aarch64',
   'darwin-x86_64', 'darwin-arm64', 'freebsd-x86_64',
 ]) {
   const label = `${platform} — tested on real hardware, \`tests/tests.sh\` ✓, version correct`;

@@ -145,10 +145,6 @@ jobs:
             ext: tar.gz
             labels: '["self-hosted","ffmpeg-verify","linux-x86_64"]'
             via: native
-          - platform: linux-x86_64-hardware
-            ext: tar.gz
-            labels: '["self-hosted","ffmpeg-verify","linux-x86_64"]'
-            via: native
           - platform: linux-aarch64
             ext: tar.gz
             labels: '["self-hosted","ffmpeg-verify","linux-aarch64"]'
@@ -217,10 +213,9 @@ jobs:
               "import json,sys,os; print(next((a['url'] for a in json.load(sys.stdin) if a['name']==os.environ['N']),''))"
           }
 
-          # The exact name, not "contains the platform": linux-x86_64 is a
-          # substring of linux-x86_64-hardware, and with a substring match the
-          # linux-x86_64 job verified the hardware archive (v1.0.46-rc) while
-          # the CPU archive went untested.
+          # The exact name, not "contains the platform", so that a job can
+          # never be handed the archive of a platform whose name merely
+          # starts the same.
           ARCHIVE=$(printf '%s' "$ASSETS" | S="-${PLATFORM}-${TAG}.${EXT}" python3 -c \
             "import json,sys,os; print(next((a['name'] for a in json.load(sys.stdin) if a['name'].endswith(os.environ['S'])),''))")
           [[ -n "$ARCHIVE" ]] || { echo "::error::no ${PLATFORM} archive in ${TAG}"; exit 1; }

@@ -9,13 +9,13 @@
   CPU in a calibration and passes a self-check against the CPU's output;
   otherwise the CPU, byte for byte. The default `use_gpu=0`, every Spleeter
   output and every option's place are unchanged. The support statement ends
-  `Backends enabled for use_gpu=auto: vulkan.` on `linux-x86_64-hardware`,
-  Linux ARM64, Windows and FreeBSD and `none.` on `linux-x86_64` and macOS;
+  `Backends enabled for use_gpu=auto: vulkan.` on Linux x86_64,
+  Linux ARM64, Windows and FreeBSD and `none.` on macOS;
   the Vulkan builds define `GGML_USE_VULKAN` in whisper's Cflags, which is how
   the filter learns ggml-vulkan is linked in. New frame metadata
   `lavfi.stemsplit.device`. The smoke gates run the 1.2.1 suite, twenty clean
   exits under `use_gpu=auto` held to `use_gpu=0`'s bytes, and the suite's
-  devices block on lavapipe on the Linux hardware job.
+  devices block on lavapipe on the Linux x86_64 job.
 - keydetect 1.6.0: new `minor_profile` option, default `edma`, for the minor
   row of the key correlation; `minor_profile=shaath` restores 1.5.0's key
   decision exactly. Chords, every field and every other option are unchanged.
@@ -28,19 +28,22 @@
 - CI: the windows-aarch64 release gate runs on GitHub's hosted windows-11-arm
   runner (#76); verify-rc leaves no files behind in the Lima and FreeBSD
   guests, and fleet-health probes the Lima guest.
-- Linux x86_64: retain the canonical `linux-x86_64` artifact as a fully static
-  CPU build for older Linux hosts. Add `linux-x86_64-hardware` for hardware
-  acceleration with the host's glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and
-  newer): it is compiled and linked against a glibc 2.35 sysroot from Ubuntu
+- **Breaking, Linux x86_64:** the `linux-x86_64` archive now uses the host's
+  glibc and needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and newer); it
+  is no longer a fully static executable. It is still one archive: hardware
+  acceleration (NVENC/CUDA, VAAPI, QuickSync, AMF, Vulkan) is compiled in, is
+  detected at run time and is not used on a machine without it. On an older
+  system the loader refuses the binary before FFmpeg starts. It is compiled
+  and linked against a glibc 2.35 sysroot from Ubuntu
   22.04 instead of the 24.04 base image's 2.39, and the build rejects any
   import above GLIBC_2.35. Codecs, C++ and OpenMP stay
-  static; neither archive ships `.so` files. Disable GPU dependencies/backends
-  in the CPU artifact to avoid GPU-processing driver loads into static glibc.
-  Matching the host's glibc version does not make that combination safe. Both
-  production archives pass ELF, package and smoke gates. Whisper/stemsplit CPU
-  inference passes for both archives on glibc 2.35/2.36/2.39/2.43 hosts (the
-  hardware archive starts and infers on Ubuntu 22.04 and Debian 12, checked by
-  the new `tests/lib/hardware-hosts.sh` in CI); final hardware H.264/HEVC NVENC,
+  static; the archive ships no `.so` files. The reason for the change: a GPU
+  driver loaded into a static glibc executable gives the process two C
+  runtimes, and matching the host's glibc version does not make that
+  combination safe. The archive passes ELF, package and smoke gates.
+  Whisper/stemsplit CPU inference passes on glibc 2.35/2.36/2.39/2.43 hosts
+  (it starts and infers on Ubuntu 22.04 and Debian 12, checked by
+  the new `tests/lib/glibc-hosts.sh` in CI); H.264/HEVC NVENC,
   CUDA decode and whisper Vulkan inference pass on an RTX 3070 under WSL2. FFmpeg's
   tested Vulkan upload/scale/download video path fails cleanly through Dozen;
   Linux ARM64 and FreeBSD are unchanged.

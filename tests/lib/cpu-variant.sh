@@ -213,12 +213,12 @@ test_cpu_variant() {
 # tests/smoke.sh -- the script CI actually runs on every platform -- and
 # tests/tests.sh can assert the same things in their own reporting voice.
 #
-# Linux x64's fully static CPU archive omits Vulkan. Its hardware archive and
-# FreeBSD use the system runtime with static codec libraries. Both Darwin
-# targets omit Vulkan; arm64 uses Metal.
+# Every build carries ggml's Vulkan backend except the two Darwin targets,
+# which omit Vulkan; arm64 uses Metal. Linux x64 and FreeBSD use the system
+# runtime with static codec libraries.
 vulkan_platform_has_backend() {
 	case "$1" in
-	linux-x86_64 | *darwin*) return 1 ;;
+	*darwin*) return 1 ;;
 	*) return 0 ;;
 	esac
 }
@@ -231,7 +231,7 @@ vulkan_platform_has_backend() {
 # greppable without running the binary, and a Vulkan build that lost the
 # macro is caught here: it would say "none." and auto would never take a GPU.
 # Metal is not enabled for auto in any build (stemsplit design G12), so
-# darwin-arm64 expects "none." like the CPU archive.
+# darwin-arm64 expects "none.".
 stemsplit_auto_backends_expected() {
 	if vulkan_platform_has_backend "$1"; then echo vulkan; else echo none; fi
 }
@@ -278,7 +278,7 @@ vulkan_guard_compiled_in() {
 
 vulkan_platform_has_guard() {
 	case "$1" in
-	linux-x86_64 | *windows* | *darwin*) return 1 ;;
+	*windows* | *darwin*) return 1 ;;
 	*) return 0 ;;
 	esac
 }

@@ -26,8 +26,7 @@ Our build system uses a modular Docker-based approach: a shared base image ([ffm
 ### Supported Platforms
 | Platform | Architectures | Built in CI |
 |----------|--------------|-------------|
-| **Linux** | x86_64, aarch64 (ARM64) | ✅ |
-| **Linux hardware variant** | x86_64, glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and newer) | ✅ |
+| **Linux** | x86_64 (glibc 2.35 or newer: Ubuntu 22.04, Debian 12 and newer), aarch64 (ARM64) | ✅ |
 | **Windows** | x86_64 | ✅ |
 | **macOS** | x86_64, Apple Silicon (ARM64) | ✅ |
 | **FreeBSD** | x86_64 | ✅ |
@@ -35,32 +34,35 @@ Our build system uses a modular Docker-based approach: a shared base image ([ffm
 
 Each release ships `ffmpeg`, `ffprobe`, and `ffplay` (where built), with the
 codec libraries built in. No separate codec `.so`, `.dll` or `.dylib` files
-need to be shipped. The canonical `linux-x86_64` artifact is fully static and
-CPU-only, retaining compatibility with older Linux systems. The additional
-`linux-x86_64-hardware` artifact uses the host's glibc 2.35 or newer, with codec,
-C++ and OpenMP libraries still static. Linux ARM64 is one fully static build
-that keeps its hardware paths and Vulkan, as every Linux build did before the
-x86_64 split. Windows uses Windows system DLLs, and macOS uses Apple's system libraries and
+need to be shipped. Linux x86_64 is one build: it uses the host's glibc 2.35
+or newer, the way the other platforms use their system runtime, with codec,
+C++ and OpenMP libraries still static, and it carries every hardware path.
+Hardware acceleration is detected at run time and is simply not used on a
+machine that has none. Linux ARM64 is one fully static build
+that keeps its hardware paths and Vulkan. Windows uses Windows system DLLs, and macOS uses Apple's system libraries and
 frameworks. FreeBSD links its base system runtime dynamically to support
 Vulkan driver loading, while keeping codec libraries static. Its supported
 baseline is FreeBSD 14.3.
 
-### Linux x86_64 artifact choice
+### Linux x86_64 requirements
 
 | Artifact suffix | Use | Runtime requirements |
 | --- | --- | --- |
-| `linux-x86_64` | CPU processing, including older Linux hosts | Fully static; FFmpeg hardware-processing backends and whisper/stemsplit Vulkan are disabled |
-| `linux-x86_64-hardware` | Hardware acceleration on supported GPUs | glibc **2.35 or newer** (Ubuntu 22.04, Debian 12 and everything newer), the installed system runtime and the appropriate GPU drivers/loaders |
+| `linux-x86_64` | CPU processing, and hardware acceleration on supported GPUs | glibc **2.35 or newer** (Ubuntu 22.04, Debian 12 and everything newer) and the installed system runtime; for GPU work the appropriate GPU drivers/loaders |
 
-For FFmpeg 9.0 these archives are named `ffmpeg-9.0-linux-x86_64.tar.gz` and
-`ffmpeg-9.0-linux-x86_64-hardware.tar.gz`. Both contain the codec libraries in
-the executables and ship no `.so` files. Select the hardware archive explicitly
-for GPU workloads; the canonical artifact name continues to select CPU operation.
-The hardware variant can also run on the CPU when its system runtime is present.
-On an older glibc, use the canonical static artifact: disabling GPU at runtime
-cannot fix a missing glibc symbol because the loader fails before FFmpeg starts.
+For FFmpeg 9.0 the archive is named `ffmpeg-9.0-linux-x86_64.tar.gz`. It
+contains the codec libraries in the executables and ships no `.so` files.
+There is one archive and nothing to select: on a machine with a supported GPU
+and its driver the hardware paths are used, and on a machine without one the
+same binary runs on the CPU.
 
-The floor is 2.35 because the hardware archive is compiled and linked against
+**Minimum system.** Releases up to v1.0.45 were fully static and started on
+any Linux. From v1.0.46 the binary needs glibc 2.35 or newer; on an older
+system the loader refuses it before FFmpeg starts
+(`version 'GLIBC_2.35' not found`). The supported systems are the long-term
+support releases at that level or newer.
+
+The floor is 2.35 because the archive is compiled and linked against
 a glibc 2.35 sysroot taken from Ubuntu 22.04, not against the Ubuntu 24.04 base
 image's own 2.39 (`ffmpeg-linux-x86_64.dockerfile`, stage `glibc235-sysroot`,
 and `scripts/includes/glibc235_sysroot_setup.sh`). Only glibc comes from that
@@ -68,12 +70,11 @@ sysroot; everything else is built from source as before. The build refuses any
 import above GLIBC_2.35 in the final executables. Design and measurements:
 [docs/superpowers/specs/2026-11-04-linux-hardware-glibc235-design.md](docs/superpowers/specs/2026-11-04-linux-hardware-glibc235-design.md).
 
-Both production archives pass packaging, ELF and smoke checks. Both archives
-also pass real whisper/stemsplit CPU inference across glibc 2.35 (Ubuntu
+The archive passes packaging, ELF and smoke checks, and real
+whisper/stemsplit CPU inference across glibc 2.35 (Ubuntu
 22.04), 2.36 (Debian 12), 2.39 (Ubuntu 24.04 with Mesa's Vulkan drivers) and
-2.43 (Ubuntu 26.04) hosts: `tests/lib/foreign-glibc.sh` for the static archive,
-`tests/lib/hardware-hosts.sh` for the hardware archive, both run by CI. The
-final hardware archive passes H.264/HEVC NVENC, CUDA decode and real whisper
+2.43 (Ubuntu 26.04) hosts: `tests/lib/glibc-hosts.sh`, run by CI. It
+passes H.264/HEVC NVENC, CUDA decode and real whisper
 Vulkan inference on an RTX 3070 under Linux/WSL2, with static OpenMP and no
 supplied shared libraries. FFmpeg's tested Vulkan
 upload/scale/download video path fails cleanly through WSL's Dozen; that
@@ -142,7 +143,7 @@ Capability differences from `windows-x86_64`, all deliberate:
 
 ### Build Features
 - 🔒 **Security Scanning**: Trivy vulnerability assessment on all platform images
-- 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection. On every platform the runner can execute, the smoke job also runs the stemsplit release gates: the filter's own test suite with its tiny RoFormer models, 20/20 clean exits, and Spleeter stems byte-identical with the previous release (`tests/lib/stemsplit.sh`; assets via `tests/lib/stemsplit-assets.sh`). Linux x86_64 checks distinguish the fully static CPU artifact from the system-runtime hardware artifact. Older-glibc CPU checks apply to the static artifact; the hardware artifact must satisfy its glibc 2.35 minimum and explicit system-library allowlist.
+- 🧪 **Automated Testing**: Per-platform smoke tests; cross-arch artifacts are validated via ELF header inspection. On every platform the runner can execute, the smoke job also runs the stemsplit release gates: the filter's own test suite with its tiny RoFormer models, 20/20 clean exits, and Spleeter stems byte-identical with the previous release (`tests/lib/stemsplit.sh`; assets via `tests/lib/stemsplit-assets.sh`). The Linux x86_64 archive must satisfy its glibc 2.35 minimum and its explicit system-library allowlist, and must start and do real CPU inference on glibc 2.35, 2.36, 2.39 and 2.43 hosts.
 - 📦 **Artifact Management**: Version-stamped archives with SHA-256 sidecars and a GPG-signed `manifest.json`
 - 🔄 **Change Detection**: Decides whether a commit needs a build at all. When anything needs building, every platform is rebuilt, so a release always carries all of them; a narrowed release once handed the npm client a 404 on every platform it left out
 - 🚦 **RC Pipeline**: Every master build publishes a Release Candidate prerelease before promotion to a final release
@@ -209,10 +210,6 @@ docker compose build ffmpeg-linux-x86_64
 
 # Run a platform build — the packaged archive lands in ./output
 docker compose up ffmpeg-linux-x86_64
-
-# Build/package the glibc 2.35+ hardware variant instead
-docker compose build ffmpeg-linux-x86_64-hardware
-docker compose up ffmpeg-linux-x86_64-hardware
 ```
 
 ### Testing
@@ -630,9 +627,8 @@ is the same.
 #### 🎮 **GPU acceleration — `whisper` and `stemsplit`**
 
 The same two filters can also run on a **GPU, through Vulkan**, with the
-backend compiled into the executable on `linux-x86_64-hardware`, Linux ARM64,
-Windows and FreeBSD. The canonical `linux-x86_64` artifact runs these filters
-on the CPU and has no GPU backend. For the GPU-enabled builds, the
+backend compiled into the executable on Linux x86_64, Linux ARM64,
+Windows and FreeBSD. The
 machine must have a Vulkan loader and a compatible GPU driver installed;
 these come from the host's graphics installation and are not shipped with
 FFmpeg. No Vulkan SDK is needed. If the machine has a working Vulkan driver
@@ -692,8 +688,8 @@ ffmpeg -i in.mp3 -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=vocals:use_g
 the CPU under `auto`. The RoFormer models go to the best-ranked device of a
 backend the build enables for `auto`: the support statement's last sentence
 (`ffmpeg -h filter=stemsplit`) says `Backends enabled for use_gpu=auto: vulkan.`
-on `linux-x86_64-hardware`, Linux ARM64, Windows and FreeBSD, and `none.` on
-`linux-x86_64` and macOS, where `auto` is the CPU. Metal is not enabled for
+on Linux x86_64, Linux ARM64, Windows and FreeBSD, and `none.` on
+macOS, where `auto` is the CPU. Metal is not enabled for
 `auto`. A device is taken only when it is a real GPU (no software rasteriser),
 wins one calibration against the CPU, passes a self-check against the CPU's
 mask on every model (85 dB SNR on 32 frames) and holds the work; anything
@@ -735,11 +731,11 @@ machine with only a software rasteriser all fall back to the CPU and carry on.
 Software rasterisers (llvmpipe, lavapipe) are deliberately **refused** even
 when they work: they are slower than the CPU backend they would replace.
 
-On GPU-enabled Linux builds and FreeBSD, the binary tests Vulkan drivers in a throwaway child
+On Linux and FreeBSD, the binary tests Vulkan drivers in a throwaway child
 process before using them, and switches Vulkan off for itself if they crash,
 hang or expose only software rendering. The diagnostics distinguish three
 outcomes. The first one says "statically linked" because the guard was written
-for the static builds; on the Linux hardware variant and FreeBSD, which link
+for the static builds; on Linux x86_64 and FreeBSD, which link
 the base runtime dynamically, the text is the same and means the same thing,
 the driver crashed the probe:
 
@@ -772,11 +768,9 @@ minimal executable/plugin test reproduced colliding pthread keys and incorrect
 thread-destructor ownership with glibc 2.39 on both sides, without any GPU API.
 The earlier version-match check therefore does not establish safe GPU loading.
 
-For x86_64, choose `linux-x86_64-hardware` for GPU work. It uses the installed
-glibc consistently with the host's loader and driver, requires glibc 2.35 or
-newer (Ubuntu 22.04, Debian 12), and keeps codec/C++/OpenMP libraries built in. The canonical
-`linux-x86_64` artifact stays fully static and disables GPU dependencies and
-backends, so older Linux CPU use does not need a second C runtime or GPU driver.
+That is why the Linux x86_64 build uses the installed
+glibc, consistently with the host's loader and driver: it requires glibc 2.35 or
+newer (Ubuntu 22.04, Debian 12) and keeps codec/C++/OpenMP libraries built in.
 Linux ARM64's existing build and guard policy are unchanged; no native ARM GPU
 execution has been verified by this x86_64 investigation.
 
@@ -798,8 +792,7 @@ on suitable hardware.
 
 | platform | Vulkan | notes |
 |---|---|---|
-| linux-x86_64 | ❌ | Fully static CPU artifact; GPU dependencies/backends disabled. |
-| linux-x86_64-hardware | ⚠️ | Final archive verified with its glibc 2.35 floor: starts and does real CPU inference on Ubuntu 22.04 and Debian 12; RTX 3070 H.264/HEVC NVENC, CUDA decode and whisper Vulkan inference pass under WSL2. FFmpeg's tested Vulkan upload/scale/download video path fails cleanly through Dozen. Physical native Linux GPU execution remains unverified. |
+| linux-x86_64 | ⚠️ | One archive with a glibc 2.35 floor: starts and does real CPU inference on Ubuntu 22.04 and Debian 12; RTX 3070 H.264/HEVC NVENC, CUDA decode and whisper Vulkan inference pass under WSL2. FFmpeg's tested Vulkan upload/scale/download video path fails cleanly through Dozen. Physical native Linux GPU execution remains unverified. |
 | windows-x86_64 | ✅ | GPU selection verified on an RTX 3070. |
 | linux-aarch64 | ✅ | Built and verified under emulation; no ARM GPU has been measured. |
 | windows-aarch64 | ✅ | Built and statically verified; not yet executed on Windows-on-ARM hardware. |
@@ -1201,7 +1194,7 @@ which is easy to get wrong.
 | **HAP / HAP Alpha** | ✅ Encoder via Snappy 1.3.1 (`-format hap_alpha`); the decoder is FFmpeg's own | ⚠️ Optional encoder dependency |
 | **APV / APV Alpha** | ✅ Encoder via OpenAPV 1.1.3.0 (`yuva444p10le`); the decoder is FFmpeg's own | ⚠️ Optional encoder dependency |
 | **Hardware Acceleration** | ✅ NVENC/NVDEC/CUDA/AMF/QSV (libvpl)/VAAPI | ⚠️ Platform dependent |
-| **Vulkan + libplacebo** | ✅ Linux x86_64 hardware variant / Linux ARM64 / Windows / FreeBSD; the shaders are compiled at build time with glslc, since FFmpeg 9.0 has no libshaderc option; native Linux and FreeBSD GPU verification pending; the static Linux x86_64 CPU build carries no Vulkan and macOS uses Metal | ⚠️ Optional/experimental |
+| **Vulkan + libplacebo** | ✅ Linux x86_64 / Linux ARM64 / Windows / FreeBSD; the shaders are compiled at build time with glslc, since FFmpeg 9.0 has no libshaderc option; native Linux and FreeBSD GPU verification pending; macOS uses Metal | ⚠️ Optional/experimental |
 | **Advanced Scaling** | ✅ libzimg + placebo | ⚠️ Basic only |
 | **Frei0r / AviSynth** | ✅ Included | ⚠️ Optional |
 
@@ -1249,8 +1242,8 @@ that every other part of the binary still supports.
 |----------|----------------------|
 | **Windows** | DXVA2 + D3D11VA + AMF + NVENC/CUDA + QuickSync |
 | **macOS** | VideoToolbox, ad-hoc code-signed binaries (required on Apple Silicon) |
-| **Linux x86_64** | Canonical artifact: CPU-only. `linux-x86_64-hardware`: VAAPI + NVENC/CUDA + AMF + QuickSync (libvpl) + Vulkan, with host drivers and glibc 2.35+ |
-| **Linux ARM64** | Fully static, with VAAPI + NVENC/CUDA + Vulkan compiled in and the Vulkan driver guard; unchanged by the x86_64 split, and no ARM GPU has ever been exercised |
+| **Linux x86_64** | VAAPI + NVENC/CUDA + AMF + QuickSync (libvpl) + Vulkan, with host drivers and glibc 2.35+; detected at run time |
+| **Linux ARM64** | Fully static, with VAAPI + NVENC/CUDA + Vulkan compiled in and the Vulkan driver guard; no ARM GPU has ever been exercised |
 | **FreeBSD** | Vulkan + libplacebo with static codecs and a dynamic base runtime; physical GPU verification pending |
 
 ### ⚠️ **Limitations vs Official FFmpeg**
@@ -1268,11 +1261,7 @@ While our builds are feature-rich, some official FFmpeg characteristics differ *
 
 As embedded in the v1.0.45 linux-x86_64 and windows-x86_64 binaries
 (`ffmpeg -version` prints a platform's exact line). The three flags marked
-*next release* are on `dev` and are not in v1.0.45. Also from the next
-release, the canonical `linux-x86_64` archive is configured with the whole
-*Hardware Acceleration* block below disabled (`--disable-nvenc`,
-`--disable-vaapi`, `--disable-vulkan`, `--disable-libplacebo` and the rest);
-only `linux-x86_64-hardware` carries it on x86_64 Linux:
+*next release* are on `dev` and are not in v1.0.45:
 
 ```bash
 # Core Configuration
@@ -1335,7 +1324,7 @@ Security is paramount in our build process:
 ## 📦 Distribution & Integration
 
 ### GitHub Releases
-Version-stamped archives per platform (`ffmpeg-<version>-<platform>.tar.gz` / `.zip` for Windows), published first as an RC prerelease and then promoted to a final release. From the first release after v1.0.45 there are eight archives, not seven: `linux-x86_64` (static, CPU) and `linux-x86_64-hardware` (glibc 2.35+, GPU) are both Linux x86_64.
+Version-stamped archives per platform (`ffmpeg-<version>-<platform>.tar.gz` / `.zip` for Windows), published first as an RC prerelease and then promoted to a final release. There is one archive per platform, seven in all. From v1.0.46 the `linux-x86_64` archive needs glibc 2.35 or newer.
 
 ### npm Package
 [`@nomercy-entertainment/ffmpeg-static`](clients/npm/README.md) fetches the matching binary for the current platform on first use:
@@ -1348,7 +1337,7 @@ const ffmpeg = await ensureFfmpeg(); // absolute path, downloaded on first call
 
 It also installs `nomercy-ffmpeg-path` / `nomercy-ffprobe-path` CLI bins for non-JS tooling.
 
-On Linux x86_64 it always fetches the canonical static archive. For the hardware variant, extract it yourself and point `NOMERCY_FFMPEG` / `NOMERCY_FFPROBE` at the binaries; the client never picks it on its own.
+On Linux x86_64 it fetches the one `linux-x86_64` archive, which needs glibc 2.35 or newer from v1.0.46 on.
 
 ### NoMercy MediaServer
 1. **Automated Updates**: New releases trigger MediaServer updates

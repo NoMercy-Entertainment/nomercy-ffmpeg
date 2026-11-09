@@ -253,12 +253,12 @@ function Test-CpuVariant {
 # precisely that it asserts ABSENCE, and a hard-coded "Windows has no guard"
 # would assert nothing at all.
 
-# Linux x64's fully static CPU archive omits Vulkan; its hardware archive and
-# FreeBSD use the system runtime with static codec libraries. Both Darwin
-# targets omit Vulkan; arm64 uses Metal.
+# Every build carries ggml's Vulkan backend except the two Darwin targets,
+# which omit Vulkan; arm64 uses Metal. Linux x64 and FreeBSD use the system
+# runtime with static codec libraries.
 function Test-VulkanPlatformHasBackend {
     param([string]$Platform)
-    return ($Platform -ne 'linux-x86_64' -and $Platform -notmatch 'darwin')
+    return ($Platform -notmatch 'darwin')
 }
 
 # The last sentence of stemsplit's support statement, per build flavour: the
@@ -283,7 +283,7 @@ function Test-StemsplitAutoBackendsAnnounced {
 # The fork-and-probe ICD guard is compiled only for non-Windows, non-Apple.
 function Test-VulkanPlatformHasGuard {
     param([string]$Platform)
-    return ($Platform -ne 'linux-x86_64' -and $Platform -notmatch 'windows' -and $Platform -notmatch 'darwin')
+    return ($Platform -notmatch 'windows' -and $Platform -notmatch 'darwin')
 }
 
 # Both halves must be there: ggml-vulkan itself, and the loader shim that

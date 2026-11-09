@@ -52,8 +52,6 @@ set -euo pipefail
 PLATFORM="${1:?usage: stemsplit-assets.sh <platform> <dir>}"
 DIR="${2:?usage: stemsplit-assets.sh <platform> <dir>}"
 REF_PLATFORM="${PLATFORM}"
-# The new hardware variant shares the existing pinned x64 CPU reference.
-[[ "${REF_PLATFORM}" != linux-x86_64-hardware ]] || REF_PLATFORM=linux-x86_64
 
 STEMSPLIT_TAG=v1.2.1
 FORGEJO=https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit
