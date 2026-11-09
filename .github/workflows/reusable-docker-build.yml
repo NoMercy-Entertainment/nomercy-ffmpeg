@@ -156,8 +156,12 @@ jobs:
               ((attempt++))
             done
           }
+          # Five attempts, waiting 15, 30, 60 and 120 s: three attempts inside
+          # half a minute lost the linux-x86_64 build of the v1.0.46 release to
+          # a Docker Hub login that timed out on one runner while the other
+          # seven logged in.
           docker_retry() {
-            retry_with_backoff 3 10 "$1"
+            retry_with_backoff 5 15 "$1"
           }
           EOF
           chmod +x error_handler.sh
