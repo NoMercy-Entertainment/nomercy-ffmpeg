@@ -2,6 +2,66 @@
 
 ## Version History
 
+### Unreleased
+
+- stemsplit 1.2.1: `use_gpu=auto` runs the RoFormer models on a Vulkan GPU
+  when the build enables the backend, the device is a real GPU, it beats the
+  CPU in a calibration and passes a self-check against the CPU's output;
+  otherwise the CPU, byte for byte. The default `use_gpu=0`, every Spleeter
+  output and every option's place are unchanged. The support statement ends
+  `Backends enabled for use_gpu=auto: vulkan.` on `linux-x86_64-hardware`,
+  Linux ARM64, Windows and FreeBSD and `none.` on `linux-x86_64` and macOS;
+  the Vulkan builds define `GGML_USE_VULKAN` in whisper's Cflags, which is how
+  the filter learns ggml-vulkan is linked in. New frame metadata
+  `lavfi.stemsplit.device`. The smoke gates run the 1.2.1 suite, twenty clean
+  exits under `use_gpu=auto` held to `use_gpu=0`'s bytes, and the suite's
+  devices block on lavapipe on the Linux hardware job.
+- keydetect 1.6.0: new `minor_profile` option, default `edma`, for the minor
+  row of the key correlation; `minor_profile=shaath` restores 1.5.0's key
+  decision exactly. Chords, every field and every other option are unchanged.
+  beatdetect stays at 1.4.0.
+- lyricsalign (#126): new audio filter for time-synced lyrics by CTC forced
+  alignment, a wav2vec2 phoneme model on ggml with espeak-ng phonemes, JSON
+  Lines output; espeak-ng 1.52.0 is linked statically and its `espeak-ng-data`
+  ships in every platform archive. The model lives in
+  nomercy-lyricsalign-models and is pinned by the test suites.
+- CI: the windows-aarch64 release gate runs on GitHub's hosted windows-11-arm
+  runner (#76); verify-rc leaves no files behind in the Lima and FreeBSD
+  guests, and fleet-health probes the Lima guest.
+- Linux x86_64: retain the canonical `linux-x86_64` artifact as a fully static
+  CPU build for older Linux hosts. Add `linux-x86_64-hardware` for hardware
+  acceleration with the host's glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and
+  newer): it is compiled and linked against a glibc 2.35 sysroot from Ubuntu
+  22.04 instead of the 24.04 base image's 2.39, and the build rejects any
+  import above GLIBC_2.35. Codecs, C++ and OpenMP stay
+  static; neither archive ships `.so` files. Disable GPU dependencies/backends
+  in the CPU artifact to avoid GPU-processing driver loads into static glibc.
+  Matching the host's glibc version does not make that combination safe. Both
+  production archives pass ELF, package and smoke gates. Whisper/stemsplit CPU
+  inference passes for both archives on glibc 2.35/2.36/2.39/2.43 hosts (the
+  hardware archive starts and infers on Ubuntu 22.04 and Debian 12, checked by
+  the new `tests/lib/hardware-hosts.sh` in CI); final hardware H.264/HEVC NVENC,
+  CUDA decode and whisper Vulkan inference pass on an RTX 3070 under WSL2. FFmpeg's
+  tested Vulkan upload/scale/download video path fails cleanly through Dozen;
+  Linux ARM64 and FreeBSD are unchanged.
+- FreeBSD: enable Vulkan/libplacebo and ggml Vulkan for whisper/stemsplit by
+  linking the FreeBSD base runtime dynamically. Codec libraries remain static,
+  and no `.so` files are shipped with FFmpeg. FreeBSD 14.3 is the supported
+  baseline; GPU use requires the host's Vulkan loader and driver. Enable the
+  fork-and-probe guard and retain CPU fallback. Native FreeBSD GPU verification
+  is still required (#125).
+- HAP/APV alpha: statically link Snappy 1.3.1 and OpenAPV 1.1.3.0 across all
+  platforms (`--enable-libsnappy`, `--enable-liboapv`). Backport FFmpeg's OpenAPV
+  API-set 1 metadata descriptor support. Both manual suites and executable CI
+  smoke jobs check three-frame alpha gradients through the native decoders.
+  Ships with the next content release; no standalone release or version bump
+  (#121).
+- JPEG XL: statically link libjxl 0.12.0 for still and animated encoding and
+  decoding (`--enable-libjxl`), including alpha. Both manual test suites and
+  executable CI smoke jobs verify lossless RGBA round-trips and default encoder
+  settings. Ships with the next content release; no standalone release or version
+  bump (#109).
+
 ### v1.0.35 - May 22, 2026
 
 #### ⬆️ FFmpeg 8.0 → 8.1.1 Upgrade

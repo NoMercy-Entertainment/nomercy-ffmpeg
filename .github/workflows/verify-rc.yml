@@ -145,6 +145,10 @@ jobs:
             ext: tar.gz
             labels: '["self-hosted","ffmpeg-verify","linux-x86_64"]'
             via: native
+          - platform: linux-x86_64-hardware
+            ext: tar.gz
+            labels: '["self-hosted","ffmpeg-verify","linux-x86_64"]'
+            via: native
           - platform: linux-aarch64
             ext: tar.gz
             labels: '["self-hosted","ffmpeg-verify","linux-aarch64"]'
@@ -165,22 +169,21 @@ jobs:
             ext: zip
             labels: '["self-hosted","ffmpeg-verify","windows-x86_64"]'
             via: windows
-          # windows-aarch64 is built and released but deliberately absent here,
-          # so no verdict is produced, sync-checklist.js leaves its box unticked
-          # and a human ticks it after testing by hand. That is the honest state.
+          # windows-aarch64 runs on GitHub's hosted ARM64 Windows runner: real
+          # arm64 silicon (not emulation), 4 CPU / 16 GB on a public repo, free
+          # and outside the included minutes. tests/tests.ps1 and verify-rc.ps1
+          # run there unchanged, and the verdict says `native` because it is.
           #
-          # It was wired to github-windows-arm64-1 for two days in October 2026.
-          # That runner is a Windows 11 ARM64 guest under QEMU TCG on an x86 host,
-          # and the suite does not finish on it: sample generation took 870 s,
-          # the x264 test 234 s, and the x265 test was still running after
-          # eighteen hours (run 38056397474). An entry here would hold the RC
-          # verification for the five-day job limit and then fail. The owner's
-          # decision: hand-ticked until there is a real ARM64 Windows machine.
-          #
-          # When one exists, add it back with `via: windows` and, if it is not
-          # native hardware, `execution: <what it is>` -- verify-rc.ps1 writes that
-          # into the verdict so the bot's evidence never claims native hardware.
-          # tests/tests.ps1 runs there unchanged.
+          # History: this entry was absent for weeks because the only ARM64
+          # Windows machine was github-windows-arm64-1, a QEMU TCG guest on an
+          # x86 host, where the x265 test did not finish in eighteen hours
+          # (run 38056397474). That runner is gone. Hosted jobs are hard-capped
+          # at six hours by GitHub; the suite is well inside that on native
+          # hardware, so a hit on the cap is a real regression, not slowness.
+          - platform: windows-aarch64
+            ext: zip
+            labels: '["windows-11-arm"]'
+            via: windows
     runs-on: ${{ fromJSON(matrix.labels) }}
     timeout-minutes: 7200
     steps:
@@ -188,6 +191,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.head-sha }}
+          # The PR head is executed here (tests/ and the checklist script), so
+          # the checkout must not leave the job token in .git for it to find.
+          persist-credentials: false
 
       - name: Download RC asset and manifest (unix)
         if: matrix.via != 'windows'
@@ -253,7 +259,12 @@ jobs:
           LIMACTL="${LIMA_BIN:-limactl}"
           REMOTE="/tmp/ffmpeg-verify-${GITHUB_RUN_ID}"
 
-          "$LIMACTL" shell "$LIMA_INSTANCE" -- rm -rf "$REMOTE"
+          # Wipe every verify directory before AND after the run, not just
+          # this run's: a step that aborted before its own cleanup (guest
+          # killed, copy failed) left a 252 MB archive plus the extracted work
+          # dir behind each time, on a 16 GiB guest disk. One runner carries
+          # this label and runs one job at a time, so nothing else is in there.
+          "$LIMACTL" shell "$LIMA_INSTANCE" -- sh -c 'rm -rf /tmp/ffmpeg-verify-*'
           "$LIMACTL" shell "$LIMA_INSTANCE" -- mkdir -p "$REMOTE/rc"
           "$LIMACTL" copy -r tests "${LIMA_INSTANCE}:${REMOTE}/tests"
           "$LIMACTL" copy "rc/${ARCHIVE}" "${LIMA_INSTANCE}:${REMOTE}/rc/${ARCHIVE}"
@@ -271,10 +282,12 @@ jobs:
             --tag "${{ needs.resolve.outputs.tag }}" \
             --commit "${{ needs.resolve.outputs.head-sha }}"
           status=$?
-          set -e
 
-          "$LIMACTL" copy "${LIMA_INSTANCE}:${REMOTE}/verdict.json" "verdict-${{ matrix.platform }}.json"
-          "$LIMACTL" shell "$LIMA_INSTANCE" -- rm -rf "$REMOTE"
+          # Still under set +e: a failed verdict copy must not skip the
+          # cleanup, or the guest fills up one aborted run at a time.
+          "$LIMACTL" copy "${LIMA_INSTANCE}:${REMOTE}/verdict.json" "verdict-${{ matrix.platform }}.json"             || echo "::warning::no verdict retrieved from the Lima guest"
+          "$LIMACTL" shell "$LIMA_INSTANCE" -- sh -c 'rm -rf /tmp/ffmpeg-verify-*'
+          set -e
           exit $status
 
       # FreeBSD has no official Actions runner build, so a Linux runner drives a
@@ -291,7 +304,9 @@ jobs:
           REMOTE="/tmp/ffmpeg-verify-${GITHUB_RUN_ID}"
 
           # shellcheck disable=SC2086
-          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf ${REMOTE}; mkdir -p ${REMOTE}/rc"
+          # Wipe every verify directory before and after, as in the Lima step:
+          # an aborted run must not leave its archive and work dir behind.
+          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf /tmp/ffmpeg-verify-*; mkdir -p ${REMOTE}/rc"
           tar -cf - tests | ssh $SSH_OPTS "$SSH_TARGET" "tar -xf - -C ${REMOTE}"
           scp $SSH_OPTS "rc/${ARCHIVE}" rc/manifest.json "${SSH_TARGET}:${REMOTE}/rc/"
 
@@ -305,10 +320,11 @@ jobs:
             --tag ${{ needs.resolve.outputs.tag }} \
             --commit ${{ needs.resolve.outputs.head-sha }}"
           status=$?
-          set -e
 
-          scp $SSH_OPTS "${SSH_TARGET}:${REMOTE}/verdict.json" "verdict-${{ matrix.platform }}.json"
-          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf ${REMOTE}" || true
+          # Still under set +e so a failed verdict copy cannot skip the cleanup.
+          scp $SSH_OPTS "${SSH_TARGET}:${REMOTE}/verdict.json" "verdict-${{ matrix.platform }}.json"             || echo "::warning::no verdict retrieved from the FreeBSD guest"
+          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf /tmp/ffmpeg-verify-*"
+          set -e
           exit $status
 
       - name: Download RC asset and manifest (windows)
@@ -368,6 +384,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.head-sha }}
+          # The PR head is executed here (tests/ and the checklist script), so
+          # the checkout must not leave the job token in .git for it to find.
+          persist-credentials: false
 
       - name: Download all verdicts
         uses: actions/download-artifact@v8

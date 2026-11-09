@@ -23,6 +23,12 @@ source "${HERE}/lib/cpu-variant.sh"
 source "${HERE}/lib/whisper.sh"
 # shellcheck source=lib/stemsplit.sh
 source "${HERE}/lib/stemsplit.sh"
+# shellcheck source=lib/lyricsalign.sh
+source "${HERE}/lib/lyricsalign.sh"
+# shellcheck source=lib/jpegxl.sh
+source "${HERE}/lib/jpegxl.sh"
+# shellcheck source=lib/alpha-codecs.sh
+source "${HERE}/lib/alpha-codecs.sh"
 
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
@@ -134,7 +140,13 @@ assert_vulkan_backend_present() {  # bin, platform
   local bin="$1" platform="$2" diag
 
   if ! vulkan_platform_has_backend "${platform}"; then
-    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin-arm64 gets Metal instead, asserted separately below; freebsd's static dlopen cannot open a loader at all)"
+    if [[ "${platform}" == linux-x86_64 ]]; then
+      vulkan_backend_compiled_in "${bin}" && fail "vulkan: the fully static CPU archive must not carry a Vulkan backend"
+      vulkan_guard_compiled_in "${bin}" && fail "vulkan: the fully static CPU archive must not carry an ICD guard"
+      ok "vulkan: backend and ICD guard correctly absent from the CPU archive"
+      return 0
+    fi
+    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin-arm64 gets Metal instead, asserted separately below)"
     return 0
   fi
 
@@ -161,6 +173,23 @@ assert_vulkan_backend_present() {  # bin, platform
     vulkan_guard_compiled_in "${bin}" \
       && fail "vulkan: the ICD guard is compiled into ${platform}, which must not have it"
     ok "vulkan: ICD guard correctly absent on ${platform}"
+  fi
+}
+
+# stemsplit's support statement must name the backends use_gpu=auto may take
+# on THIS build: "vulkan." where ggml-vulkan is linked in, "none." elsewhere.
+# The list is baked in at compile time from GGML_USE_VULKAN in whisper.pc's
+# Cflags (scripts/48-whisper.sh), and the filter trusts it: a Vulkan build
+# that says "none." never takes a GPU under auto, silently and forever. A grep
+# over the file, so it runs for the cross-exec platforms too.
+assert_stemsplit_auto_backends() {  # bin, platform
+  local bin="$1" platform="$2" expected
+  expected="$(stemsplit_auto_backends_expected "${platform}")"
+  if stemsplit_auto_backends_announced "${bin}" "${expected}"; then
+    ok "stemsplit: the support statement enables '${expected}' for use_gpu=auto on ${platform}"
+  else
+    echo "   found: $(grep -ao 'Backends enabled for use_gpu=auto: [a-z, ]*\.' "${bin}" | sort -u | tr '\n' ' ')"
+    fail "stemsplit: the support statement must end 'Backends enabled for use_gpu=auto: ${expected}.' on ${platform} (GGML_USE_VULKAN in whisper.pc's Cflags decides it)"
   fi
 }
 
@@ -192,7 +221,7 @@ assert_vulkan_startup() {  # bin, platform
        ok "vulkan: a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with either escape hatch set (no whisper model here, so a full run is not asserted)"
      fi ;;
   1) echo "${diag}"
-     fail "vulkan: the binary crashes initialising a ggml filter on a machine with no usable GPU driver" ;;
+     fail "vulkan: the binary crashes or times out initialising a ggml filter on a machine with no usable GPU driver" ;;
   *) echo "${diag}"
      note "vulkan: could not instantiate a ggml filter on this build — the no-GPU guarantee is NOT asserted here" ;;
   esac
@@ -254,11 +283,21 @@ ffprobe_bin="${WORKSPACE}/ffprobe"
 [[ -s "${ffprobe_bin}" ]] || fail "ffprobe binary is empty"
 chmod +x "${ffmpeg_bin}" "${ffprobe_bin}" 2>/dev/null || true
 
+# espeak-ng's data (#126) ships next to the binary in every platform archive;
+# the lyricsalign filter reads it from there by default. A file check, so it
+# runs for the cross-exec platforms too: a tarball that lost the directory
+# would make the filter fail on every machine it reaches.
+for f in phontab phonindex phondata intonations en_dict nl_dict lang/gmw/en-US; do
+  [[ -e "${WORKSPACE}/espeak-ng-data/${f}" ]] || fail "espeak-ng-data/${f} is missing from the archive (lyricsalign needs it)"
+done
+ok "espeak-ng-data is in the archive ($(ls "${WORKSPACE}/espeak-ng-data" | grep -c '_dict$') dictionaries)"
+
 # Runs regardless of whether this runner can execute the binary at all — see
 # the comment on assert_cpu_variant_dispatcher_present above for why it has
 # to come before the cross-exec early-return, not after it.
 assert_cpu_variant_dispatcher_present "${ffmpeg_bin}" "${PLATFORM}"
 assert_vulkan_backend_present "${ffmpeg_bin}" "${PLATFORM}"
+assert_stemsplit_auto_backends "${ffmpeg_bin}" "${PLATFORM}"
 assert_metal_backend_present "${ffmpeg_bin}" "${PLATFORM}"
 
 # Cross-exec platforms: never execute — validate ELF headers and stop here.
@@ -284,6 +323,18 @@ assert_version() {  # bin, banner
 
 assert_version "${ffmpeg_bin}" "ffmpeg version"
 assert_version "${ffprobe_bin}" "ffprobe version"
+
+# Exercise both wrappers, not just their presence in the codec list. Missing
+# JPEG XL support must fail the release gate on every executable platform.
+for check in test_jpegxl_still test_jpegxl_animation test_jpegxl_defaults; do
+  FFMPEG="${ffmpeg_bin}" "${check}" || fail "JPEG XL round-trip: ${check}"
+done
+ok "JPEG XL lossless RGBA round-trips and default encoder settings"
+
+for check in test_hap_alpha test_apv_alpha; do
+  FFMPEG="${ffmpeg_bin}" "${check}" || fail "Alpha codec round-trip: ${check}"
+done
+ok "HAP and APV retain the alpha gradient in three frames"
 
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.
@@ -332,7 +383,8 @@ run_whisper_check "whisper default thread count is not slower than one thread (#
 run_whisper_check "whisper vad_model with the default thread count (#115)" test_whisper_vad_threads
 run_whisper_check "whisper segments end inside the window that produced them (#119)" test_whisper_segment_ends
 
-# stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; the design is
+# stemsplit release gates, 1.1.0's three plus 1.2.0's use_gpu=auto runs in
+# the clean-exit loop (contract §7 rule 7 and §8; the design is
 # docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md). The
 # same shape as the whisper checks: they need the assets
 # tests/lib/stemsplit-assets.sh fetches, which the workflow provides on every
@@ -353,8 +405,51 @@ run_stemsplit_check() {  # name, function
      fail "${name} (exit ${rc})" ;;
   esac
 }
-run_stemsplit_check "stemsplit v1.1.0 suite with the tiny RoFormer models and Spleeter" test_stemsplit_suite
-run_stemsplit_check "stemsplit 20/20 clean exits, Spleeter and RoFormer" test_stemsplit_clean_exit
+# The tag whose suite the assets hold, written by tests/lib/stemsplit-assets.sh.
+STEMSPLIT_SUITE_TAG="$(cat "${STEMSPLIT_ASSETS_DIR:-$(dirname "${ffmpeg_bin}")/stemsplit-assets}/ffmpeg-stemsplit/.nm-suite-tag" 2>/dev/null || echo "(pinned tag)")"
+run_stemsplit_check "stemsplit ${STEMSPLIT_SUITE_TAG} suite with the tiny RoFormer models and Spleeter" test_stemsplit_suite
+run_stemsplit_check "stemsplit 20/20 clean exits, Spleeter and RoFormer, and RoFormer under use_gpu=auto" test_stemsplit_clean_exit
 run_stemsplit_check "stemsplit Spleeter stems byte-identical with the previous release" test_stemsplit_spleeter_ab
+
+# lyricsalign (#126): the real-model checks of tests/lib/lyricsalign.sh, the
+# same shape as the whisper checks. They need the assets
+# tests/lib/lyricsalign-assets.sh fetches, which the workflow provides on the
+# Linux x64 jobs, where LYRICSALIGN_TEST_REQUIRED=1 turns a skip into a
+# failure for the same reason as above.
+run_lyricsalign_check() {  # name, function
+  local name="$1" func="$2" out rc
+  out="$(FFMPEG="${ffmpeg_bin}" Platform="${PLATFORM}" "${func}" 2>&1)"; rc=$?
+  case ${rc} in
+  0) echo "${out}" | sed 's/^/   /'
+     ok "${name}" ;;
+  2) if [[ "${LYRICSALIGN_TEST_REQUIRED:-0}" == "1" && "${func}" != test_lyricsalign_gpu ]]; then
+       echo "${out}"
+       fail "${name}: skipped, but LYRICSALIGN_TEST_REQUIRED=1"
+     fi
+     note "${name}: $(echo "${out}" | sed -n 's/^SKIP: //p' | head -1)" ;;
+  *) echo "${out}"
+     fail "${name} (exit ${rc})" ;;
+  esac
+}
+run_lyricsalign_check "lyricsalign JSON shape, one line per text line, ordered times" test_lyricsalign_shape
+run_lyricsalign_check "lyricsalign JFK gate (c): every word within 40 ms of the prototype" test_lyricsalign_jfk_gate_c
+run_lyricsalign_check "lyricsalign JFK gate (a): emissions within 0.05 nats of the prototype" test_lyricsalign_gate_a
+run_lyricsalign_check "lyricsalign two runs are byte-identical" test_lyricsalign_deterministic
+run_lyricsalign_check "lyricsalign init failures name their cause" test_lyricsalign_init_failures
+run_lyricsalign_check "lyricsalign destination=- equals pipe:1; none logs" test_lyricsalign_destination_pipe
+run_lyricsalign_check "lyricsalign an empty text line is an empty marker" test_lyricsalign_empty_line
+run_lyricsalign_check "lyricsalign blend=0 writes every line" test_lyricsalign_blend_zero
+run_lyricsalign_check "lyricsalign text longer than the audio is no_alignment, exit 0" test_lyricsalign_no_alignment
+run_lyricsalign_check "lyricsalign BOM, CRLF and blank lines" test_lyricsalign_text_forms
+run_lyricsalign_check "lyricsalign lines espeak cannot speak" test_lyricsalign_odd_lines
+run_lyricsalign_check "lyricsalign backing shorter and longer than the vocals" test_lyricsalign_backing_lengths
+run_lyricsalign_check "lyricsalign half a second of audio" test_lyricsalign_short_audio
+run_lyricsalign_check "lyricsalign word labels per lyric token" test_lyricsalign_word_labels
+run_lyricsalign_check "lyricsalign output closed early" test_lyricsalign_output_closed
+run_lyricsalign_check "lyricsalign write error fails the run" test_lyricsalign_write_error
+run_lyricsalign_check "lyricsalign non-ASCII paths" test_lyricsalign_unicode_paths
+run_lyricsalign_check "lyricsalign output format unchanged" test_lyricsalign_output_format
+run_lyricsalign_check "lyricsalign frame metadata" test_lyricsalign_metadata
+run_lyricsalign_check "lyricsalign use_gpu=1 within 40 ms of the CPU (GPU runners)" test_lyricsalign_gpu
 
 ok "Smoke test passed."

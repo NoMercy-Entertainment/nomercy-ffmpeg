@@ -18,6 +18,9 @@ $ErrorActionPreference = 'Stop'
 $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/cpu-variant.ps1"
 . "$HERE/lib/stemsplit.ps1"
+. "$HERE/lib/lyricsalign.ps1"
+. "$HERE/lib/jpegxl.ps1"
+. "$HERE/lib/alpha-codecs.ps1"
 
 function Fail($msg) { Write-Host "❌ $msg"; exit 1 }
 function Note($msg) { Write-Host "ℹ️  $msg" }
@@ -152,6 +155,14 @@ $ffprobe = Join-Path $Workspace 'ffprobe.exe'
 if (-not (Test-Path $ffmpeg))  { Fail "ffmpeg.exe not found at $ffmpeg" }
 if (-not (Test-Path $ffprobe)) { Fail "ffprobe.exe not found at $ffprobe" }
 if ((Get-Item $ffmpeg).Length  -eq 0) { Fail 'ffmpeg.exe is empty' }
+
+# espeak-ng's data (#126) ships next to the binary in every platform archive;
+# the lyricsalign filter reads it from there by default. A file check, so it
+# runs for windows-aarch64 too.
+foreach ($f in @('phontab', 'phonindex', 'phondata', 'intonations', 'en_dict', 'nl_dict', 'lang/gmw/en-US')) {
+    if (-not (Test-Path (Join-Path $Workspace "espeak-ng-data/$f"))) { Fail "espeak-ng-data/$f is missing from the archive (lyricsalign needs it)" }
+}
+Write-Host "✅ espeak-ng-data is in the archive ($((Get-ChildItem (Join-Path $Workspace 'espeak-ng-data') -Filter '*_dict').Count) dictionaries)"
 if ((Get-Item $ffprobe).Length -eq 0) { Fail 'ffprobe.exe is empty' }
 
 # ggml Vulkan GPU backend, mirroring smoke.sh. The presence checks are string
@@ -160,6 +171,12 @@ if ((Get-Item $ffprobe).Length -eq 0) { Fail 'ffprobe.exe is empty' }
 # evidence behind it.
 function Assert-VulkanBackendPresent($bin, $platform) {
     if (-not (Test-VulkanPlatformHasBackend $platform)) {
+        if ($platform -eq 'linux-x86_64') {
+            if (Test-VulkanBackendPresent -Bin $bin) { Fail 'the fully static CPU archive must not carry a Vulkan backend' }
+            if (Test-VulkanGuardPresent -Bin $bin) { Fail 'the fully static CPU archive must not carry an ICD guard' }
+            Write-Host '✅ Vulkan backend and ICD guard correctly absent from the CPU archive'
+            return
+        }
         Note "$(Split-Path $bin -Leaf): $platform carries no Vulkan by design; check skipped"
         return
     }
@@ -191,6 +208,20 @@ function Assert-VulkanBackendPresent($bin, $platform) {
     }
 }
 
+# stemsplit's support statement must name the backends use_gpu=auto may take
+# on THIS build: 'vulkan.' where ggml-vulkan is linked in, 'none.' elsewhere.
+# Baked in at compile time from GGML_USE_VULKAN in whisper.pc's Cflags, and
+# the filter trusts it: a Vulkan build that says 'none.' never takes a GPU
+# under auto. A string search, so it runs for windows-aarch64 too.
+function Assert-StemsplitAutoBackends($bin, $platform) {
+    $expected = Get-StemsplitAutoBackendsExpected $platform
+    if (Test-StemsplitAutoBackendsAnnounced -Bin $bin -List $expected) {
+        Write-Host "✅ $(Split-Path $bin -Leaf): stemsplit's support statement enables '$expected' for use_gpu=auto on $platform"
+    } else {
+        Fail "$(Split-Path $bin -Leaf): stemsplit's support statement must end 'Backends enabled for use_gpu=auto: $expected.' on $platform (GGML_USE_VULKAN in whisper.pc's Cflags decides it)"
+    }
+}
+
 # Nothing may regress for a user without a GPU - the constraint that outranks
 # every performance goal on this branch. A CI runner has no GPU.
 function Assert-VulkanStartup($bin, $platform) {
@@ -204,7 +235,7 @@ function Assert-VulkanStartup($bin, $platform) {
         Write-Host "✅ $(Split-Path $bin -Leaf): a ggml filter initialises and returns with no driver, with the loader pointed at nothing, and with the GPU switched off"
     } elseif ($result.Crash) {
         Write-Host $result.Output
-        Fail "$(Split-Path $bin -Leaf): crashes initialising a ggml filter on a machine with no usable GPU driver"
+        Fail "$(Split-Path $bin -Leaf): crashes or times out initialising a ggml filter on a machine with no usable GPU driver"
     } else {
         Write-Host $result.Output
         Note "$(Split-Path $bin -Leaf): could not instantiate a ggml filter on this build - the no-GPU guarantee is NOT asserted here"
@@ -216,6 +247,7 @@ function Assert-VulkanStartup($bin, $platform) {
 # come before the cross-exec early-return, not after it.
 Assert-CpuVariantDispatcherPresent $ffmpeg $Platform
 Assert-VulkanBackendPresent $ffmpeg $Platform
+Assert-StemsplitAutoBackends $ffmpeg $Platform
 Assert-MetalBackendPresent $ffmpeg $Platform
 
 # Cross-exec platforms: never execute — validate PE headers and stop here.
@@ -238,6 +270,18 @@ function Assert-Version($bin, $banner) {
 
 Assert-Version $ffmpeg  'ffmpeg version'
 Assert-Version $ffprobe 'ffprobe version'
+
+foreach ($mode in @('still', 'animated', 'defaults')) {
+    $result = Test-JpegXL -FFmpegExe $ffmpeg -Animated:($mode -eq 'animated') -DefaultSettings:($mode -eq 'defaults')
+    if ($result.Status -ne 'Pass') { Write-Host $result.Output; Fail $result.Reason }
+    Write-Host "✅ $($result.Output)"
+}
+
+foreach ($codec in @('hap', 'liboapv')) {
+    $result = Test-AlphaCodec -FFmpegExe $ffmpeg -Codec $codec
+    if ($result.Status -ne 'Pass') { Write-Host $result.Output; Fail $result.Reason }
+    Write-Host "✅ $($result.Output)"
+}
 
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.
@@ -271,7 +315,8 @@ if ([string]::IsNullOrEmpty($tsOut)) { Fail 'trailingsilence: empty metadata ext
 if ($tsOut -ne '1') { Fail "trailingsilence did not detect the tail (got '$tsOut')" }
 Write-Host "✅ trailingsilence detected the padded tail (detected=$tsOut)"
 
-# stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; the design is
+# stemsplit release gates, 1.1.0's three plus 1.2.0's use_gpu=auto runs in
+# the clean-exit loop (contract §7 rule 7 and §8; the design is
 # docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md), the
 # same three checks smoke.sh runs, through lib/stemsplit.ps1. They need the
 # assets tests/lib/stemsplit-assets.sh fetches, which the workflow provides
@@ -295,9 +340,33 @@ function Invoke-StemsplitCheck($name, [scriptblock]$block) {
         }
     }
 }
-Invoke-StemsplitCheck 'stemsplit v1.1.0 suite with the tiny RoFormer models and Spleeter' { Test-StemsplitSuite -FFmpegExe $ffmpeg -Platform $Platform }
-Invoke-StemsplitCheck 'stemsplit 20/20 clean exits, Spleeter and RoFormer' { Test-StemsplitCleanExit -FFmpegExe $ffmpeg -Platform $Platform }
+Invoke-StemsplitCheck 'stemsplit suite (the pinned tag) with the tiny RoFormer models and Spleeter' { Test-StemsplitSuite -FFmpegExe $ffmpeg -Platform $Platform }
+Invoke-StemsplitCheck 'stemsplit 20/20 clean exits, Spleeter and RoFormer, and RoFormer under use_gpu=auto' { Test-StemsplitCleanExit -FFmpegExe $ffmpeg -Platform $Platform }
 Invoke-StemsplitCheck 'stemsplit Spleeter stems byte-identical with the previous release' { Test-StemsplitSpleeterAB -FFmpegExe $ffmpeg -Platform $Platform }
+
+# lyricsalign (#126): the real-model checks of tests/lib/lyricsalign.sh
+# through lib/lyricsalign.ps1, the same shape as the stemsplit checks. CI
+# fetches the assets on Linux only, so here they skip with a reason unless
+# LYRICSALIGN_ASSETS_DIR is set; LYRICSALIGN_TEST_REQUIRED=1 turns a skip
+# into a failure where a workflow does provide them.
+function Invoke-LyricsalignCheck($name, $fn) {
+    $r = Test-Lyricsalign -Function $fn -FFmpegExe $ffmpeg -Platform $Platform
+    switch ($r.Status) {
+        'Pass' {
+            ($r.Output -split "`r?`n" | Where-Object { $_ }) | ForEach-Object { Write-Host "   $_" }
+            Write-Host "✅ $name"
+        }
+        'Skip' {
+            if ($env:LYRICSALIGN_TEST_REQUIRED -eq '1' -and $fn -ne 'test_lyricsalign_gpu') { Write-Host $r.Output; Fail "${name}: skipped, but LYRICSALIGN_TEST_REQUIRED=1" }
+            Note "${name}: $($r.Reason)"
+        }
+        default {
+            Write-Host $r.Output
+            Fail "${name}: $($r.Reason)"
+        }
+    }
+}
+foreach ($fn in (Get-LyricsalignFunctions)) { Invoke-LyricsalignCheck "lyricsalign $($fn -replace '^test_lyricsalign_', '' -replace '_', ' ')" $fn }
 
 Write-Host '✅ Smoke test passed.'
 exit 0

@@ -32,6 +32,15 @@ jobs:
           - name: windows-x86_64
             labels: '["self-hosted","ffmpeg-verify","windows-x86_64"]'
             shell: pwsh
+          # linux-aarch64 verdicts come from a Lima guest on the Apple Silicon
+          # host, reached with `limactl shell`. The registry check below only
+          # sees the Mac runner, and `limactl list` says "Running" even while
+          # the guest's sshd resets every connection -- which is exactly how
+          # the v1.0.45 box ended up empty (run 41577275598, 2026-11-03). So
+          # the guest is probed the same way verify-rc.yml uses it.
+          - name: linux-aarch64
+            labels: '["self-hosted","ffmpeg-verify","linux-aarch64"]'
+            shell: lima
     runs-on: ${{ fromJSON(matrix.labels) }}
     timeout-minutes: 7200
     steps:
@@ -46,6 +55,46 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           bash tests/lib/capabilities.sh | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Probe the Lima guest
+        if: matrix.shell == 'lima'
+        # A guest that resets SSH fails in seconds; one that hangs must not
+        # hold the job for the two-hour default.
+        timeout-minutes: 5
+        env:
+          LIMA_INSTANCE: ${{ vars.VERIFY_LIMA_INSTANCE }}
+          LIMA_BIN: ${{ vars.VERIFY_LIMA_BIN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${LIMA_INSTANCE}" ]] || { echo "::error::repo variable VERIFY_LIMA_INSTANCE is not set"; exit 1; }
+          LIMACTL="${LIMA_BIN:-limactl}"
+
+          echo "### ${{ matrix.name }} — Lima guest ${LIMA_INSTANCE} on $(uname -srm)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          "$LIMACTL" list 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # Same call shape as the verify step. The list above can say
+          # Running while this still fails with kex_exchange_identification.
+          if ! guest=$("$LIMACTL" shell "$LIMA_INSTANCE" -- uname -srm 2>&1); then
+            echo "guest: ${guest}" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Lima guest ${LIMA_INSTANCE} does not answer: ${guest}"
+            exit 1
+          fi
+          echo "guest: ${guest}" | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$guest" == *aarch64* ]] || { echo "::error::Lima guest is not aarch64: ${guest}"; exit 1; }
+
+          # The guest disk is 16 GiB and every aborted verify run used to leave
+          # its archive and work dir in /tmp. A full disk is what breaks sshd
+          # in the guest, and that is what the probe above then reports -- so
+          # report the disk while it can still be read.
+          "$LIMACTL" shell "$LIMA_INSTANCE" -- df -h / /tmp | tee -a "$GITHUB_STEP_SUMMARY"
+          stale=$("$LIMACTL" shell "$LIMA_INSTANCE" -- sh -c 'ls -d /tmp/ffmpeg-verify-* 2>/dev/null | wc -l')
+          echo "stale verify dirs: ${stale}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          used=$("$LIMACTL" shell "$LIMA_INSTANCE" -- sh -c "df -P / | tail -1 | tr -s ' ' | cut -d' ' -f5 | tr -d %")
+          [[ "$used" -lt 90 ]] || { echo "::error::Lima guest root disk is ${used}% full"; exit 1; }
 
       - name: Probe capabilities (windows)
         if: matrix.shell == 'pwsh'
@@ -81,9 +130,9 @@ jobs:
         run: |
           set -euo pipefail
           # windows-aarch64 is a released platform but is NOT required here:
-          # no Windows-on-ARM machine is in the fleet, so listing it would
-          # report the fleet permanently unhealthy for a runner nobody has.
-          # Add it here at the same time as the verify-rc.yml matrix entry.
+          # its verify-rc.yml entry runs on GitHub's hosted windows-11-arm
+          # runner, which never appears in the org runner registry this check
+          # reads. Listing it would report the fleet permanently unhealthy.
           REQUIRED="linux-x86_64 linux-aarch64 windows-x86_64 darwin-x86_64 darwin-arm64 freebsd-driver"
 
           if ! gh api "orgs/${ORG}/actions/runners" --jq '.runners' > runners.json 2>/dev/null; then

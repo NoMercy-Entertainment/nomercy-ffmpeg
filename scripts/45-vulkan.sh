@@ -1,6 +1,7 @@
 #!/bin/bash
 
-if [[ ${TARGET_OS} == "darwin" ]]; then
+if [[ ${TARGET_OS} == darwin ||
+      ( ${TARGET_OS} == linux && ${ARCH} == x86_64 && ${LINUX_BUILD_VARIANT:-hardware} == cpu ) ]]; then
     exit 255
 fi
 

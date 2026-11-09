@@ -40,6 +40,20 @@ fi
 
 find ${PREFIX} -name '*.jar' -exec cp {} /ffmpeg/${TARGET_OS}/${ARCH}/ \;
 
+# espeak-ng's data (scripts/65-espeak-ng.sh) ships next to the binary: that is
+# where the lyricsalign filter looks for it by default. Copied here, before
+# the ${PREFIX} cleanup below removes the only other copy, and checked by its
+# key file so a tarball can never ship an empty directory.
+if [ -d ${PREFIX}/share/espeak-ng-data ]; then
+    rm -rf /ffmpeg/${TARGET_OS}/${ARCH}/espeak-ng-data
+    cp -r ${PREFIX}/share/espeak-ng-data /ffmpeg/${TARGET_OS}/${ARCH}/espeak-ng-data || exit 1
+    if [ ! -f /ffmpeg/${TARGET_OS}/${ARCH}/espeak-ng-data/phontab ]; then
+        text_with_padding "❌ espeak-ng-data copied without phontab" ""
+        exit 1
+    fi
+    text_with_padding "✅ espeak-ng-data copied next to the binary" ""
+fi
+
 text_with_padding "✅ FFmpeg binaries copied successfully" ""
 hr
 
@@ -78,12 +92,16 @@ cd /ffmpeg/${TARGET_OS}/${ARCH}
 # the single source of truth for the artifact version — bumping ffmpeg_version
 # there flows through to every artifact filename produced here.
 : "${ffmpeg_version:?ffmpeg_version env var must be set by the base image}"
-if [[ ${TARGET_OS} == "windows" ]]; then
-    zip -r /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.zip . >/dev/null || exit 1
-else
-    tar -czf /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.tar.gz . >/dev/null || exit 1
+artifact_platform="${TARGET_OS}-${ARCH}"
+if [[ ${TARGET_OS} == linux && ${ARCH} == x86_64 && ${LINUX_BUILD_VARIANT:-cpu} == hardware ]]; then
+    artifact_platform="${artifact_platform}-hardware"
 fi
-cp /build/ffmpeg-${ffmpeg_version}-${TARGET_OS}-${ARCH}.* /output || exit 1
+if [[ ${TARGET_OS} == "windows" ]]; then
+    zip -r /build/ffmpeg-${ffmpeg_version}-${artifact_platform}.zip . >/dev/null || exit 1
+else
+    tar -czf /build/ffmpeg-${ffmpeg_version}-${artifact_platform}.tar.gz . >/dev/null || exit 1
+fi
+cp /build/ffmpeg-${ffmpeg_version}-${artifact_platform}.* /output || exit 1
 
 if [[ ${TARGET_OS} == "windows" ]]; then
     text_with_padding "✅ FFmpeg zip file created successfully" ""

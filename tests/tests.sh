@@ -18,6 +18,12 @@ source "${HERE}/lib/cpu-variant.sh"
 source "${HERE}/lib/whisper.sh"
 # shellcheck source=lib/stemsplit.sh
 source "${HERE}/lib/stemsplit.sh"
+# shellcheck source=lib/lyricsalign.sh
+source "${HERE}/lib/lyricsalign.sh"
+# shellcheck source=lib/jpegxl.sh
+source "${HERE}/lib/jpegxl.sh"
+# shellcheck source=lib/alpha-codecs.sh
+source "${HERE}/lib/alpha-codecs.sh"
 
 Workspace="$1"
 shift 2>/dev/null || true
@@ -237,7 +243,9 @@ run_hw_test() {
 	local expected_output=$4
 	local reason
 
-	if reason=$(hw_capability_reason "$capability"); then
+	if [[ "${Platform}" == linux-x86_64 ]]; then
+		reason='hardware acceleration is intentionally omitted from the fully static CPU archive; use linux-x86_64-hardware'
+	elif reason=$(hw_capability_reason "$capability"); then
 		run_test "$name" "$command" "$expected_output"
 		return
 	fi
@@ -360,7 +368,12 @@ run_test "libopus" "-y -i ${SampleAudio} -c:a libopus ${TestRoot}/test_opus.opus
 run_test "libmp3lame" "-y -i ${SampleAudio} -c:a libmp3lame ${TestRoot}/test_mp3.mp3" "mp3"
 run_test "libwebp" "-y -i ${SampleImage} -c:v libwebp -f webp ${TestRoot}/test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i ${SampleImage} -c:v libopenjpeg ${TestRoot}/test_jp2.jp2" "openjpeg"
-run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
+run_custom_test "jpegxl_still" "test_jpegxl_still"
+run_custom_test "jpegxl_animation" "test_jpegxl_animation"
+run_custom_test "jpegxl_defaults" "test_jpegxl_defaults"
+run_custom_test "hap_alpha" "test_hap_alpha"
+run_custom_test "apv_alpha" "test_apv_alpha"
+run_platform_test "librsvg" "linux-x86_64 linux-x86_64-hardware windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"
 
@@ -406,7 +419,8 @@ run_custom_test "whisper_vad_threads" "test_whisper_vad_threads"
 # #119 segments and words end inside their window (also needs the VAD model).
 run_custom_test "whisper_segment_ends" "test_whisper_segment_ends"
 
-# stemsplit 1.1.0 release gates (lib/stemsplit.sh): the stemsplit tag's own
+# stemsplit release gates (lib/stemsplit.sh; 1.1.0's three, with 1.2.0's
+# use_gpu=auto runs in the clean-exit loop): the stemsplit tag's own
 # suite with the tiny RoFormer models, 20/20 clean exits, and Spleeter stems
 # byte-identical with the previous release. They need the assets
 # tests/lib/stemsplit-assets.sh fetches (STEMSPLIT_ASSETS_DIR, or a
@@ -415,6 +429,34 @@ run_custom_test "whisper_segment_ends" "test_whisper_segment_ends"
 run_custom_test "stemsplit_suite" "test_stemsplit_suite"
 run_custom_test "stemsplit_clean_exit" "test_stemsplit_clean_exit"
 run_custom_test "stemsplit_spleeter_ab" "test_stemsplit_spleeter_ab"
+
+# lyricsalign (#126): the filter is present, and with the assets
+# tests/lib/lyricsalign-assets.sh fetches (LYRICSALIGN_ASSETS_DIR, or a
+# lyricsalign-assets/ directory next to the binary) the real-model checks of
+# lib/lyricsalign.sh: the JFK port gates, determinism, the init failures and
+# the behaviours of the issue. Without the assets every check SKIPs with a
+# reason; use_gpu=1 runs only with LYRICSALIGN_TEST_GPU=1.
+run_test "lyricsalign" "-hide_banner -filters | grep lyricsalign" "lyricsalign"
+run_custom_test "lyricsalign_shape" "test_lyricsalign_shape"
+run_custom_test "lyricsalign_jfk_gate_c" "test_lyricsalign_jfk_gate_c"
+run_custom_test "lyricsalign_gate_a" "test_lyricsalign_gate_a"
+run_custom_test "lyricsalign_deterministic" "test_lyricsalign_deterministic"
+run_custom_test "lyricsalign_init_failures" "test_lyricsalign_init_failures"
+run_custom_test "lyricsalign_destination_pipe" "test_lyricsalign_destination_pipe"
+run_custom_test "lyricsalign_empty_line" "test_lyricsalign_empty_line"
+run_custom_test "lyricsalign_blend_zero" "test_lyricsalign_blend_zero"
+run_custom_test "lyricsalign_no_alignment" "test_lyricsalign_no_alignment"
+run_custom_test "lyricsalign_text_forms" "test_lyricsalign_text_forms"
+run_custom_test "lyricsalign_odd_lines" "test_lyricsalign_odd_lines"
+run_custom_test "lyricsalign_backing_lengths" "test_lyricsalign_backing_lengths"
+run_custom_test "lyricsalign_short_audio" "test_lyricsalign_short_audio"
+run_custom_test "lyricsalign_word_labels" "test_lyricsalign_word_labels"
+run_custom_test "lyricsalign_output_closed" "test_lyricsalign_output_closed"
+run_custom_test "lyricsalign_write_error" "test_lyricsalign_write_error"
+run_custom_test "lyricsalign_unicode_paths" "test_lyricsalign_unicode_paths"
+run_custom_test "lyricsalign_output_format" "test_lyricsalign_output_format"
+run_custom_test "lyricsalign_metadata" "test_lyricsalign_metadata"
+run_custom_test "lyricsalign_gpu" "test_lyricsalign_gpu"
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

@@ -74,5 +74,8 @@
 		"eslint": "^10.4.0",
 		"typescript": "^6.0.3",
 		"vitest": "^5.0.1"
+	},
+	"overrides": {
+		"katex": "^0.18.2"
 	}
 }

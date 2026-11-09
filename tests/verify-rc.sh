@@ -149,7 +149,8 @@ fi
 # Record whether the binary ran natively. darwin-x86_64 on an Apple Silicon Mac
 # is a Rosetta 2 translation, and "tested on real hardware" has to say so —
 # otherwise the evidence reads as an x86 Mac nobody owns.
-TargetArch="${Platform##*-}"
+TargetPlatform="${Platform%-hardware}"
+TargetArch="${TargetPlatform##*-}"
 HostArch="$(uname -m)"
 case "$HostArch" in
 amd64) HostArch="x86_64" ;;
