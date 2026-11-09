@@ -187,6 +187,7 @@ RUN chmod +x /test/init/dev.sh \
 
 # ffmpeg
 RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
+    && FREEBSD_LINK_CC="${CC}" export FREEBSD_LINK_CC \
     && CFLAGS="${CFLAGS} $(cat /build/cflags.txt)" export CFLAGS \
     && LDFLAGS="${LDFLAGS} $(cat /build/ldflags.txt)" export LDFLAGS \
     # -lmd: FreeBSD's liblzma.a needs libmd's SHA256 at static link time
@@ -195,6 +196,7 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     && echo "🚧 Start building FFmpeg" \
     && echo "------------------------------------------------------" \
     && cd /build/ffmpeg \
+    && chmod +x /scripts/includes/freebsd_link.sh \
     && echo "⚙️ Configure FFmpeg                              [1/2]" \
     && ./configure --pkg-config-flags=--static \
     --arch=${ARCH} \
@@ -213,21 +215,33 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --enable-filter=all \
     --enable-runtime-cpudetect \
     --extra-version="NoMercy-MediaServer" \
-    --extra-cflags="-static" \
-    --extra-ldflags="-static" \
+    --ld=/scripts/includes/freebsd_link.sh \
+    --glslc=/usr/bin/glslangValidator \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
     || (cat "/ffmpeg_build.log" ; echo "--- last 200 lines of ffbuild/config.log (compiler and linker errors) ---" ; tail -200 "/build/ffmpeg/ffbuild/config.log" 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
+    && for feature in VULKAN VULKAN_1_4 LIBPLACEBO WHISPER; do \
+         grep -q "^#define CONFIG_${feature} 1$" config.h \
+           || { echo "Required FreeBSD feature is disabled: ${feature}"; exit 1; }; \
+       done \
+    && for feature in SCALE_VULKAN_FILTER LIBPLACEBO_FILTER WHISPER_FILTER STEMSPLIT_FILTER \
+         H264_VULKAN_HWACCEL HEVC_VULKAN_HWACCEL AV1_VULKAN_HWACCEL VP9_VULKAN_HWACCEL AV1_VULKAN_ENCODER; do \
+         grep -q "^#define CONFIG_${feature} 1$" config_components.h \
+           || { echo "Required FreeBSD component is disabled: ${feature}"; exit 1; }; \
+       done \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
     && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; cat "/build/ffmpeg/ffbuild/config.log" ; echo "❌ FFmpeg build failed" ; exit 1) \
     && echo "🔎 Verifying ggml CPU variants survived the link" \
     && bash /scripts/includes/verify_ggml_cpu_link.sh \
+    && bash /scripts/includes/verify_freebsd_runtime.sh \
     && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \
     && echo "------------------------------------------------------" \
     && echo "✅ FFmpeg was built successfully" \
     && echo "------------------------------------------------------" 
 
-RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
+RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh \
+    && tar -tzf /output/ffmpeg-*-freebsd-x86_64.tar.gz >/tmp/archive-files.txt \
+    && ! grep -E '\.so($|[./])' /tmp/archive-files.txt
 
 FROM alpine:latest AS final
 

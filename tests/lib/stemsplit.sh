@@ -1,5 +1,7 @@
 #!/bin/bash
-# The stemsplit release gates (docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md).
+# The stemsplit release gates (docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md),
+# plus the use_gpu=auto runs stemsplit 1.2.0's hand-over asks for in the
+# clean-exit loop (ffmpeg-stemsplit docs/handover-1.2.0.md, "nomercy-ffmpeg").
 #
 # Three functions, each following run_custom_test's exit-code protocol in
 # tests.sh: 0 pass, 2 skip (reason on a "SKIP: " line), anything else fail.
@@ -8,7 +10,8 @@
 #                               the binary under test with the tiny RoFormer
 #                               models and the Spleeter model (contract §8, the
 #                               CI row)
-#   test_stemsplit_clean_exit   20 Spleeter runs and 20 RoFormer runs, every one
+#   test_stemsplit_clean_exit   20 Spleeter runs, 20 RoFormer runs and 20
+#                               RoFormer runs under use_gpu=auto, every one
 #                               of which must leave on its own, with exit 0
 #                               (contract §7 rule 7)
 #   test_stemsplit_spleeter_ab  the Spleeter stems are byte-identical with the
@@ -55,10 +58,13 @@ _stemsplit_inputs() {
 	SS_ASSETS="$(cd "${SS_ASSETS}" && pwd)"
 	SS_TESTS=ffmpeg-stemsplit/tests
 	SS_TINY=tiny
+	# The tag whose suite and filter the assets hold (tests/lib/stemsplit-assets.sh).
+	STEMSPLIT_SUITE_TAG="$(cat "${SS_ASSETS}/ffmpeg-stemsplit/.nm-suite-tag" 2>/dev/null || echo unknown)"
 	SS_MODEL=spleeter-2stems-f16.gguf
 	# The previous release's binary for THIS platform (one directory each;
 	# a machine testing two platforms must not have them overwrite each other).
-	case "${FFMPEG}" in *.exe) SS_REF="ref/${Platform:-unknown}/ffmpeg.exe" ;; *) SS_REF="ref/${Platform:-unknown}/ffmpeg" ;; esac
+	local ref_platform="${Platform:-unknown}"
+	case "${FFMPEG}" in *.exe) SS_REF="ref/${ref_platform}/ffmpeg.exe" ;; *) SS_REF="ref/${ref_platform}/ffmpeg" ;; esac
 	local f
 	for f in "${SS_TESTS}/run_tests.sh" "${SS_TESTS}/gen_audio.py" "${SS_TINY}/tiny-mel-v1.gguf" "${SS_MODEL}"; do
 		if [[ ! -f "${SS_ASSETS}/${f}" ]]; then
@@ -141,7 +147,7 @@ test_stemsplit_suite() {
 	_stemsplit_work
 
 	echo "assets: ${SS_ASSETS}"
-	echo "suite:  ${SS_TESTS}/run_tests.sh (ffmpeg-stemsplit v1.1.0)"
+	echo "suite:  ${SS_TESTS}/run_tests.sh (ffmpeg-stemsplit ${STEMSPLIT_SUITE_TAG})"
 	# TINY_DIR set explicitly means a missing tiny file is a failure, not a
 	# skip: a partial tarball must not pass green. MODEL turns the Spleeter
 	# tiers on. NM_GGML=1 tells the suite this binary took nomercy-ffmpeg's
@@ -181,7 +187,7 @@ test_stemsplit_suite() {
 		echo "--- warnings the filter logged in the suite's runs ---"
 		grep -hE 'stemsplit: .*(cannot run|falling back|using the CPU|running on the CPU|refus)' \
 			"${SS_WORK}"/suite/*.log 2>/dev/null | sed -E 's/^\[[^]]*\] //' | sort | uniq -c | sort -rn | head -10
-		echo "FAIL: ${failed} check(s) of the stemsplit v1.1.0 suite failed (full log: ${SS_WORK}/suite.log)"
+		echo "FAIL: ${failed} check(s) of the stemsplit ${STEMSPLIT_SUITE_TAG} suite failed (full log: ${SS_WORK}/suite.log)"
 		return 1
 	fi
 	# Two tiers are expected to skip: the real-weight RoFormer tiers (MODEL_DIR)
@@ -278,12 +284,56 @@ test_stemsplit_clean_exit() {
 		-hide_banner -nostdin -nostats -v verbose -y -i audio/short.wav \
 		-filter_complex "[0:a]stemsplit=model=${SS_TINY}/tiny-mel-v1.gguf[v][a]" \
 		-map "[v]" -f null - -map "[a]" -f null - || fail=1
+	# RoFormer under use_gpu=auto (stemsplit 1.2.0): the device list, the
+	# calibration and the self-check run before the first chunk, and every
+	# run must still exit on its own. A runner has no usable GPU, so auto
+	# lands on the CPU: the stems are written so the bytes can be held
+	# against use_gpu=0's below (handover-1.2.0.md: "must give use_gpu=0's
+	# bytes"). "weights loaded" again: a run that never reached RoFormer did
+	# no work.
+	_stemsplit_series roformer-auto "${runs}" 300 "weights loaded" \
+		-hide_banner -nostdin -nostats -v verbose -y -i audio/short.wav \
+		-filter_complex "[0:a]stemsplit=model=${SS_TINY}/tiny-mel-v1.gguf:use_gpu=auto[v0][a];[v0]ametadata=mode=print:key=lavfi.stemsplit.backend[v]" \
+		-map "[v]" -c:a pcm_f32le -fflags +bitexact -f wav work/auto_v.wav \
+		-map "[a]" -c:a pcm_f32le -fflags +bitexact -f wav work/auto_a.wav || fail=1
 
 	if (( fail )); then
 		echo "FAIL: not every run exited cleanly; this is contract §7 rule 7 (logs in ${SS_WORK})"
 		return 1
 	fi
-	echo "every run of both series exited cleanly"
+	echo "every run of the three series exited cleanly"
+
+	# The last auto run against one use_gpu=0 run of the same graph. Which
+	# backend made the auto stems comes from the frame metadata that run
+	# printed (lavfi.stemsplit.backend), never from an init line. On a
+	# machine where auto took a device the stems may differ (within 45 dB,
+	# not equal), and that is the one case this check must not fail on; only
+	# a CPU run is held to the bytes. CI never has a device; the owner's
+	# machine may.
+	local backend
+	backend="$(grep -ao 'lavfi.stemsplit.backend=[a-z|]*' "${SS_WORK}/roformer-auto-${runs}.log" | tail -1 | cut -d= -f2)"
+	if [[ -z "${backend}" ]]; then
+		echo "FAIL: the use_gpu=auto run printed no lavfi.stemsplit.backend metadata (stemsplit 1.2.0 sets it on every frame)"
+		return 1
+	fi
+	if (cd "${SS_ASSETS}" && "${SS_FFMPEG}" -hide_banner -nostdin -nostats -v error -y -i audio/short.wav \
+		-filter_complex "[0:a]stemsplit=model=${SS_TINY}/tiny-mel-v1.gguf:use_gpu=0[v][a]" \
+		-map "[v]" -c:a pcm_f32le -fflags +bitexact -f wav work/cpu_v.wav \
+		-map "[a]" -c:a pcm_f32le -fflags +bitexact -f wav work/cpu_a.wav >"${SS_WORK}/roformer-cpu.log" 2>&1); then
+		if [[ "${backend}" != cpu ]]; then
+			echo "use_gpu=auto took a device on this machine (backend ${backend}); its bytes are not held against the CPU's here"
+		elif cmp -s "${SS_ASSETS}/work/auto_v.wav" "${SS_ASSETS}/work/cpu_v.wav" \
+			&& cmp -s "${SS_ASSETS}/work/auto_a.wav" "${SS_ASSETS}/work/cpu_a.wav"; then
+			echo "use_gpu=auto landed on the CPU (backend cpu) and gives use_gpu=0's bytes (both stems identical)"
+		else
+			echo "FAIL: use_gpu=auto ran on the CPU but its stems differ from use_gpu=0's (contract: auto without a device is the exact CPU run)"
+			return 1
+		fi
+	else
+		tail -5 "${SS_WORK}/roformer-cpu.log"
+		echo "FAIL: the use_gpu=0 reference run for the auto comparison failed"
+		return 1
+	fi
 	return 0
 }
 

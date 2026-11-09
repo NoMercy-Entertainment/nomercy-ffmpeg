@@ -2,6 +2,32 @@
 # CI pins this to the base built in the same run (BASE_TAG=<commit sha>);
 # local/compose builds use the default "latest". See .github/workflows.
 ARG BASE_TAG=latest
+
+# glibc 2.35 sysroot. The Linux x86_64 build links the host's glibc
+# dynamically, the way every other platform uses its system runtime, so that
+# GPU drivers load into the one C runtime the process already has. The glibc
+# it is compiled and linked against is therefore the oldest one it can start
+# on. The base image is Ubuntu 24.04 (glibc 2.39), which would shut out
+# Ubuntu 22.04 and Debian 12; compiling and linking against Ubuntu 22.04's
+# glibc instead gives a 2.35 floor. The sysroot holds
+# glibc and the same X development packages ffmpeg-base.dockerfile installs
+# from apt (libXau and libXdmcp, which the libxcb built by 08-libdrm.sh needs
+# and which no script builds); every codec, xproto, libxcb and libX11 are built
+# from source by the numbered scripts, as on every platform, and their copies
+# in the build prefix win over the sysroot's. The image is pinned by digest;
+# apt still fetches the current jammy point release of glibc, like every
+# apt-get in ffmpeg-base.dockerfile. scripts/includes/glibc235_sysroot_setup.sh
+# wires the sysroot into the build below.
+FROM ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11 AS glibc235-sysroot
+RUN apt-get update >/dev/null 2>&1 \
+    && apt-get install -y --no-install-recommends libc6-dev linux-libc-dev libcrypt-dev \
+       libxext-dev libxau-dev libxdmcp-dev xtrans-dev xutils-dev >/dev/null 2>&1 \
+    && mkdir -p /sysroot/usr \
+    && cp -a /usr/include /usr/lib /usr/lib64 /sysroot/usr/ \
+    && ln -s usr/lib /sysroot/lib && ln -s usr/lib64 /sysroot/lib64 \
+    && rm -rf /sysroot/usr/lib/apt /sysroot/usr/lib/dpkg /sysroot/usr/lib/systemd /sysroot/usr/lib/udev /sysroot/usr/lib/python3* \
+    && test "$(sed -n 's/^#define[[:space:]]*__GLIBC_MINOR__[[:space:]]*//p' /sysroot/usr/include/features.h)" = 35
+
 FROM nomercyentertainment/ffmpeg-base:${BASE_TAG} AS linux
 
 LABEL maintainer="Phillippe Pelzer"
@@ -100,6 +126,15 @@ COPY ./scripts /scripts
 # Convert Windows line endings to Unix line endings
 RUN find /scripts -type f -name "*.sh" -exec sed -i 's/\r$//' {} +
 
+# Compile and link everything against the glibc 2.35 sysroot. The script
+# writes compiler wrappers into /usr/local/bin, adds the four symbols gcc 13's
+# static runtimes need to the sysroot's libc_nonshared.a, and proves with a
+# C++/OpenMP probe that a program links, runs and imports nothing above
+# GLIBC_2.35, before the first dependency builds.
+COPY --from=glibc235-sysroot /sysroot /opt/glibc235
+RUN chmod +x /scripts/includes/glibc235_sysroot_setup.sh \
+    && /scripts/includes/glibc235_sysroot_setup.sh /opt/glibc235
+
 # Which release of our own filters to build, and which omnidrive ref. CI
 # resolves them once per run (detect-changes) and passes the same values to
 # every platform. They sit right before init.sh on purpose: a changed value
@@ -131,6 +166,7 @@ RUN chmod +x /test/init/dev.sh \
 
 # ffmpeg
 RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
+    && LINUX_LINK_CC="${CC}" export LINUX_LINK_CC \
     && CFLAGS="${CFLAGS} $(cat /build/cflags.txt)" export CFLAGS \
     && LDFLAGS="${LDFLAGS} $(cat /build/ldflags.txt)" export LDFLAGS \
     && FFMPEG_EXTRA_LIBFLAGS="-lpthread -lm $(cat /build/extra_libflags.txt)" export FFMPEG_EXTRA_LIBFLAGS \
@@ -138,6 +174,10 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     && echo "🚧 Start building FFmpeg" \
     && echo "------------------------------------------------------" \
     && cd /build/ffmpeg \
+    && chmod +x /scripts/includes/linux_link.sh \
+    && set -- --ld=/scripts/includes/linux_link.sh --glslc=/usr/bin/glslangValidator \
+         '--extra-cflags=-static-libgcc -static-libstdc++' \
+         '--extra-ldflags=-static-libgcc -static-libstdc++' \
     && echo "⚙️ Configure FFmpeg                              [1/2]" \
     && ./configure --pkg-config-flags=--static \
     --arch=${ARCH} \
@@ -156,21 +196,43 @@ RUN FFMPEG_ENABLES=$(cat /build/enable.txt) export FFMPEG_ENABLES \
     --enable-filter=all \
     --enable-runtime-cpudetect \
     --extra-version="NoMercy-MediaServer" \
-    --extra-cflags="-static -static-libgcc -static-libstdc++" \
-    --extra-ldflags="-static -static-libgcc -static-libstdc++" \
+    "$@" \
     --extra-libs="${FFMPEG_EXTRA_LIBFLAGS}" >/ffmpeg_build.log 2>&1 \
     || (cat "/ffmpeg_build.log" ; echo "--- last 200 lines of ffbuild/config.log (compiler and linker errors) ---" ; tail -200 "/build/ffmpeg/ffbuild/config.log" 2>/dev/null ; echo "❌ FFmpeg build failed" ; false) \
+    && for feature in VULKAN LIBPLACEBO CUDA; do \
+         grep -q "^#define CONFIG_${feature} 1$" config.h \
+           || { echo "Required hardware feature is disabled: ${feature}"; exit 1; }; \
+       done \
+    && for feature in SCALE_VULKAN_FILTER LIBPLACEBO_FILTER H264_NVENC_ENCODER \
+         HEVC_NVENC_ENCODER H264_NVDEC_HWACCEL; do \
+         grep -q "^#define CONFIG_${feature} 1$" config_components.h \
+           || { echo "Required hardware component is disabled: ${feature}"; exit 1; }; \
+       done \
+    && for feature in WHISPER_FILTER STEMSPLIT_FILTER; do \
+         grep -q "^#define CONFIG_${feature} 1$" config_components.h \
+           || { echo "Required filter is disabled: ${feature}"; exit 1; }; \
+       done \
+    && { grep -q '^#define CONFIG_VULKAN_1_4 1$' config.h \
+           || { echo "Required Vulkan 1.4 support is disabled"; exit 1; }; } \
+    && for feature in H264_VULKAN_HWACCEL HEVC_VULKAN_HWACCEL AV1_VULKAN_HWACCEL \
+         VP9_VULKAN_HWACCEL AV1_VULKAN_ENCODER; do \
+         grep -q "^#define CONFIG_${feature} 1$" config_components.h \
+           || { echo "Required Vulkan component is disabled: ${feature}"; exit 1; }; \
+       done \
     && echo "🛠️ Building FFmpeg                               [2/2]" \
     && make -j${BUILD_JOBS:-$(nproc)} >/ffmpeg_build.log 2>&1 || (cat "/ffmpeg_build.log" ; cat "/build/ffmpeg/ffbuild/config.log" ; echo "❌ FFmpeg build failed" ; exit 1) \
     && echo "🔎 Verifying ggml CPU variants survived the link" \
     && bash /scripts/includes/verify_ggml_cpu_link.sh \
+    && bash /scripts/includes/verify_linux_runtime.sh hardware \
     && make install >/dev/null 2>&1 \
     && rm -rf /build/ffmpeg \
     && echo "------------------------------------------------------" \
     && echo "✅ FFmpeg was built successfully" \
     && echo "------------------------------------------------------" 
 
-RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
+RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh \
+    && tar -tzf /output/ffmpeg-*-linux-x86_64.tar.gz >/tmp/archive-files.txt \
+    && ! grep -E '\.so($|[./])' /tmp/archive-files.txt
 
 FROM alpine:latest AS final
 

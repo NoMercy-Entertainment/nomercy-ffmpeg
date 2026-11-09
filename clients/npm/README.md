@@ -76,6 +76,11 @@ Resolution order for each tool:
 | macOS | arm64 | `darwin-arm64.tar.gz` |
 | macOS | x64 | `darwin-x86_64.tar.gz` |
 
+From v1.0.46 the Linux x64 archive needs glibc 2.35 or newer (Ubuntu 22.04,
+Debian 12 and newer). It carries hardware acceleration, which is used when
+the machine has a supported GPU and driver and is not used otherwise. See the
+[Linux requirements](../../README.md#linux-x86_64-requirements).
+
 On an unsupported platform, resolution throws with the supported list and a
 pointer to `NOMERCY_FFMPEG`. Set that env var to use a binary you supply.
 

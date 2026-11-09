@@ -2,6 +2,76 @@
 
 ## Version History
 
+### Unreleased
+
+- stemsplit 1.2.1: `use_gpu=auto` runs the RoFormer models on a Vulkan GPU
+  when the build enables the backend, the device is a real GPU, it beats the
+  CPU in a calibration and passes a self-check against the CPU's output;
+  otherwise the CPU, byte for byte. The default `use_gpu=0`, every Spleeter
+  output and every option's place are unchanged. The support statement ends
+  `Backends enabled for use_gpu=auto: vulkan.` on Linux x86_64,
+  Linux ARM64, Windows and FreeBSD and `none.` on macOS;
+  the Vulkan builds define `GGML_USE_VULKAN` in whisper's Cflags, which is how
+  the filter learns ggml-vulkan is linked in. New frame metadata
+  `lavfi.stemsplit.device`. The smoke gates run the 1.2.1 suite, twenty clean
+  exits under `use_gpu=auto` held to `use_gpu=0`'s bytes, and the suite's
+  devices block on lavapipe on the Linux x86_64 job.
+- keydetect 1.6.0: new `minor_profile` option, default `edma`, for the minor
+  row of the key correlation; `minor_profile=shaath` restores 1.5.0's key
+  decision exactly. Chords, every field and every other option are unchanged.
+  beatdetect stays at 1.4.0.
+- lyricsalign (#126): new audio filter for time-synced lyrics by CTC forced
+  alignment, a wav2vec2 phoneme model on ggml with espeak-ng phonemes, JSON
+  Lines output; espeak-ng 1.52.0 is linked statically and its `espeak-ng-data`
+  ships in every platform archive. The model lives in
+  nomercy-lyricsalign-models and is pinned by the test suites.
+- CI: the windows-aarch64 release gate runs on GitHub's hosted windows-11-arm
+  runner (#76); verify-rc leaves no files behind in the Lima and FreeBSD
+  guests, and fleet-health probes the Lima guest.
+- **Breaking, Linux x86_64:** the `linux-x86_64` archive now uses the host's
+  glibc and needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and newer); it
+  is no longer a fully static executable. It is still one archive: hardware
+  acceleration (NVENC/CUDA, VAAPI, QuickSync, AMF, Vulkan) is compiled in, is
+  detected at run time and is not used on a machine without it. On an older
+  system the loader refuses the binary before FFmpeg starts. It is compiled
+  and linked against a glibc 2.35 sysroot from Ubuntu
+  22.04 instead of the 24.04 base image's 2.39, and the build rejects any
+  import above GLIBC_2.35. Codecs, C++ and OpenMP stay
+  static; the archive ships no `.so` files. The reason for the change: a GPU
+  driver loaded into a static glibc executable gives the process two C
+  runtimes, and matching the host's glibc version does not make that
+  combination safe. The archive passes ELF, package and smoke gates.
+  Whisper/stemsplit CPU inference passes on glibc 2.35/2.36/2.39/2.43 hosts
+  (it starts and infers on Ubuntu 22.04 and Debian 12, checked by
+  the new `tests/lib/glibc-hosts.sh` in CI); H.264/HEVC NVENC,
+  CUDA decode and whisper Vulkan inference pass on an RTX 3070 under WSL2. FFmpeg's
+  tested Vulkan upload/scale/download video path fails cleanly through Dozen;
+  Linux ARM64 and FreeBSD are unchanged.
+- Windows x86_64: D3D12VA is now in the build (hardware decoding for H.264,
+  HEVC, AV1, VP9, MPEG-2 and VC-1, the H.264/HEVC/AV1 encoders and the
+  scale/deinterlace/mestimate filters). It was silently missing: the x86_64
+  toolchain's mingw-w64 11.0.1 has no `d3d12video.h`, so FFmpeg's configure
+  left it out. `scripts/47-dxva.sh` now hands FFmpeg the Direct3D 12 headers
+  of mingw-w64 14.0.0, pinned by digest, and enables it explicitly on both
+  Windows builds. Windows ARM64 already had it.
+- FreeBSD: enable Vulkan/libplacebo and ggml Vulkan for whisper/stemsplit by
+  linking the FreeBSD base runtime dynamically. Codec libraries remain static,
+  and no `.so` files are shipped with FFmpeg. FreeBSD 14.3 is the supported
+  baseline; GPU use requires the host's Vulkan loader and driver. Enable the
+  fork-and-probe guard and retain CPU fallback. Native FreeBSD GPU verification
+  is still required (#125).
+- HAP/APV alpha: statically link Snappy 1.3.1 and OpenAPV 1.1.3.0 across all
+  platforms (`--enable-libsnappy`, `--enable-liboapv`). Backport FFmpeg's OpenAPV
+  API-set 1 metadata descriptor support. Both manual suites and executable CI
+  smoke jobs check three-frame alpha gradients through the native decoders.
+  Ships with the next content release; no standalone release or version bump
+  (#121).
+- JPEG XL: statically link libjxl 0.12.0 for still and animated encoding and
+  decoding (`--enable-libjxl`), including alpha. Both manual test suites and
+  executable CI smoke jobs verify lossless RGBA round-trips and default encoder
+  settings. Ships with the next content release; no standalone release or version
+  bump (#109).
+
 ### v1.0.35 - May 22, 2026
 
 #### ⬆️ FFmpeg 8.0 → 8.1.1 Upgrade

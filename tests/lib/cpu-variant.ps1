@@ -253,18 +253,37 @@ function Test-CpuVariant {
 # precisely that it asserts ABSENCE, and a hard-coded "Windows has no guard"
 # would assert nothing at all.
 
-# Four of the seven platforms carry Vulkan. darwin gets Metal in a later
-# phase; freebsd links statically against a libc.a whose dlopen() always
-# fails, so the loader shim could never open a loader there.
+# Every build carries ggml's Vulkan backend except the two Darwin targets,
+# which omit Vulkan; arm64 uses Metal. Linux x64 and FreeBSD use the system
+# runtime with static codec libraries.
 function Test-VulkanPlatformHasBackend {
     param([string]$Platform)
-    return ($Platform -notmatch 'darwin' -and $Platform -notmatch 'freebsd')
+    return ($Platform -notmatch 'darwin')
+}
+
+# The last sentence of stemsplit's support statement, per build flavour: the
+# backends use_gpu=auto may take. stemsplit 1.2.0 fixes it at compile time
+# from GGML_USE_VULKAN in whisper.pc's Cflags (scripts/48-whisper.sh), set on
+# exactly the platforms Test-VulkanPlatformHasBackend names. A string literal
+# in the filter description, so greppable without running the binary. Metal
+# is not enabled for auto in any build (stemsplit design G12).
+function Get-StemsplitAutoBackendsExpected {
+    param([string]$Platform)
+    if (Test-VulkanPlatformHasBackend $Platform) { return 'vulkan' } else { return 'none' }
+}
+
+# True if the binary announces exactly the given list and not the other one.
+function Test-StemsplitAutoBackendsAnnounced {
+    param([string]$Bin, [string]$List)
+    $other = if ($List -eq 'vulkan') { 'none' } else { 'vulkan' }
+    return ((Test-BinaryContainsString -Bin $Bin -Needle "Backends enabled for use_gpu=auto: $List.") -and
+            -not (Test-BinaryContainsString -Bin $Bin -Needle "Backends enabled for use_gpu=auto: $other."))
 }
 
 # The fork-and-probe ICD guard is compiled only for non-Windows, non-Apple.
 function Test-VulkanPlatformHasGuard {
     param([string]$Platform)
-    return ($Platform -notmatch 'windows' -and $Platform -notmatch 'darwin' -and $Platform -notmatch 'freebsd')
+    return ($Platform -notmatch 'windows' -and $Platform -notmatch 'darwin')
 }
 
 # Both halves must be there: ggml-vulkan itself, and the loader shim that
@@ -327,10 +346,10 @@ function Test-VulkanGuardVocabularyIntact {
 # this used to run `ffmpeg -version`, which never builds a filtergraph and so
 # never reaches the ggml backend registry that actually crashes. It reported
 # PASS for configurations measured to segfault a real filter. It now
-# instantiates the whisper filter, whose init() runs the guard and
-# ggml_backend_load_all() BEFORE it rejects a missing model, so the
-# "No whisper model path specified" error is positive proof that ggml init was
-# reached and survived.
+# supplies a nonempty nonexistent model path so init() reaches config_input().
+# There the guard and ggml_backend_load_all() run before model opening fails.
+# That later context-initialization failure proves backend discovery returned;
+# a bare "whisper" rejects its missing path too early to prove anything.
 #
 # Which configurations may crash: the default, no-driver and NOMERCY_GGML_GPU=0
 # arms must never crash. NOMERCY_VK_ICD_GUARD=0 means "opt out of the driver
@@ -360,23 +379,24 @@ function Test-VulkanStartup {
         # "could not instantiate"), and without .ToString() the merged items
         # are ErrorRecords rather than text.
         $ErrorActionPreference = 'Continue'
+        $filter = 'whisper=model=/nonexistent.bin:use_gpu=0'
         if ($inSpec -eq 'lavfi') {
             $out = (& $exe -hide_banner -loglevel error -nostats `
                 -f lavfi -i 'anullsrc=channel_layout=mono:sample_rate=16000' -t 0.1 `
-                -af whisper -f null - 2>&1 | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+                -af $filter -f null - 2>&1 | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
         } else {
             $out = (& $exe -hide_banner -loglevel error -nostats `
-                -i $inSpec -t 0.1 -af whisper -f null - 2>&1 | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+                -i $inSpec -t 0.1 -af $filter -f null - 2>&1 | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
         }
         $code = $LASTEXITCODE
 
-        # Positive proof first, and it is the real discriminator.
-        if ($out -match 'No whisper model path specified') { return @{ R = 0 } }
-
-        # Then the exit code, and only a BOUNDED NTSTATUS exception range.
+        # Fatal status wins even if the model error was logged before teardown.
+        # Recognize a watchdog's status 124; this helper installs no watchdog.
+        if ($code -eq 124) { return @{ R = 1; Out = "timed out: watchdog exit 124`n$out" } }
+        # Use only a BOUNDED NTSTATUS exception range.
         # Three traps here, all of them measured rather than reasoned:
-        #   * On Windows ffmpeg returns the raw AVERROR, so the missing model
-        #     is -22, not the 234 a POSIX shell would show. "$code -lt 0"
+        #   * On Windows ffmpeg returns the raw AVERROR, so a model-open failure
+        #     is -5, not the 251 a POSIX shell would show. "$code -lt 0"
         #     would call every healthy run a crash.
         #   * The range has an upper bound too. -22 unsigned is 0xFFFFFFEA,
         #     which is ABOVE 0xC0000000 -- so ">= 0xC0000000" misclassifies it
@@ -392,11 +412,18 @@ function Test-VulkanStartup {
         if ($unsigned -ge 3221225472L -and $unsigned -le 3489660927L) {
             return @{ R = 1; Out = "crashed: exit $code (0x$(('{0:X8}' -f $unsigned)))`n$out" }
         }
+        if ($out -match 'Failed to initialize whisper context from model:') { return @{ R = 0 } }
         return @{ R = 2; Out = "could not instantiate the whisper filter here (exit $code); this configuration proved nothing`n$out" }
     }
 
     $inSpec = 'lavfi'
-    if ((& $probe $FFmpegExe 'lavfi').R -eq 2) {
+    $initial = & $probe $FFmpegExe 'lavfi'
+    if ($initial.R -eq 1) {
+        return @{ Ok = $false; Crash = $true
+                  Reason = 'crashed or timed out instantiating a ggml filter (lavfi)'
+                  Output = "FAIL: the binary crashed or timed out instantiating a ggml filter (lavfi)`n$($initial.Out)" }
+    }
+    if ($initial.R -eq 2) {
         # Minimal builds have no lavfi input device; write 0.1 s of 16 kHz
         # mono silence rather than quietly proving nothing.
         $wav = Join-Path ([System.IO.Path]::GetTempPath()) ("nm-vk-silence-" + [guid]::NewGuid().ToString('N') + '.wav')
@@ -428,11 +455,11 @@ function Test-VulkanStartup {
             0 { }
             1 {
                 if ($c.MayCrash) {
-                    $notes.Add("note: $($c.Label): this machine's drivers do kill a static binary, so the guard is load-bearing here - which is what opting out of it means, not a failure")
+                    $notes.Add("note: $($c.Label): the Vulkan path crashed or timed out with protection disabled; opting out of the guard permits this failure")
                 } else {
                     return @{ Ok = $false; Crash = $true
-                              Reason = "crashed instantiating a ggml filter ($($c.Label))"
-                              Output = "FAIL: the binary died instantiating a ggml filter ($($c.Label))`n$($r.Out)" }
+                              Reason = "crashed or timed out instantiating a ggml filter ($($c.Label))"
+                              Output = "FAIL: the binary crashed or timed out instantiating a ggml filter ($($c.Label))`n$($r.Out)" }
                 }
             }
             default { $notes.Add("note: $($c.Label): $($r.Out)"); $inconclusive = $true }

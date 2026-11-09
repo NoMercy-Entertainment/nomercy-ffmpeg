@@ -206,7 +206,7 @@ jobs:
             zip)    unzip -o "${archive}" ;;
           esac
 
-      # stemsplit 1.1.0 release gates (contract §7 rule 7 and §8; design in
+      # stemsplit release gates (contract §7 rule 7 and §8; design in
       # docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md).
       # The three checks in tests/lib/stemsplit.sh read the assets
       # tests/lib/stemsplit-assets.sh fetches, every one pinned by digest: the
@@ -225,6 +225,20 @@ jobs:
         with:
           python-version: '3.12'
 
+      # lavapipe (Mesa's software Vulkan device): the stemsplit suite's
+      # devices block (1.2.x) proves use_gpu=auto's device list, calibration
+      # and self-check on lavapipe only, and skips itself loudly where there
+      # is none. The Linux x64 archive links ggml-vulkan and its runner can
+      # execute it, so this is the one job where that block can run at all;
+      # windows-latest has no Vulkan loader, and the block skips there by
+      # design.
+      - name: Install lavapipe for the stemsplit devices block
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libvulkan1 >/dev/null
+          echo "lavapipe: $(ls /usr/share/vulkan/icd.d/ 2>/dev/null | tr '\n' ' ')"
+
       - name: Fetch stemsplit test assets
         if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64' || startsWith(matrix.platform, 'darwin-')
         shell: bash
@@ -237,14 +251,14 @@ jobs:
 
       # The whisper option tests (#112) need a real model, a clip, and the
       # v1.0.44 binary that default output must stay byte-identical to. Only
-      # for linux-x86_64: the one platform whose smoke runner can execute its
-      # own binary and has a reference build of the same platform. The model
+      # on Linux x64, whose runner can execute the new binary and the
+      # existing Linux x64 reference build. The model
       # and the clip are pinned by digest; a download that is not what was
       # pinned fails the job instead of quietly testing something else. The
       # reference binary is the one the stemsplit step above already fetched,
       # also by digest. WHISPER_TEST_REQUIRED makes smoke.sh fail rather than
       # skip if these ever stop arriving.
-      - name: Fetch whisper test assets (linux-x86_64)
+      - name: Fetch whisper test assets (Linux x64)
         if: matrix.platform == 'linux-x86_64'
         shell: bash
         run: |
@@ -269,7 +283,9 @@ jobs:
                 "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
           # stemsplit-assets.sh keeps one reference build per platform under
           # ref/<platform>/, so one machine can hold several platforms' assets.
-          ref="${STEMSPLIT_ASSETS_DIR:?the stemsplit asset step must run first}/ref/${{ matrix.platform }}/ffmpeg"
+          # The whisper checks compare against the pinned Linux x64 build of
+          # the previous release that the stemsplit step fetched.
+          ref="${STEMSPLIT_ASSETS_DIR:?the stemsplit asset step must run first}/ref/linux-x86_64/ffmpeg"
           [[ -x "${ref}" ]] || { echo "::error::no reference build at ${ref}"; exit 1; }
           {
             echo "WHISPER_TEST_MODEL=${A}/ggml-base.en.bin"
@@ -279,6 +295,21 @@ jobs:
             echo "WHISPER_TEST_REQUIRED=1"
           } >> "$GITHUB_ENV"
 
+      # The lyricsalign checks (#126) need the phoneme model (about 630 MB,
+      # from the org's public models release) and the JFK clip, both pinned
+      # by digest in tests/lib/lyricsalign-assets.sh, plus the fixture files
+      # from the checkout. Linux x64 only, like the whisper checks; the
+      # numpy the stemsplit step installed serves gate (a).
+      # LYRICSALIGN_TEST_REQUIRED makes smoke.sh fail rather than skip.
+      - name: Fetch lyricsalign test assets (Linux x64)
+        if: matrix.platform == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tests/lib/lyricsalign-assets.sh
+          tests/lib/lyricsalign-assets.sh "${RUNNER_TEMP}/lyricsalign-assets" >> "$GITHUB_ENV"
+          echo "LYRICSALIGN_TEST_REQUIRED=1" >> "$GITHUB_ENV"
+
       - name: Smoke test (unix)
         if: matrix.kind == 'unix'
         shell: bash
@@ -286,21 +317,17 @@ jobs:
           chmod +x tests/smoke.sh
           tests/smoke.sh "${GITHUB_WORKSPACE}" "${FFMPEG_VERSION}" "${{ matrix.platform }}"
 
-      # The hosts this runner is not. The smoke job runs on the build's own
-      # glibc (ubuntu-24.04: the previous release's binary, which the whisper
-      # defaults and stemsplit A/B checks run, dies on any other, see
-      # detect-changes.yml). A statically linked binary that opens the host's
-      # Vulkan loader brings the host's libc in as a second libc and must stay
-      # on the CPU on every other glibc; this proves it does, on three of them
-      # and on the matching one with Mesa's drivers. tests/lib/foreign-glibc.sh
-      # is the same check for a developer's machine. Design:
-      # docs/superpowers/specs/2026-11-02-vulkan-loader-glibc-guard-design.md.
-      - name: Foreign glibc hosts (linux-x86_64)
+      # The archive links the host's glibc, so its 2.35 floor is a promise
+      # that has to be kept: it must start and do real CPU inference on
+      # Ubuntu 22.04 (glibc 2.35) and Debian 12 (2.36), and on newer hosts
+      # with the Vulkan loader installed, where the driver guard must leave
+      # it on the CPU backend when there is no usable GPU.
+      - name: glibc floor hosts (linux-x86_64)
         if: matrix.platform == 'linux-x86_64'
         shell: bash
         run: |
-          chmod +x tests/lib/foreign-glibc.sh
-          tests/lib/foreign-glibc.sh ./ffmpeg "${WHISPER_TEST_MODEL:?}" "${WHISPER_TEST_AUDIO:?}"             "${STEMSPLIT_ASSETS_DIR:?}/spleeter-2stems-f16.gguf" "${STEMSPLIT_ASSETS_DIR:?}/audio/mix.wav"
+          chmod +x tests/lib/glibc-hosts.sh
+          tests/lib/glibc-hosts.sh ./ffmpeg "${WHISPER_TEST_MODEL:?}" "${WHISPER_TEST_AUDIO:?}"             "${STEMSPLIT_ASSETS_DIR:?}/spleeter-2stems-f16.gguf" "${STEMSPLIT_ASSETS_DIR:?}/audio/mix.wav"
 
       - name: Smoke test (windows)
         if: matrix.kind == 'windows'

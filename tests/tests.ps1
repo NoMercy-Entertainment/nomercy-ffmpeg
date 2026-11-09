@@ -15,6 +15,9 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/cpu-variant.ps1"
 . "$HERE/lib/whisper.ps1"
 . "$HERE/lib/stemsplit.ps1"
+. "$HERE/lib/lyricsalign.ps1"
+. "$HERE/lib/jpegxl.ps1"
+. "$HERE/lib/alpha-codecs.ps1"
 
 Report-Init -Platform $Platform
 
@@ -40,7 +43,9 @@ New-Item -ItemType Directory -Path $TestRoot -ErrorAction SilentlyContinue | Out
 # read "[3/26]". Anchored at line start so the definitions above never count.
 function get_test_runs_count {
     $lines = Get-Content -Path $PSCommandPath
-    return @($lines | Where-Object { $_ -match '^(run_test|run_hw_test|run_platform_test|run_custom_test) "' }).Count
+    $listed = @($lines | Where-Object { $_ -match '^(run_test|run_hw_test|run_platform_test|run_custom_test) "' }).Count
+    # The lyricsalign checks run from a loop over Get-LyricsalignFunctions.
+    return $listed + @(Get-LyricsalignFunctions).Count
 }
 
 $TOTAL_RUNS = get_test_runs_count
@@ -293,6 +298,11 @@ run_test "libopus" "-y -i $SampleAudio -c:a libopus $TestRoot\test_opus.opus" "o
 run_test "libmp3lame" "-y -i $SampleAudio -c:a libmp3lame $TestRoot\test_mp3.mp3" "mp3"
 run_test "libwebp" "-y -i $SampleImage -c:v libwebp -f webp $TestRoot\test_webp.webp" "webp"
 run_test "libopenjpeg" "-y -i $SampleImage -c:v libopenjpeg $TestRoot\test_jp2.jp2" "openjpeg"
+run_custom_test "jpegxl_still" { Test-JpegXL -FFmpegExe "$Workspace\ffmpeg.exe" }
+run_custom_test "jpegxl_animation" { Test-JpegXL -FFmpegExe "$Workspace\ffmpeg.exe" -Animated }
+run_custom_test "jpegxl_defaults" { Test-JpegXL -FFmpegExe "$Workspace\ffmpeg.exe" -DefaultSettings }
+run_custom_test "hap_alpha" { Test-AlphaCodec -FFmpegExe "$Workspace\ffmpeg.exe" -Codec hap }
+run_custom_test "apv_alpha" { Test-AlphaCodec -FFmpegExe "$Workspace\ffmpeg.exe" -Codec liboapv }
 run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i $SampleSvg -frames:v 1 $TestRoot\test_svg.png" "svg"
 run_test "libass" "-y -i '${SampleVideo}' -vf ass='${AssSubPath}' '${TestRoot}/test_ass.mp4'" "ass"
 run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"
@@ -302,6 +312,12 @@ run_hw_test "NVENC" nvenc "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nve
 run_hw_test "VPL" vpl "-y -i $SampleVideo -c:v h264_vpl $TestRoot\test_vpl.mp4" "vpl"
 run_hw_test "AMF" amf "-y -i $SampleVideo -c:v h264_amf $TestRoot\test_amf.mp4" "amf"
 run_hw_test "VIDEOTOOLBOX" videotoolbox "-y -i $SampleVideo -c:v h264_videotoolbox $TestRoot\test_vt.mp4" "videotoolbox"
+
+# Direct3D 12 decoding is compiled into every Windows build. Presence only:
+# whether a GPU and a driver are there is the machine's business, the path
+# being in the binary is the build's. It was missing from every x86_64 build
+# up to v1.0.45 without anything saying so.
+run_test "d3d12va" "-hide_banner -hwaccels | findstr d3d12va" "d3d12va"
 
 # Additional format tests
 run_test "libbluray" "-hide_banner -protocols | findstr bluray" "bluray"
@@ -338,7 +354,8 @@ run_custom_test "whisper_vad_threads" { Test-WhisperVadThreads -FFmpegExe "$Work
 # #119 segments and words end inside their window (also needs the VAD model).
 run_custom_test "whisper_segment_ends" { Test-WhisperSegmentEnds -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 
-# stemsplit 1.1.0 release gates (lib/stemsplit.ps1, through Git Bash): the
+# stemsplit release gates (lib/stemsplit.ps1, through Git Bash; 1.1.0's
+# three, with 1.2.0's use_gpu=auto runs in the clean-exit loop): the
 # stemsplit tag's own suite with the tiny RoFormer models, 20/20 clean exits,
 # and Spleeter stems byte-identical with the previous release. They need the
 # assets tests/lib/stemsplit-assets.sh fetches (STEMSPLIT_ASSETS_DIR, or a
@@ -348,6 +365,22 @@ run_custom_test "whisper_segment_ends" { Test-WhisperSegmentEnds -FFmpegExe "$Wo
 run_custom_test "stemsplit_suite" { Test-StemsplitSuite -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 run_custom_test "stemsplit_clean_exit" { Test-StemsplitCleanExit -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 run_custom_test "stemsplit_spleeter_ab" { Test-StemsplitSpleeterAB -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+
+# lyricsalign (#126, lib/lyricsalign.ps1, through Git Bash): the filter is
+# present, and with the assets tests/lib/lyricsalign-assets.sh fetches
+# (LYRICSALIGN_ASSETS_DIR, or a lyricsalign-assets\ directory next to the
+# binary) the real-model checks of lib/lyricsalign.sh. Without the assets, or
+# without Git Bash, every check skips with a reason.
+run_test "lyricsalign" "-hide_banner -filters | findstr lyricsalign" "lyricsalign"
+# A plain script block, on purpose: run_custom_test invokes it at once, so $fn
+# still holds this iteration's name. GetNewClosure() would run the block in a
+# module of its own, where the dot-sourced Test-Lyricsalign is not visible once
+# tests.ps1 is itself called from verify-rc.ps1 (the RC verify path): the RC
+# verify of v1.0.46-rc on windows-x86_64 died on exactly that.
+foreach ($fn in (Get-LyricsalignFunctions)) {
+    $label = $fn -replace '^test_', ''
+    run_custom_test $label { Test-Lyricsalign -Function $fn -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+}
 
 # Beat detection: a 174 BPM click track must come back as 174, not as the
 # 116 the old tempo prior turned it into (nomercy-ffmpeg issue #57).

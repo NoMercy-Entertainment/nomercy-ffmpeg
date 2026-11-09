@@ -82,10 +82,14 @@ if [ ${TARGET_OS} == "windows" ]; then
 	# file). On 2026-10-06 ftp.gnu.org refused every connection and the
 	# windows-x86_64 build stopped here without a word in its log. The pinned
 	# SHA-256 is what makes any source safe: the tarball is used only if it is
-	# the exact file pinned above. The loop stays so a second source can be
-	# added on one line.
+	# the exact file pinned above. No single source is enough: on 2026-11-09
+	# our GitHub copy answered 504 for hours during a GitHub incident while
+	# GNU's servers served the identical file, the mirror image of October.
+	# So the loop tries our copy, then GNU's mirror redirector, then ftp.gnu.org.
 	gettext_ok=0
-	for gettext_url in https://github.com/NoMercy-CI-Mirrors/sources/releases/download/gettext-0.26/gettext-0.26.tar.gz; do
+	for gettext_url in https://github.com/NoMercy-CI-Mirrors/sources/releases/download/gettext-0.26/gettext-0.26.tar.gz \
+		https://ftpmirror.gnu.org/gettext/gettext-0.26.tar.gz \
+		https://ftp.gnu.org/gnu/gettext/gettext-0.26.tar.gz; do
 		rm -f gettext-0.26.tar.gz
 		if wget -q -T 60 -t 2 -O gettext-0.26.tar.gz "${gettext_url}" \
 			&& echo "39acf4b0371e9b110b60005562aace5b3631fed9b1bb9ecccfc7f56e58bb1d7f  gettext-0.26.tar.gz" | sha256sum -c - >/dev/null 2>&1; then
