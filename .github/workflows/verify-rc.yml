@@ -380,12 +380,15 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      # No ref: this is the one job that holds pull-requests: write, so it runs
+      # the checklist script of the default branch, never the PR head's. The
+      # head's code only ever runs in the verify matrix, which is read-only.
+      # A change to the script on dev therefore takes effect one release
+      # later, exactly as a change to this workflow file does (workflow_run).
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.resolve.outputs.head-sha }}
-          # The PR head is executed here (tests/ and the checklist script), so
-          # the checkout must not leave the job token in .git for it to find.
+          sparse-checkout: .github/scripts
           persist-credentials: false
 
       - name: Download all verdicts
