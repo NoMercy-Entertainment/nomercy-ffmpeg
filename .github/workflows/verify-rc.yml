@@ -217,8 +217,12 @@ jobs:
               "import json,sys,os; print(next((a['url'] for a in json.load(sys.stdin) if a['name']==os.environ['N']),''))"
           }
 
-          ARCHIVE=$(printf '%s' "$ASSETS" | P="$PLATFORM" E="$EXT" python3 -c \
-            "import json,sys,os; print(next((a['name'] for a in json.load(sys.stdin) if os.environ['P'] in a['name'] and a['name'].endswith(os.environ['E'])),''))")
+          # The exact name, not "contains the platform": linux-x86_64 is a
+          # substring of linux-x86_64-hardware, and with a substring match the
+          # linux-x86_64 job verified the hardware archive (v1.0.46-rc) while
+          # the CPU archive went untested.
+          ARCHIVE=$(printf '%s' "$ASSETS" | S="-${PLATFORM}-${TAG}.${EXT}" python3 -c \
+            "import json,sys,os; print(next((a['name'] for a in json.load(sys.stdin) if a['name'].endswith(os.environ['S'])),''))")
           [[ -n "$ARCHIVE" ]] || { echo "::error::no ${PLATFORM} archive in ${TAG}"; exit 1; }
 
           for name in "$ARCHIVE" manifest.json; do
@@ -332,6 +336,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ASSETS: ${{ needs.resolve.outputs.assets }}
+          TAG: ${{ needs.resolve.outputs.tag }}
           PLATFORM: ${{ matrix.platform }}
           EXT: ${{ matrix.ext }}
         shell: pwsh
@@ -339,7 +344,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path rc -Force | Out-Null
           $assets = $env:ASSETS | ConvertFrom-Json
-          $archive = ($assets | Where-Object { $_.name -like "*$($env:PLATFORM)*" -and $_.name.EndsWith($env:EXT) } | Select-Object -First 1)
+          # The exact name, as in the unix step above.
+          $suffix = "-$($env:PLATFORM)-$($env:TAG).$($env:EXT)"
+          $archive = ($assets | Where-Object { $_.name.EndsWith($suffix) } | Select-Object -First 1)
           if (-not $archive) { throw "no $($env:PLATFORM) archive in the release" }
           $manifest = ($assets | Where-Object { $_.name -eq 'manifest.json' } | Select-Object -First 1)
           $headers = @{ Authorization = "Bearer $($env:GH_TOKEN)"; Accept = 'application/octet-stream' }
