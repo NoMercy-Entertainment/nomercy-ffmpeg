@@ -241,6 +241,13 @@ RUN chmod +x /scripts/init/package.sh && /scripts/init/package.sh
 
 FROM alpine:latest AS final
 
+# Take the Alpine branch's current package fixes. alpine:latest is only
+# rebuilt now and then, so its zlib can lag behind a published fix (Trivy
+# flagged CVE-2026-4738 on every v1.0.46 image: zlib 1.3.2-r1 while 3.24
+# already shipped 1.4-r0). The upgrade keeps the image at what the branch
+# has fixed on the day it is built.
+RUN apk upgrade --no-cache
+
 # The archive is named after ffmpeg_version in ffmpeg-base.dockerfile
 # (scripts/init/package.sh builds the name). It used to be spelled out
 # here as well, so a version bump that missed this line broke the build
