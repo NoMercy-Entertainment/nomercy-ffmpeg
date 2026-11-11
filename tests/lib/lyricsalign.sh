@@ -540,6 +540,81 @@ PY
 	return ${rc}
 }
 
+# words[] when espeak-ng writes two lyric tokens as one word (#131). en-us
+# says "of the" and "in the" as one word that is the two tokens' phones one
+# after the other: it is cut where the token ends and each token keeps its
+# entry. "to be" sounds different joined than apart, so where to cut is not
+# known: one entry, labelled with both. Before #131 every word of such a
+# line had text null.
+test_lyricsalign_joined_words() {
+	_la_inputs || return 2
+	_la_workdir
+	local rc=0
+	printf '%s\n' "and so my fellow americans" "ask not what your country can do for you of the people" \
+		"ask what you can do to be free in the house" > "${LA_DIR}/joined.txt"
+	if _la_run "${LA_DIR}/out.jsonl" "${LA_DIR}/err.txt" self joined.txt "destination=-" &&
+	   _la_check "${LA_DIR}/out.jsonl" shape &&
+	   python3 - "${LA_DIR}/out.jsonl" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+want = {
+    2: ["ask", "not", "what", "your", "country", "can", "do", "for", "you", "of", "the", "people"],
+    3: ["ask", "what", "you", "can", "do", "to be", "free", "in", "the", "house"],
+}
+for at, texts in want.items():
+    line = rows[at]
+    if line.get("reason"):
+        sys.exit("line %d was not written: %s" % (at - 1, line["reason"]))
+    got = [w["text"] for w in line["words"]]
+    if got != texts:
+        sys.exit("line %d: word labels %r, want %r" % (at - 1, got, texts))
+    for a, b in zip(line["words"], line["words"][1:]):
+        if a["start"] is None or b["start"] is None or a["end"] > b["start"] + 1e-9:
+            sys.exit("line %d: %r (%s..%s) runs into %r (%s..%s)" % (at - 1, a["text"], a["start"], a["end"], b["text"], b["start"], b["end"]))
+words = rows[2]["words"]
+print("joined words: of %.2f..%.2f and the %.2f..%.2f are cut apart, 'to be' is one entry, no text is null" % (
+    words[9]["start"], words[9]["end"], words[10]["start"], words[10]["end"]))
+PY
+	then :; else _la_fail "joined words" "${LA_DIR}/err.txt"; rc=1; fi
+	_la_cleanup
+	return ${rc}
+}
+
+# The two onset refinements of #130 are options with their defaults, an
+# out-of-range value fails init, and the JFK numbers do not depend on them:
+# the sentence is the first line, so step 7 walks it back, 7b leaves a line
+# that was walked back alone and 7c needs a previous line. With both off the
+# filter writes step 7 as v1.0.46 did, so the two runs are the same bytes
+# and gate (c) holds on them.
+test_lyricsalign_onset_options() {
+	_la_inputs || return 2
+	_la_workdir
+	local rc=0 help
+	help="$("${FFMPEG}" -hide_banner -h filter=lyricsalign 2>&1)" || true
+	if ! grep -Eq 'soft_walkback +<float>.*\(default 0\.1\)' <<<"${help}" ||
+	   ! grep -Eq 'unheard_island +<int>.*\(default 1\)' <<<"${help}"; then
+		echo "FAIL: -h filter=lyricsalign does not list soft_walkback (float, default 0.1) and unheard_island (int, default 1)"
+		grep -E 'soft_walkback|unheard_island' <<<"${help}" | sed 's/^/   | /'
+		rc=1
+	fi
+	if _la_run "${LA_DIR}/o" "${LA_DIR}/e1" null "${LA_TEXT}" "soft_walkback=0.9" || ! grep -q "soft_walkback" "${LA_DIR}/e1"; then
+		_la_fail "soft_walkback=0.9 is over the 0.8 s of step 7 and must fail init naming the option" "${LA_DIR}/e1"; rc=1
+	fi
+	if _la_run "${LA_DIR}/o" "${LA_DIR}/e2" null "${LA_TEXT}" "unheard_island=2" || ! grep -q "unheard_island" "${LA_DIR}/e2"; then
+		_la_fail "unheard_island=2 must fail init naming the option" "${LA_DIR}/e2"; rc=1
+	fi
+	if _la_run "${LA_DIR}/on.jsonl" "${LA_DIR}/err.txt" null "${LA_TEXT}" "destination=-" &&
+	   _la_run "${LA_DIR}/off.jsonl" "${LA_DIR}/err2.txt" null "${LA_TEXT}" "destination=-:soft_walkback=0:unheard_island=0" &&
+	   [[ -s "${LA_DIR}/on.jsonl" ]] && cmp -s "${LA_DIR}/on.jsonl" "${LA_DIR}/off.jsonl" &&
+	   _la_check "${LA_DIR}/off.jsonl" gate_c "${LA_DIR}/fixture.json"; then
+		echo "soft_walkback=0:unheard_island=0 gives the JFK line byte for byte as the defaults do"
+	else
+		_la_fail "the JFK line must not depend on soft_walkback and unheard_island" "${LA_DIR}/err2.txt"; rc=1
+	fi
+	_la_cleanup
+	return ${rc}
+}
+
 # Downstream closes the output early (-t on the output adds a trim after the
 # graph): the audio received so far is still aligned and written, with a
 # warning, and ffmpeg exits 0.

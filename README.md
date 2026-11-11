@@ -1005,6 +1005,8 @@ such as `anullsrc` ends with the vocals.
 | `threads` | int | `0` | ggml CPU threads, with the `whisper`/`stemsplit` rule: half the physical cores, capped by `-filter_threads` when that is set lower. Never changes the output |
 | `use_gpu` | int | `0` | `1` allows the ggml GPU backend (Vulkan, Metal), with the same guard and the same `NOMERCY_GGML_GPU=0` override as `stemsplit`. Off by default: the acceptance numbers were measured on CPU emissions |
 | `gpu_device` | int | `0` | As on `whisper` and `stemsplit` |
+| `soft_walkback` | float | `0.1` | Seconds a line that begins on a vowel or a sonorant may start before its first phone, when no pause precedes it (below). `0` disables it. At most `0.8` |
+| `unheard_island` | int | `1` | Start a line whose first word the model did not hear on the sound no word claims in front of it (below). `0` disables it |
 
 Every forwarded frame carries `lavfi.lyricsalign.backend`,
 `lavfi.lyricsalign.cpu_variant` and `lavfi.lyricsalign.version`.
@@ -1021,16 +1023,62 @@ text order, times in seconds with 3 decimals:
 `mapping_misses` counts espeak phones the model's vocabulary does not have
 (dropped, never replaced by `<unk>`; 0 on English and Dutch). `check` is
 `backing`, `none` (`blend=0`) or `failed` (the second alignment found no
-path). `lead_in` is how far the written start was walked back from the first
-phone to the vocal onset after a pause. A skipped line still reports the two
-candidate starts so a review UI can show them. `words[]` has one entry per
-whitespace token of the text line, spanning the espeak words the token makes
-(`1999` is one entry over "nineteen ninety nine"); a token espeak does not
-speak (`-`, `...`) gets no entry. When espeak's words cannot be tied to the
-tokens the entries follow espeak's words and their `text` is `null`. When the
-graph ends before the vocals do (an output `-t`, for instance) the audio
-received so far is aligned and written, with a warning. A destination that
-cannot be written fails the run. The reasons:
+path). A skipped line still reports the two candidate starts so a review UI
+can show them. When the graph ends before the vocals do (an output `-t`, for
+instance) the audio received so far is aligned and written, with a warning.
+A destination that cannot be written fails the run.
+
+**The written start.** The model fires on a line's first phone a little
+after the voice begins, so the written `start` can lie before that phone.
+`lead_in` is how far: the first phone is at `start + lead_in`, and
+`words[0].start` stays on the phone. Three rules, each only ever moving a
+start earlier, and never before the previous line's end plus 0.05 s:
+
+- **After a pause** of 1 s or more (and on the first line) the start walks
+  back through the vocal's level to the onset, at most 0.8 s.
+- **A soft first sound** (`soft_walkback`, #130). A line that follows another
+  without a pause stays on its first phone, except when that phone is a vowel
+  or a sonorant (m, n, l, r, j, w and their kin): those rise slowly and the
+  model fires on the steady part. Such a line gets the same walk-back, at
+  most `soft_walkback` seconds. A line that begins on a plosive, a fricative
+  or an h is left alone: measured, those are on time.
+- **An unheard first word** (`unheard_island`, #130). When a line has two
+  words or more and its first word scores below 0.01, the model did not hear
+  it and squeezed it in front of the second word. If, between the previous
+  line's end and the start (looking back 2 s at most), the vocal has a
+  stretch of sound of 0.3 s or longer (at or above −35 dB) that follows 0.3 s
+  of quiet (below −45 dB) and begins more than 0.2 s before the start, the
+  line starts where that stretch begins: no word claims that sound, so it is
+  the word the model missed (a shouted "hey!" before the line proper). A
+  breath is too short to count.
+
+Measured on the Lyrics Creator reference set (12 hand-verified tracks, 627
+verified written lines; see #130): the two #130 rules bring the lines within
+0.2 s from 586 to 591 (93.5 % to 94.3 %), no track gets worse, and the one
+line that was more than 1 s off (a shout the model did not hear, 1.18 s late)
+is on its mark. With `soft_walkback=0:unheard_island=0` every line is written
+exactly as v1.0.46 wrote it.
+
+**Words.** `words[]` has one entry per whitespace token of the text line,
+spanning the espeak words the token makes (`1999` is one entry over "nineteen
+ninety nine"); a token espeak does not speak (`-`, `...`) gets no entry.
+espeak-ng sometimes writes two tokens as one word: en-us says "of the" as
+`ʌvðə`. Then (#131):
+
+- when the joined word is exactly the two tokens' own phones one after the
+  other, it is cut where the first token ends and each token has its own
+  entry (`of`, `the`), with its own `start`, `end` and `score`;
+- when it sounds different joined than apart ("to be" is `təbi`, "to" alone
+  is `tuː`), where to cut is not known: the tokens share **one** entry whose
+  `text` is both, with a space (`"text":"to be"`), spanning the joined word;
+- a word that neither rule can give to a token keeps an entry with
+  `"text":null`. Only that word: the other words of the line keep their text.
+
+A caller that shows words can treat an entry as one unit whatever its `text`
+holds. The line's own `start`, `end` and `score` do not depend on any of
+this.
+
+**Skipped lines.** A line that is not written says why:
 
 | `reason` | meaning |
 |---|---|

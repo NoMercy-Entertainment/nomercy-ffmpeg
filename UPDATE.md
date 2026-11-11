@@ -25,6 +25,24 @@
   Lines output; espeak-ng 1.52.0 is linked statically and its `espeak-ng-data`
   ships in every platform archive. The model lives in
   nomercy-lyricsalign-models and is pinned by the test suites.
+- lyricsalign 1.1.0, line starts (#130): two refinements of the onset
+  walk-back, both on by default, both only ever moving a written start
+  earlier. `soft_walkback` (float, default `0.1`): a line that follows
+  another without a pause and begins on a vowel or a sonorant walks back to
+  the onset, at most that many seconds; a line that begins on a plosive, a
+  fricative or an h stays on its first phone. `unheard_island` (int, default
+  `1`): a line whose first word scores below 0.01 starts on the stretch of
+  sound no word claims in front of it (0.3 s or longer, after 0.3 s of
+  quiet, within 2 s). `lead_in` covers both, so the JSON has no new field.
+  `soft_walkback=0:unheard_island=0` writes every line as v1.0.46 did.
+- lyricsalign 1.1.0, words (#131): `words[]` keeps its texts when espeak-ng
+  writes two tokens as one word ("of the" is `ʌvðə` in en-us), which made
+  every word of one English line in eight `text: null`. A joined word that is
+  the tokens' own phones is cut into one entry per token; one that sounds
+  different joined ("to be") is one entry with `"text":"to be"`; `null` is
+  left for a word no token accounts for, and only for that word. Line
+  `start`, `end`, `score` and `reason` are unchanged, and a line whose words
+  tied before is written byte for byte as before.
 - CI: the windows-aarch64 release gate runs on GitHub's hosted windows-11-arm
   runner (#76); verify-rc leaves no files behind in the Lima and FreeBSD
   guests, and fleet-health probes the Lima guest.

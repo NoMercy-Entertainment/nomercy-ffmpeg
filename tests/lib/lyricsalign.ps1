@@ -40,7 +40,7 @@ $script:LyricsalignFunctions = @(
     'test_lyricsalign_empty_line', 'test_lyricsalign_blend_zero', 'test_lyricsalign_no_alignment',
     'test_lyricsalign_text_forms', 'test_lyricsalign_odd_lines', 'test_lyricsalign_backing_lengths',
     'test_lyricsalign_short_audio', 'test_lyricsalign_metadata',
-    'test_lyricsalign_word_labels', 'test_lyricsalign_output_closed', 'test_lyricsalign_write_error', 'test_lyricsalign_unicode_paths', 'test_lyricsalign_output_format',
+    'test_lyricsalign_word_labels', 'test_lyricsalign_joined_words', 'test_lyricsalign_onset_options', 'test_lyricsalign_output_closed', 'test_lyricsalign_write_error', 'test_lyricsalign_unicode_paths', 'test_lyricsalign_output_format',
     'test_lyricsalign_gpu'
 )
 
