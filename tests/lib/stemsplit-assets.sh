@@ -8,7 +8,7 @@
 #
 # What it fetches, and why each one is pinned:
 #
-#   * the ffmpeg-stemsplit v2.0.0 source archive -- its tests/ directory is the
+#   * the ffmpeg-stemsplit v2.0.1 source archive -- its tests/ directory is the
 #     suite the gates run (design D1). The archive is the tag's, so the checks
 #     are the ones the filter was released with, not whatever the default
 #     branch holds this afternoon.
@@ -53,24 +53,27 @@ PLATFORM="${1:?usage: stemsplit-assets.sh <platform> <dir>}"
 DIR="${2:?usage: stemsplit-assets.sh <platform> <dir>}"
 REF_PLATFORM="${PLATFORM}"
 
-STEMSPLIT_TAG=v2.0.0
+STEMSPLIT_TAG=v2.0.1
 FORGEJO=https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit
-# The suite comes from the commit the tag points at (20c77b5 is v2.0.0). Its
-# devices block probes for lavapipe first and skips itself loudly where there
-# is none (a runner without a Vulkan loader, or a machine with a real card);
-# its cpu_fallback block runs in every build and expects the refusal on a
-# machine without a hardware GPU. FILTER_SHA is the digest the stemsplit
+# The suite comes from the commit the tag points at (ffdabda is v2.0.1). 2.0.1
+# is 2.0.0 with two suite checks fixed that failed on a machine with a usable
+# GPU, and the version string moved; the filter computes and logs as 2.0.0.
+# Its devices block probes for lavapipe first and skips itself loudly where
+# there is none (a runner without a Vulkan loader, or a machine with a real
+# card); its cpu_fallback block runs in every build and expects the refusal on
+# a machine without a hardware GPU. FILTER_SHA is the digest the stemsplit
 # hand-over names for src/af_stemsplit.c at the release commit
-# (docs/handover-2.0.0.md); it is asserted below, so "the filter in the
-# archive is the tag's file" stays provable even if SUITE_REF ever moves off
-# the tag, and it is the digest the build log of every platform must show.
-SUITE_REF=20c77b5
-ARCHIVE_SHA=5123d73fd2ec2f9f3be0a8ef8306d35bea136aad2b553729bf49e1b9d1332685
-FILTER_SHA=f607b6df67417cb09c73214197a2cac7f368fe7b4a14c6ebf29eb847f29da93a
+# (docs/handover-2.0.0.md, which covers 2.0.1); it is asserted below, so "the
+# filter in the archive is the tag's file" stays provable even if SUITE_REF
+# ever moves off the tag, and it is the digest the build log of every platform
+# must show.
+SUITE_REF=ffdabda
+ARCHIVE_SHA=0c8c1d89bdcbde2537bcd67d85a8e0e91937a502575c18f2926436f7b5ad6c4d
+FILTER_SHA=4d16e1652ed77786050814d289bbfa6e35c83ce77e94b8841544f6184c477e56
 # The tiny RoFormer models are the v1.1.0 release asset still: no model file
 # and nothing in tests/make_tiny_models.sh or the converter changed between
-# v1.1.0 and v2.0.0 (git diff --stat v1.1.0..v2.0.0 on those paths is empty),
-# so the 2.0.0 suite's tiny tier runs on the same bytes 1.1.0's did.
+# v1.1.0 and v2.0.1 (git diff --stat v1.1.0..v2.0.1 on those paths is empty),
+# so the 2.0.1 suite's tiny tier runs on the same bytes 1.1.0's did.
 TINY_TAG=v1.1.0
 TINY_SHA=7b04652c855296e7d428ad5a130cf842e4da90eb16d2246fc7393284c42ea235
 SPLEETER_URL=https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/download/v2026.09.09/spleeter-2stems-f16.gguf

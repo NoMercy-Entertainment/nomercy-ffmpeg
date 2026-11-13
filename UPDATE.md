@@ -59,8 +59,10 @@
   process is about 3.5 times slower, so run it in another process);
   `cpu_fallback=0` refuses a RoFormer run that would compute on the CPU;
   `cpu_assist` (on by default) lets the CPU compute chunks beside a GPU.
-  `lavfi.stemsplit.version` says `2.0.0`. The smoke gates run the 2.0.0
-  suite, hold a default run and a `use_gpu=auto` run that land on the CPU to
+  This release ships stemsplit 2.0.1, which is 2.0.0 with two of its own
+  suite checks fixed for machines with a usable GPU; the filter computes as
+  2.0.0 and `lavfi.stemsplit.version` says `2.0.1`. The smoke gates run the
+  2.0.1 suite, hold a default run and a `use_gpu=auto` run that land on the CPU to
   `use_gpu=0`'s bytes, and compare Spleeter with the v1.0.46 release.
 - stemsplit 1.2.1: `use_gpu=auto` runs the RoFormer models on a Vulkan GPU
   when the build enables the backend, the device is a real GPU, it beats the

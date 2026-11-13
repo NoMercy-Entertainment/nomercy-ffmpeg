@@ -408,7 +408,7 @@ upstream advisory.
 #### 🎤 **`stemsplit` 1.1.0 — RoFormer ensembles**
 
 Since v1.0.45 the binaries ship stemsplit's RoFormer support (1.1.0 then,
-2.0.0 now), which adds two transformer architectures next to Spleeter:
+2.0.1 now), which adds two transformer architectures next to Spleeter:
 **Mel-Band RoFormer** and **BS-RoFormer**,
 with exactly the four models StemForge's "Full" presets use. Same filter,
 same two stems, same output pads; every Spleeter command line keeps working
