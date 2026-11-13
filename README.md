@@ -14,7 +14,7 @@
 
 ## 🎯 Purpose
 
-This repository contains the build infrastructure for creating optimized FFmpeg binaries (currently **FFmpeg 9.0**) specifically tailored for the **NoMercy MediaServer** ecosystem. These builds include custom filters, muxers, codecs, and optimizations that enhance media processing capabilities within our platform.
+This repository contains the build infrastructure for creating optimized FFmpeg binaries (currently **FFmpeg 9.0**, built from the 9.0.2 point release) specifically tailored for the **NoMercy MediaServer** ecosystem. These builds include custom filters, muxers, codecs, and optimizations that enhance media processing capabilities within our platform.
 
 > **⚠️ Internal Use Only**
 > These FFmpeg builds are specifically configured for NoMercy MediaServer and may not be suitable for general-purpose use. For standard FFmpeg binaries, please visit the [official FFmpeg website](https://ffmpeg.org/).
@@ -50,7 +50,9 @@ baseline is FreeBSD 14.3.
 | --- | --- | --- |
 | `linux-x86_64` | CPU processing, and hardware acceleration on supported GPUs | glibc **2.35 or newer** (Ubuntu 22.04, Debian 12 and everything newer) and the installed system runtime; for GPU work the appropriate GPU drivers/loaders |
 
-For FFmpeg 9.0 the archive is named `ffmpeg-9.0-linux-x86_64.tar.gz`. It
+For FFmpeg 9.0 the archive is named `ffmpeg-9.0-linux-x86_64.tar.gz`. The
+name follows the release line, not the point release: a build from 9.0.2
+keeps it, so no download URL changes, and `ffmpeg -version` says 9.0.2. It
 contains the codec libraries in the executables and ships no `.so` files.
 There is one archive and nothing to select: on a machine with a supported GPU
 and its driver the hardware paths are used, and on a machine without one the
@@ -406,7 +408,7 @@ upstream advisory.
 #### 🎤 **`stemsplit` 1.1.0 — RoFormer ensembles**
 
 Since v1.0.45 the binaries ship stemsplit's RoFormer support (1.1.0 then,
-1.2.1 now), which adds two transformer architectures next to Spleeter:
+2.0.0 now), which adds two transformer architectures next to Spleeter:
 **Mel-Band RoFormer** and **BS-RoFormer**,
 with exactly the four models StemForge's "Full" presets use. Same filter,
 same two stems, same output pads; every Spleeter command line keeps working
@@ -424,7 +426,7 @@ repository the filter is fetched from at build time.
 | model files | one, 39 MB | four, 639 MB to 913 MB each, 3.38 GB together |
 | memory | about 194 MiB | the filter asks for 4.63 GB and refuses to run on a machine with less than twice that |
 | speed | 30 s of audio in 3.3 to 4.1 s on an 8-core desktop CPU (7 to 9x realtime, v1.0.45) | one minute of audio in 41 to 43 minutes at 8 threads on a shared Xeon E5-2680 v4 (a lower bound) |
-| GPU | opt-in (`use_gpu=1`) | opt-in (`use_gpu=auto`) since stemsplit 1.2.1: a real Vulkan GPU, when the build enables it and the device computes like the CPU; otherwise the CPU, byte for byte — see [GPU acceleration](#-gpu-acceleration--whisper-and-stemsplit) |
+| GPU | opt-in (`use_gpu=1`) | automatic since stemsplit 2.0.0 (`use_gpu=auto` is the default): a real Vulkan GPU, when the build enables it and the device computes like the CPU; otherwise the CPU, byte for byte, or a refusal with `cpu_fallback=0` — see [GPU acceleration](#-gpu-acceleration--whisper-and-stemsplit) |
 
 **The presets** are StemForge's recipes. Each takes the four files by their
 published names from `model_dir` (empty, the default, means the working
@@ -641,7 +643,7 @@ as described below.
 | filter | default | why |
 |---|---|---|
 | `whisper` | **GPU on** (`use_gpu=1`) | Faster, and the transcript is unchanged — see below. |
-| `stemsplit` | **CPU** (`use_gpu=0`) | Spleeter: opt in with `use_gpu=1`; what that buys you depends on the backend — see below. RoFormer: pass `use_gpu=auto` (stemsplit 1.2.1), which takes a real Vulkan GPU only when it computes like the CPU — see below. |
+| `stemsplit` | **`use_gpu=auto`** (since stemsplit 2.0.0; it was `0`) | Spleeter: `auto` never takes a GPU for it, so nothing changes; opt in with `use_gpu=1`, and what that buys you depends on the backend — see below. RoFormer: `auto` takes a real Vulkan GPU only when it computes like the CPU, and is the CPU run otherwise — see below. `use_gpu=0` is the CPU for both. |
 
 **Measured — `stemsplit` on a GPU.** 30 s of audio, twenty runs each on one
 RTX 3070, whole-process wall time including model load, so the filter itself
@@ -658,10 +660,10 @@ hardware** — not that either wins. Metal is the less consistent of the two.
 
 And on Metal the output is **bit-identical**: the two results null to exact
 silence. The FP16 accumulation described below is a property of ggml’s Vulkan
-backend, not of GPUs in general, so the reason `stemsplit` defaults to CPU does
-not apply on a Mac. The default is per filter rather than per backend, so it is
-still off there — opting in costs you nothing in quality and gains you nothing
-in speed.
+backend, not of GPUs in general, so the reason Spleeter stays on the CPU by
+default does not apply on a Mac. The default is per filter rather than per
+backend, so Spleeter is still on the CPU there — opting in with `use_gpu=1`
+costs you nothing in quality and gains you nothing in speed.
 
 **`whisper` is on by default because the output does not change.** GPU and CPU
 transcripts were compared on an RTX 3070 across three inputs — clean speech,
@@ -669,44 +671,85 @@ transcripts were compared on an RTX 3070 across three inputs — clean speech,
 hallucinates. All three are **byte-identical**, same segments in the same
 order. So the GPU is a speed change and nothing else.
 
-**`stemsplit` is off by default because the output does change.** ggml's
-Vulkan backend accumulates convolutions in 16-bit float on any GPU with
-cooperative-matrix support. Against the CPU reference that is **-58.8 dB** —
-well below the threshold of audibility, but not bit-identical, and far larger
-than the ~-103 dB that separates the CPU instruction levels above. The default
-is off because it would silently change the output every existing `stemsplit`
-command line produces, not because you would hear it. `GGML_VK_DISABLE_COOPMAT=1` takes it to -98.7 dB at
-the same speed, but that variable is process-global and costs `whisper` 3.5x,
-so the two filters cannot both have what they want in one process. Until that
-is settled, `stemsplit` will not move anyone's audio without being asked:
+**Spleeter never moves to a GPU without being asked, because the output does
+change.** ggml's Vulkan backend accumulates convolutions in 16-bit float on
+any GPU with cooperative-matrix support. Against the CPU reference that is
+**-58.8 dB** — well below the threshold of audibility, but not bit-identical,
+and far larger than the ~-103 dB that separates the CPU instruction levels
+above; on the 32-bit path described next it was -98.7 dB at the same speed,
+closer but still not the CPU's bytes. So `use_gpu=auto`, the default since
+stemsplit 2.0.0, leaves Spleeter on the CPU with the bytes it always had, and
+the GPU stays an explicit choice:
 
 ```bash
 ffmpeg -i in.mp3 -af "stemsplit=model=spleeter-2stems-f16.gguf:stem=vocals:use_gpu=1" out.wav
 ```
 
-**`use_gpu=auto` — RoFormer on a GPU (stemsplit 1.2.1).** Spleeter stays on
-the CPU under `auto`. The RoFormer models go to the best-ranked device of a
-backend the build enables for `auto`: the support statement's last sentence
-(`ffmpeg -h filter=stemsplit`) says `Backends enabled for use_gpu=auto: vulkan.`
-on Linux x86_64, Linux ARM64, Windows and FreeBSD, and `none.` on
-macOS, where `auto` is the CPU. Metal is not enabled for
-`auto`. A device is taken only when it is a real GPU (no software rasteriser),
-wins one calibration against the CPU, passes a self-check against the CPU's
-mask on every model (85 dB SNR on 32 frames) and holds the work; anything
-else leaves that model on the CPU with a WARNING and the CPU's bytes, so an
-`auto` run on a machine without a usable GPU gives `use_gpu=0`'s output byte
-for byte. `gpu_device=<n>` other than 0 pins that device. The stemsplit
-project's GPU gate on a GTX 1060 3GB: all four models within 45 dB of the CPU
-(worst 74.3 dB), `preset=full` on ten held-out tracks within 1e-6 dB SDR of
-the CPU run, 40 of 40 clean exits. Frame metadata says what ran per model:
-`lavfi.stemsplit.backend` is `vulkan`, `cpu` or a mix like `vulkan|cpu`, and
-`lavfi.stemsplit.device` names the card.
+**The F32 path, and what it costs `whisper`.** Since stemsplit 2.0.0 the
+filter sets `GGML_VK_DISABLE_COOPMAT=1` and `GGML_VK_DISABLE_F16=1` for its
+process itself, under `use_gpu=auto` or `1`, before it opens a device: that
+makes ggml-vulkan compute in 32-bit float. A variable that is already in the
+environment is left as it is, and `use_gpu=0` sets nothing. The two variables
+are process-wide, so a `whisper` filter in the same ffmpeg process computes
+in F32 too, which was measured here to slow `whisper` on a GPU about 3.5
+times. **Run `whisper` on a GPU in another ffmpeg process than a `stemsplit`
+run that uses a GPU.** `STEMSPLIT_VK_FAST=1` in the environment keeps the
+card's half-precision path; `auto` then refuses such a card, as 1.2.1 did.
+
+**`use_gpu=auto` — RoFormer on a GPU, the default since stemsplit 2.0.0.**
+Spleeter stays on the CPU under `auto`. The RoFormer models go to the
+best-ranked device of a backend the build enables for `auto`: the support
+statement's last sentence (`ffmpeg -h filter=stemsplit`) says
+`Backends enabled for use_gpu=auto: vulkan.` on Linux x86_64, Linux ARM64,
+Windows and FreeBSD, and `none.` on macOS, where `auto` is the CPU. Metal is
+not enabled for `auto`. A device is taken only when it is a real GPU (no
+software rasteriser), wins one calibration against the CPU, passes a
+self-check against the CPU's mask on every model (85 dB SNR on 32 frames) and
+holds the work; anything else leaves that model on the CPU with a WARNING and
+the CPU's bytes, so a run on a machine without a usable GPU gives
+`use_gpu=0`'s output byte for byte, with a few device lines more in the log.
+`gpu_device=<n>` other than 0 pins that device.
+
+What 2.0.0 changed against 1.2.1, besides the default:
+
+- **Cards with a half-precision path are taken.** 1.2.1's self-check refused
+  them (an RTX 3070, for one) and ran on the CPU. With the F32 path above,
+  the stemsplit project measured the four models of `preset=full` on that
+  card at 108.8 to 124.9 dB from the CPU (57.6 to 82.8 dB before), and 65 s
+  of work for 60 s of music, against about 54 minutes per minute of music on
+  its CPU.
+- **`cpu_fallback=0` refuses a RoFormer run that would compute on the CPU**,
+  before it computes anything, with an error that starts with
+  `stemsplit: cpu_fallback=0 and` and a non-zero exit. That is how a caller
+  uses RoFormer where a GPU takes it and Spleeter everywhere else. The
+  default, `1`, runs on the CPU as before.
+- **`cpu_assist`**, on by default: with a GPU, one worker thread computes
+  chunks on the CPU beside it when that helps (a slow card next to a fast
+  CPU). Which chunks the CPU takes depends on times measured in the run, so
+  two runs on one machine can then differ within the GPU tolerance;
+  `cpu_assist=0` gives the same stems every time. On a fast card the CPU
+  stays out by itself.
+
+The stemsplit project's GPU gate on a GTX 1060 3GB: all four models within
+45 dB of the CPU (worst 74.3 dB), `preset=full` on ten held-out tracks within
+1e-6 dB SDR of the CPU run, 40 of 40 clean exits. Frame metadata says what ran
+per model: `lavfi.stemsplit.backend` is `vulkan`, `cpu` or a mix like
+`vulkan|cpu`, and `lavfi.stemsplit.device` names the card.
 
 ```bash
-ffmpeg -i song.flac -filter_complex "[0:a]stemsplit=preset=full:use_gpu=auto[voc][acc]" -map "[voc]" vocals.flac -map "[acc]" instrumental.flac
+# RoFormer on the GPU when one takes it, the CPU otherwise (the default)
+ffmpeg -i song.flac -filter_complex "[0:a]stemsplit=preset=full[voc][acc]" -map "[voc]" vocals.flac -map "[acc]" instrumental.flac
+
+# RoFormer only on a GPU: a machine without one gets an error, not an hour on the CPU
+ffmpeg -i song.flac -filter_complex "[0:a]stemsplit=preset=full:cpu_fallback=0[voc][acc]" -map "[voc]" vocals.flac -map "[acc]" instrumental.flac
+
+# The CPU run of 1.1.0, byte for byte
+ffmpeg -i song.flac -filter_complex "[0:a]stemsplit=preset=full:use_gpu=0[voc][acc]" -map "[voc]" vocals.flac -map "[acc]" instrumental.flac
 ```
 
-**Options.** `use_gpu=0|1` on both filters (`auto` as well on `stemsplit`), and
+**Options.** `use_gpu=0|1` on both filters (`auto` as well on `stemsplit`,
+where it is the default), `cpu_fallback` and `cpu_assist` on `stemsplit`
+(RoFormer only), and
 `gpu_device=<n>` to pick a GPU on a machine with more than one. An
 out-of-range index does not silently use
 the wrong GPU — it says so and falls back to the CPU:
@@ -1238,7 +1281,7 @@ which is easy to get wrong.
 | **HEVC/H.265 & H.264** | ✅ x265 + x264 + hardware accel | ✅ Basic |
 | **AVS2** | ✅ libdavs2 + xavs2 | ❌ Not included |
 | **VP8/VP9, Xvid, OpenJPEG, WebP** | ✅ Included | ⚠️ Optional |
-| **JPEG XL (still and animated)** | ✅ libjxl 0.12.0, encode + decode; RGB, RGBA and gray at 8-bit, 16-bit and float | ⚠️ Optional |
+| **JPEG XL (still and animated)** | ✅ libjxl 0.13.0, encode + decode; RGB, RGBA and gray at 8-bit, 16-bit and float | ⚠️ Optional |
 | **HAP / HAP Alpha** | ✅ Encoder via Snappy 1.3.1 (`-format hap_alpha`); the decoder is FFmpeg's own | ⚠️ Optional encoder dependency |
 | **APV / APV Alpha** | ✅ Encoder via OpenAPV 1.1.3.0 (`yuva444p10le`); the decoder is FFmpeg's own | ⚠️ Optional encoder dependency |
 | **Hardware Acceleration** | ✅ NVENC/NVDEC/CUDA/AMF/QSV (libvpl)/VAAPI | ⚠️ Platform dependent |

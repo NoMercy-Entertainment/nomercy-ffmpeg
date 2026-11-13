@@ -12,32 +12,38 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
+# ffmpeg_version names the archives (ffmpeg-<version>-<platform>), which every
+# download URL depends on: the media server's, the npm client's and CI's. It
+# stays the release line. ffmpeg_source_version is the point release the
+# binaries are built from (9.0.2 carries the security fixes of 9.0.1 and
+# 9.0.2), and is what `ffmpeg -version` reports.
 ENV ffmpeg_version=9.0 \
+    ffmpeg_source_version=9.0.2 \
     iconv_version=1.19 \
     libxml2_version=2.15 \
-    zlib_version=1.3.2 \
+    zlib_version=1.4 \
     fftw3_version=3.3.11 \
-    freetype_version=2-14-3 \
+    freetype_version=2-15-0 \
     fribidi_version=1.0.16 \
     libogg_version=1.3.6 \
-    openssl_version=4.0.0 \
+    openssl_version=4.0.3 \
     fontconfig_version=2.18.1 \
     libpciaccess_version=0.19 \
     xcbproto_version=1.17.0 \
     xorgproto_version=2025.1 \
     xtranx_version=1.5.2 \
     libxcb_version=1.17.0 \
-    libx11_version=1.8.13 \
+    libx11_version=1.8.14 \
     libXfixed_version=6.0.2 \
     libdrm_version=2.4.134 \
-    harfbuzz_version=14.2.0 \
+    harfbuzz_version=15.1.0 \
     vulkan_headers_version=1.4.353 \
     libudfread_version=1.2.0 \
     libvorbis_version=1.3.7 \
     libvmaf_version=3.1.0 \
     avisynth_version=3.7.5 \
     chromaprint_version=1.6.0 \
-    libass_version=0.17.4 \
+    libass_version=0.17.5 \
     libva_version=2.23.0 \
     libgpg_error_version=1.61 \
     libgcrypt_version=1.12.2 \
@@ -50,14 +56,14 @@ ENV ffmpeg_version=9.0 \
     dav1d_version=1.5.3 \
     davs2_version=1.7 \
     rav1e_version=0.8.1 \
-    libsrt_version=1.5.5 \
+    libsrt_version=1.5.7 \
     twolame_version=0.4.0 \
     mp3lame_version=3.100 \
     fdk_aac_version=2.0.3 \
     opus_version=1.6.1 \
-    libaom_version=3.13.3 \
+    libaom_version=3.15.3 \
     libtheora_version=1.2.0 \
-    libvpx_version=1.16.0 \
+    libvpx_version=1.17.0 \
     x264_version=stable \
     x265_version=4.1 \
     xavs2_version=1.4 \
@@ -72,7 +78,7 @@ ENV ffmpeg_version=9.0 \
     amf_version=1.5.2 \
     nvcodec_version=13.0.19.0 \
     leptonica_version=1.87.0 \
-    libtesseract_version=5.5.2 \
+    libtesseract_version=5.5.4 \
     sdl2_version=2.32.10 \
     shaderc_version=2026.2 \
     spirv_cross_checkout=1a6169566c73d3da552748fc372fe2bbb856e46e \
@@ -186,6 +192,33 @@ RUN \
     && chmod +x /usr/local/bin/retry \
     && echo "✅ Git configuration completed successfully"
 
+# fetch-pinned <file> <sha256> <url>...: the first URL that serves a file with
+# exactly that SHA-256 wins, each tried up to three times. The org's sources
+# mirror comes first, the upstream origin after it, so a tarball that is not
+# mirrored yet (or a mirror that is down) still builds, and a file that does
+# not match its digest never does: it is deleted and the next source is tried.
+RUN printf '%s\n' \
+        '#!/bin/sh' \
+        'out="$1"; want="$2"; shift 2' \
+        'for url in "$@"; do' \
+        '  for n in 1 2 3; do' \
+        '    rm -f "$out"' \
+        '    if wget -q -T 120 -O "$out" "$url"; then' \
+        '      got=$(sha256sum "$out" | cut -d" " -f1)' \
+        '      if [ "$got" = "$want" ]; then echo "fetch-pinned: $out from $url"; exit 0; fi' \
+        '      echo "fetch-pinned: $url gave sha256 $got, expected $want" >&2' \
+        '      break' \
+        '    fi' \
+        '    echo "fetch-pinned: attempt $n of $url failed" >&2' \
+        '    sleep $((n * 15))' \
+        '  done' \
+        'done' \
+        'rm -f "$out"' \
+        'echo "fetch-pinned: no source served $out with sha256 $want" >&2' \
+        'exit 1' \
+        > /usr/local/bin/fetch-pinned \
+    && chmod +x /usr/local/bin/fetch-pinned
+
 # Install meson >= 1.4.0 via pip (required for glib 2.86+)
 RUN \
     echo "------------------------------------------------------" \
@@ -253,7 +286,11 @@ RUN \
     # the whole base build; each attempt re-follows the redirect afresh. When
     # the pool is down altogether (2026-09-06: every attempt failed within a
     # second, twice) the same tarball comes from SourceForge instead.
-    && retry wget -O freetype.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/freetype-$(echo ${freetype_version} | tr '-' '.')/freetype-$(echo ${freetype_version} | tr '-' '.').tar.gz \
+    # 2.15.0: signed by Werner Lemberg (E30674707856409FF1948010BE6C3AAC63AD8E3F), checked 2026-11-12.
+    && fetch-pinned freetype.tar.gz 9186627467a616d9a9e3e574748ac0c45fa77398e6364edef3041a8ba8d92f64 \
+        https://github.com/NoMercy-CI-Mirrors/sources/releases/download/freetype-$(echo ${freetype_version} | tr '-' '.')/freetype-$(echo ${freetype_version} | tr '-' '.').tar.gz \
+        https://download.savannah.gnu.org/releases/freetype/freetype-$(echo ${freetype_version} | tr '-' '.').tar.gz \
+        https://download.sourceforge.net/freetype/freetype-$(echo ${freetype_version} | tr '-' '.').tar.gz \
     && tar -xzf freetype.tar.gz >/dev/null 2>&1 && rm freetype.tar.gz && mv freetype-$(echo ${freetype_version} | tr '-' '.') freetype \
     # && git clone --branch VER-${freetype_version} https://github.com/NoMercy-CI-Mirrors/freetype.git freetype >/dev/null 2>&1 \
     && echo "✅ Download completed successfully" \
@@ -700,8 +737,11 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading giflib" \
-    && retry wget -O giflib-5.2.2.tar.gz https://github.com/NoMercy-CI-Mirrors/sources/releases/download/giflib-5.2.2/giflib-5.2.2.tar.gz \
-    && tar -xvzf giflib-5.2.2.tar.gz >/dev/null 2>&1 && mv giflib-5.2.2 giflib && rm giflib-5.2.2.tar.gz \
+    # 6.1.3: MD5 equal to the one SourceForge publishes, checked 2026-11-12.
+    && fetch-pinned giflib-6.1.3.tar.gz b65b66b99f0424b93525f987386f22fc5efb9da2bfc92ad4a532249aaffbab0e \
+        https://github.com/NoMercy-CI-Mirrors/sources/releases/download/giflib-6.1.3/giflib-6.1.3.tar.gz \
+        https://download.sourceforge.net/giflib/giflib-6.1.3.tar.gz \
+    && tar -xvzf giflib-6.1.3.tar.gz >/dev/null 2>&1 && mv giflib-6.1.3 giflib && rm giflib-6.1.3.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -709,8 +749,11 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libpng" \
-    && retry wget https://github.com/NoMercy-CI-Mirrors/sources/releases/download/libpng-1.6.47/libpng-1.6.47.tar.gz \
-    && tar -xvf libpng-1.6.47.tar.gz >/dev/null 2>&1 && mv libpng-1.6.47 libpng && rm -f libpng-1.6.47.tar.gz \
+    # 1.6.59: MD5 equal to the one SourceForge publishes, checked 2026-11-12.
+    && fetch-pinned libpng-1.6.59.tar.gz 86a3e4b501f7f50e392c4e456ea158893e9a595b1c63eb88c7bb9f6cf8772dad \
+        https://github.com/NoMercy-CI-Mirrors/sources/releases/download/libpng-1.6.59/libpng-1.6.59.tar.gz \
+        https://download.sourceforge.net/libpng/libpng-1.6.59.tar.gz \
+    && tar -xvf libpng-1.6.59.tar.gz >/dev/null 2>&1 && mv libpng-1.6.59 libpng && rm -f libpng-1.6.59.tar.gz \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -726,7 +769,7 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading libtiff" \
-    && retry git clone --branch v4.7.0 https://github.com/NoMercy-CI-Mirrors/libtiff.git /build/libtiff \
+    && retry git clone --branch v4.7.2 https://github.com/NoMercy-CI-Mirrors/libtiff.git /build/libtiff \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 
@@ -781,8 +824,12 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading FFmpeg" \
-    && retry wget -O ffmpeg.tar.bz2 https://github.com/NoMercy-CI-Mirrors/sources/releases/download/ffmpeg-${ffmpeg_version}/ffmpeg-${ffmpeg_version}.tar.bz2 \
-    && tar -xjf ffmpeg.tar.bz2 >/dev/null 2>&1 && rm ffmpeg.tar.bz2 && mv ffmpeg-${ffmpeg_version} ffmpeg \
+    # 9.0.2: signed by the FFmpeg release signing key
+    # (FCF986EA15E6E293A5644F10B4322F04D67658D8), checked 2026-11-12.
+    && fetch-pinned ffmpeg.tar.bz2 ee80a25a5621df84498cef46917be87eab3b4f01951e85c2c7cbe5c94914ee70 \
+        https://github.com/NoMercy-CI-Mirrors/sources/releases/download/ffmpeg-${ffmpeg_source_version}/ffmpeg-${ffmpeg_source_version}.tar.bz2 \
+        https://ffmpeg.org/releases/ffmpeg-${ffmpeg_source_version}.tar.bz2 \
+    && tar -xjf ffmpeg.tar.bz2 >/dev/null 2>&1 && rm ffmpeg.tar.bz2 && mv ffmpeg-${ffmpeg_source_version} ffmpeg \
     && echo "✅ Download completed successfully" \
     && echo "------------------------------------------------------"
 

@@ -67,91 +67,47 @@ fi
 #region libgif
 cd /build/giflib
 
-if [[ ${TARGET_OS} != "windows" ]]; then
-    apt-get update
-    apt-get install -y --no-install-recommends imagemagick
-
-    if [[ ${TARGET_OS} == "darwin" ]]; then
-        sed -i 's/-Wl,-soname/-Wl,-install_name/g' Makefile
-    fi
-
-    # `|| { ...; exit 1; }`, never `|| ( ...; exit 1 )`. Parentheses run the
-    # block in a subshell, so its exit leaves the subshell and nothing else:
-    # a failed giflib make logged its error and the build carried on as though
-    # it had worked. All five handlers in this region had that shape.
-    make PREFIX=${PREFIX} || {
-        log "Error: giflib make failed."
-        exit 1
-    }
-
-    make PREFIX=${PREFIX} install || {
-        log "Error: giflib install failed."
-        exit 1
-    }
-else
-    # Only the static library and the header are consumed here, so build just
-    # the static target and skip `make install`; the gif_lib.h / libgif.a
-    # copies below install exactly what is needed. A full `make` fails on
-    # both windows targets:
-    #   windows-aarch64 links with lld, which rejects the ELF-only -soname
-    #     flag on libgif.so ("lld: error: unknown argument: -soname"), and
-    #     make dies there, before it has written libgif.a.
-    #   windows-x86_64 gets past that (GNU ld only warns), writes libgif.a,
-    #     then fails on libutil.so, the helper library for giflib's own CLI
-    #     tools: a DLL must resolve every symbol, and it cannot find GifErrorString.
-    # The x86_64 failure was invisible until the October 2026 audit: the
-    # handler ran in a subshell, so the build carried on and the fallback
-    # copies below picked up the libgif.a that make had already written.
-    make libgif.a || {
-        log "Error: giflib make failed."
-        exit 1
-    }
-    if [ ! -f ${PREFIX}/include/gif_lib.h ]; then
-        if [ -f gif_lib.h ]; then
-            cp gif_lib.h ${PREFIX}/include/gif_lib.h
-        else
-            log "Failed to build giflib 1"
-            exit 1
-        fi
-    fi
-    if [ ! -f ${PREFIX}/lib/libgif.a ]; then
-        if [ -f libgif.a ]; then
-            cp libgif.a ${PREFIX}/lib/libgif.a
-        else
-            log "Failed to build giflib 2"
-            exit 1
-        fi
-    fi
-fi
-
-if [ ! -f ${PREFIX}/lib/pkgconfig/giflib.pc ]; then
-    if [ -f giflib.pc ]; then
-        cp giflib.pc ${PREFIX}/lib/pkgconfig/giflib.pc
-        sed -i "s|prefix=.*|prefix=${PREFIX}|g" ${PREFIX}/lib/pkgconfig/giflib.pc
-    else
-        {
-            echo "prefix=${PREFIX}"
-            echo "exec_prefix=\${prefix}"
-            echo "libdir=\${exec_prefix}/lib"
-            echo "includedir=\${prefix}/include"
-            echo ""
-            echo "Name: giflib"
-            echo "Description: GIF library"
-            echo "Version: 5.2.2"
-            echo "Libs: -L\${libdir} -lgif"
-            echo "Cflags: -I\${includedir}"
-        } >${PREFIX}/lib/pkgconfig/giflib.pc
-    fi
-fi
-if [ ! -f ${PREFIX}/lib/pkgconfig/giflib.pc ]; then
-    log "Failed to build giflib 3"
+# Only the static library and the header are consumed here (libwebp's GIF
+# support), so every platform builds just the static target and installs
+# those two files itself. A full `make` also builds the shared library, the
+# libutil helper and the CLI tools, and that broke one platform after the
+# other: windows-aarch64's lld rejects the ELF-only -soname on libgif.so,
+# windows-x86_64 fails on libutil.so (a DLL must resolve every symbol), and
+# giflib 6.1.3 stopped building on darwin. Before 6.1.3 the Linux and darwin
+# builds also installed imagemagick into the build container for giflib's
+# documentation, which nothing here uses.
+#
+# `|| { ...; exit 1; }`, never `|| ( ...; exit 1 )`: parentheses run the
+# handler in a subshell, whose exit ends nothing but the subshell (found in
+# the October 2026 audit, when a failed giflib make carried on silently).
+make libgif.a 2>&1 | log -a
+if [ ${PIPESTATUS[0]} -ne 0 ] || [ ! -f libgif.a ] || [ ! -f gif_lib.h ]; then
+    log "Error: giflib make libgif.a failed."
     exit 1
 fi
-if [[ ${TARGET_OS} != "linux" ]]; then
-    echo "Libs.private: -lstdc++ -lz" >>${PREFIX}/lib/pkgconfig/giflib.pc
-else
-    echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/giflib.pc
-fi
+cp gif_lib.h ${PREFIX}/include/gif_lib.h || { log "Error: installing gif_lib.h failed."; exit 1; }
+cp libgif.a ${PREFIX}/lib/libgif.a || { log "Error: installing libgif.a failed."; exit 1; }
+
+# The version the header declares, so giflib.pc says what was built.
+giflib_version=$(awk '/#define GIFLIB_(MAJOR|MINOR|RELEASE)/ { v = v (v ? "." : "") $3 } END { print v }' gif_lib.h)
+{
+    echo "prefix=${PREFIX}"
+    echo "exec_prefix=\${prefix}"
+    echo "libdir=\${exec_prefix}/lib"
+    echo "includedir=\${prefix}/include"
+    echo ""
+    echo "Name: giflib"
+    echo "Description: GIF library"
+    echo "Version: ${giflib_version:-unknown}"
+    echo "Libs: -L\${libdir} -lgif"
+    echo "Cflags: -I\${includedir}"
+    if [[ ${TARGET_OS} != "linux" ]]; then
+        echo "Libs.private: -lstdc++ -lz"
+    else
+        echo "Libs.private: -lstdc++"
+    fi
+} >${PREFIX}/lib/pkgconfig/giflib.pc
+log "giflib ${giflib_version} (static library and header)"
 cd /build
 rm -rf /build/giflib
 #endregion

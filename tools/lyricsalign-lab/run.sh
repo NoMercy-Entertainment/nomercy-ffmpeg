@@ -23,8 +23,8 @@ host() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else echo 
 cmd="${1:-build}"; shift || true
 case "${cmd}" in
 image)
-	cp "${ROOT}/scripts/includes/whisper-dtw-median-filter.patch" "${HERE}/"
-	trap 'rm -f "${HERE}/whisper-dtw-median-filter.patch"' EXIT
+	cp "${ROOT}/scripts/includes/whisper-dtw-median-filter.patch" "${ROOT}/scripts/includes/whisper-security-backports.patch" "${HERE}/"
+	trap 'rm -f "${HERE}/whisper-dtw-median-filter.patch" "${HERE}/whisper-security-backports.patch"' EXIT
 	docker build -t "${IMAGE}" "$(host "${HERE}")"
 	;;
 build|suite|shell)

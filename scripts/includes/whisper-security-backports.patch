@@ -1,0 +1,91 @@
+whisper.cpp v1.9.1: security fixes from upstream, applied after the DTW
+median-filter backport (whisper-dtw-median-filter.patch). scripts/48-whisper.sh
+applies this file and checks that each fix is in the tree afterwards.
+
+  60c0be6a whisper : add check for ttype in whisper and parakeet (#4091)
+           CVE-2026-110810: out-of-bounds read in whisper_model_load on a
+           model file whose tensor type is out of range. Fixed in v1.9.5.
+  df1547b6 whisper,parakeet : reject invalid n_dims in tensor header to
+           prevent stack-buffer-overflow on malformed model files (#3957)
+  8631825d whisper : heap out-of-bounds read in log_mel_spectrogram on very
+           short audio (#3956)
+
+Upstream ships them in v1.9.5, together with 773 other commits, most of them
+in ggml, which whisper, stemsplit and lyricsalign all run on. These three are
+taken alone so that ggml stays the one every gate of those filters was
+measured on. Drop this file when whisper.cpp is bumped to v1.9.5 or later.
+
+diff --git a/src/parakeet.cpp b/src/parakeet.cpp
+index b5da73e9..a62e00ac 100644
+--- a/src/parakeet.cpp
++++ b/src/parakeet.cpp
+@@ -1399,6 +1399,16 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+                 break;
+             }
+ 
++            if (n_dims < 0 || n_dims > 4) {
++                  PARAKEET_LOG_ERROR("%s: invalid n_dims %d in model file (expected 0 <= n_dims <= 4)\n", __func__, n_dims);
++                  return false;
++            }
++
++            if (ttype < 0 || ttype >= GGML_TYPE_COUNT) {
++                PARAKEET_LOG_ERROR("%s: invalid ttype %d in model file (expected 0 <= ttype < %d)\n", __func__, ttype, GGML_TYPE_COUNT);
++                return false;
++            }
++
+             int32_t nelements = 1;
+             int32_t ne[4] = { 1, 1, 1, 1 };
+             for (int i = 0; i < n_dims; ++i) {
+diff --git a/src/whisper.cpp b/src/whisper.cpp
+index cef144bf..9b69f677 100644
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -1879,6 +1879,16 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
+                 break;
+             }
+ 
++             if (n_dims < 0 || n_dims > 4) {
++                  WHISPER_LOG_ERROR("%s: invalid n_dims %d in model file (expected 0 <= n_dims <= 4)\n", __func__, n_dims);
++                  return false;
++              }
++
++            if (ttype < 0 || ttype >= GGML_TYPE_COUNT) {
++                WHISPER_LOG_ERROR("%s: invalid ttype %d in model file (expected 0 <= ttype < %d)\n", __func__, ttype, GGML_TYPE_COUNT);
++                return false;
++            }
++
+             int32_t nelements = 1;
+             int32_t ne[4] = { 1, 1, 1, 1 };
+             for (int i = 0; i < n_dims; ++i) {
+@@ -3197,8 +3207,12 @@ static bool log_mel_spectrogram(
+     // pad 30 seconds of zeros at the end of audio (480,000 samples) + reflective pad 200 samples at the end of audio
+     std::fill(samples_padded.begin() + n_samples + stage_2_pad, samples_padded.begin() + n_samples + stage_1_pad + 2 * stage_2_pad, 0);
+ 
+-    // reflective pad 200 samples at the beginning of audio
+-    std::reverse_copy(samples + 1, samples + 1 + stage_2_pad, samples_padded.begin());
++    // reflective pad up to 200 samples at the beginning of audio
++    // clamp the reflected count to the available input so very short audio (n_samples <= stage_2_pad)
++    // does not read past the end of `samples`
++    const int64_t n_reflect = std::min<int64_t>(stage_2_pad, std::max<int64_t>(0, (int64_t) n_samples - 1));
++    std::reverse_copy(samples + 1, samples + 1 + n_reflect, samples_padded.begin() + (stage_2_pad - n_reflect));
++
+ 
+     mel.n_mel     = n_mel;
+     // https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/SpectralOps.cpp#L936
+@@ -5021,6 +5035,16 @@ struct whisper_vad_context * whisper_vad_init_with_params(
+                 break;
+             }
+ 
++            if (n_dims < 0 || n_dims > 4) {
++                  WHISPER_LOG_ERROR("%s: invalid n_dims %d in model file (expected 0 <= n_dims <= 4)\n", __func__, n_dims);
++                  return nullptr;
++            }
++
++            if (ttype < 0 || ttype >= GGML_TYPE_COUNT) {
++                WHISPER_LOG_ERROR("%s: invalid ttype %d in model file (expected 0 <= ttype < %d)\n", __func__, ttype, GGML_TYPE_COUNT);
++                return nullptr;
++            }
++
+             int32_t nelements = 1;
+             int32_t ne[4] = { 1, 1, 1, 1 };
+             for (int i = 0; i < n_dims; ++i) {
