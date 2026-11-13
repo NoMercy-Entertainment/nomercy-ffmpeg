@@ -226,7 +226,9 @@ jobs:
           python-version: '3.12'
 
       # lavapipe (Mesa's software Vulkan device): the stemsplit suite's
-      # devices block (1.2.x) proves use_gpu=auto's device list, calibration
+      # devices block (since 1.2.0; 2.0.0 adds its cpu_assist and cpu_fallback
+      # tests, the longest about nine minutes on lavapipe) proves
+      # use_gpu=auto's device list, calibration
       # and self-check on lavapipe only, and skips itself loudly where there
       # is none. The Linux x64 archive links ggml-vulkan and its runner can
       # execute it, so this is the one job where that block can run at all;

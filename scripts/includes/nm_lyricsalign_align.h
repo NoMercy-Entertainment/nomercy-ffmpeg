@@ -6,6 +6,12 @@
  * number from the Python prototype (lyrics_eval.ctc_align, ctc_pipeline,
  * onset, audio) so that the C filter places a line where the prototype did.
  *
+ * Step 7 has two refinements (#130), both measured on the reference set and
+ * both only ever moving a written start earlier: 7b, a short walk-back for a
+ * line that begins on a vowel or a sonorant, and 7c, the start of a line
+ * whose first word the model did not hear moved onto sound no word claims.
+ * nm_la_written_start() runs the three in order.
+ *
  * Header-only and free of FFmpeg and ggml on purpose: the same code the
  * filter runs is compiled by tests/unit/test_nm_lyricsalign_align.c with a
  * plain C compiler and checked against the prototype's JFK fixture.
@@ -52,6 +58,20 @@
 #define NM_LA_WALK_FLOOR_DB (-45.0f)
 #define NM_LA_WALK_MAX_HOPS 80             /* 0.8 s */
 #define NM_LA_WALK_MARGIN_HOPS 5           /* 0.05 s after the previous line */
+
+/* 7b, the soft-onset walk-back: the same walk, shorter. */
+#define NM_LA_SOFT_WALK_HOPS 10            /* at most 0.1 s (the default of soft_walkback) */
+
+/* 7c, the island before an unheard first word. The window is counted in
+ * envelope hops of 10 ms, the island itself in RMS frames of 20 ms. */
+#define NM_LA_ISLAND_SCORE 0.01            /* a first word scoring below this was not heard */
+#define NM_LA_ISLAND_LOOK_HOPS 200         /* the window opens 2.0 s before the start ... */
+#define NM_LA_ISLAND_NEAR_HOPS 10          /* ... and closes 0.1 s before it */
+#define NM_LA_ISLAND_QUIET_DB (-45.0f)     /* a frame under this is quiet */
+#define NM_LA_ISLAND_LOUD_DB (-35.0f)      /* a frame at or over this is sound */
+#define NM_LA_ISLAND_QUIET_FRAMES 15       /* 0.3 s of quiet before the island */
+#define NM_LA_ISLAND_MIN_FRAMES 15         /* the island lasts at least 0.3 s */
+#define NM_LA_ISLAND_MOVE_HOPS 20          /* its onset is more than 0.2 s before the start */
 
 enum NMLaReason {
     NM_LA_OK = 0,
@@ -284,36 +304,43 @@ static inline enum NMLaReason nm_la_verdict(const NMLaPlace *line, int n, const 
 }
 
 /* ---------------------------------------------------------------------------
- * Step 7: the vocals' RMS envelope per 10 ms hop, in dB: 20·log10(rms + 1e-9).
- * *n_env = n / 160 hops; the trailing partial hop is dropped. Never NULL
- * unless memory ran out (an empty envelope is a 0-hop allocation).
+ * Step 7: the vocals' RMS in dB, 20·log10(rms + 1e-9), over non-overlapping
+ * windows of `hop` samples. *n_env = n / hop windows; the trailing partial
+ * window is dropped. Never NULL unless memory ran out (an empty result is a
+ * 0-window allocation).
  * ------------------------------------------------------------------------- */
-static inline float *nm_la_envelope_db(const float *samples, int n, int *n_env)
+static inline float *nm_la_rms_db(const float *samples, int n, int hop, int *n_env)
 {
-    const int hops = n > 0 ? n / NM_LA_ENV_HOP : 0;
+    const int hops = n > 0 ? n / hop : 0;
     float *env = (float *) NM_LA_MALLOC(sizeof(*env) * (size_t) (hops > 0 ? hops : 1));
 
     *n_env = 0;
     if (!env)
         return NULL;
     for (int k = 0; k < hops; k++) {
-        const float *x = samples + (size_t) k * NM_LA_ENV_HOP;
+        const float *x = samples + (size_t) k * hop;
         double acc = 0.0;
 
-        for (int i = 0; i < NM_LA_ENV_HOP; i++)
+        for (int i = 0; i < hop; i++)
             acc += (double) x[i] * x[i];
-        env[k] = (float) (20.0 * log10(sqrt(acc / NM_LA_ENV_HOP) + 1e-9));
+        env[k] = (float) (20.0 * log10(sqrt(acc / hop) + 1e-9));
     }
     *n_env = hops;
     return env;
 }
 
+/* The envelope the walk-backs read: one value per 10 ms hop. */
+static inline float *nm_la_envelope_db(const float *samples, int n, int *n_env)
+{
+    return nm_la_rms_db(samples, n, NM_LA_ENV_HOP, n_env);
+}
+
 /* From the spike at emission frame spike_frame (20 ms), walk back through the
  * envelope while it stays within 10 dB of its level at the spike (the loudest
- * of the five hops from there) and above -45 dBFS, at most 0.8 s, never
+ * of the five hops from there) and above -45 dBFS, at most max_hops, never
  * before the previous line's end (an emission frame, -1 for none) plus
  * 0.05 s. Returns the 10 ms hop index of the written start. */
-static inline int nm_la_walk_back(const float *env, int n_env, int spike_frame, int prev_end_frame)
+static inline int nm_la_walk_back_max(const float *env, int n_env, int spike_frame, int prev_end_frame, int max_hops)
 {
     int k0 = spike_frame * (NM_LA_HOP / NM_LA_ENV_HOP);
     int low, k, top;
@@ -328,7 +355,7 @@ static inline int nm_la_walk_back(const float *env, int n_env, int spike_frame, 
     for (int i = k0 + 1; i < top; i++)
         if (env[i] > level)
             level = env[i];
-    low = k0 - NM_LA_WALK_MAX_HOPS;
+    low = k0 - max_hops;
     if (low < 0)
         low = 0;
     if (prev_end_frame >= 0) {
@@ -342,11 +369,119 @@ static inline int nm_la_walk_back(const float *env, int n_env, int spike_frame, 
     return k;
 }
 
+/* Step 7's own walk: at most 0.8 s. */
+static inline int nm_la_walk_back(const float *env, int n_env, int spike_frame, int prev_end_frame)
+{
+    return nm_la_walk_back_max(env, n_env, spike_frame, prev_end_frame, NM_LA_WALK_MAX_HOPS);
+}
+
 /* Does a pause of at least 1.0 s precede a line that starts at start_frame,
  * given the previous placed line ended at prev_end_frame (-1: no previous)? */
 static inline int nm_la_pause_before(int start_frame, int prev_end_frame)
 {
     return prev_end_frame < 0 || start_frame - prev_end_frame >= NM_LA_LEAD_IN_GAP_FRAMES;
+}
+
+/* ---------------------------------------------------------------------------
+ * Step 7c: the island. frames[n_frames] is the vocals' RMS per 20 ms frame
+ * (nm_la_rms_db with NM_LA_HOP), start_hop the line's written start so far
+ * (a 10 ms hop), prev_end_frame the previous placed line's end.
+ *
+ * The window runs from the previous line's end, or 2.0 s before the start
+ * when that is later, to 0.1 s before the start. Walking forward through the
+ * frames that lie inside it, quiet frames (under -45 dB) are counted and a
+ * frame of sound (-35 dB or over) sets the count back to 0; a frame between
+ * the two does neither. The first run of sound that begins after 0.3 s of
+ * quiet and lasts 0.3 s is the island; the run may go on past the window.
+ * A breath is shorter than that, a held note of the previous line has no
+ * quiet before it.
+ *
+ * Returns the island's onset as a 10 ms hop, -1 when there is none.
+ * ------------------------------------------------------------------------- */
+static inline int nm_la_island_onset(const float *frames, int n_frames, int start_hop, int prev_end_frame)
+{
+    const int per_frame = NM_LA_HOP / NM_LA_ENV_HOP;        /* hops in one frame */
+    int open_hop, close_hop, f, f_end, quiet = 0;
+
+    if (prev_end_frame < 0 || n_frames <= 0)
+        return -1;
+    open_hop = start_hop - NM_LA_ISLAND_LOOK_HOPS;
+    if (prev_end_frame * per_frame > open_hop)
+        open_hop = prev_end_frame * per_frame;
+    close_hop = start_hop - NM_LA_ISLAND_NEAR_HOPS;
+    if (close_hop <= open_hop)
+        return -1;
+    f = (open_hop + per_frame - 1) / per_frame;             /* the first frame that begins inside the window */
+    f_end = close_hop / per_frame;                          /* frames [f, f_end) lie inside it */
+    if (f_end > n_frames)
+        f_end = n_frames;
+    while (f < f_end) {
+        if (frames[f] < NM_LA_ISLAND_QUIET_DB) {
+            quiet++;
+            f++;
+        } else if (frames[f] >= NM_LA_ISLAND_LOUD_DB) {
+            int stop = f;
+
+            while (stop < n_frames && frames[stop] >= NM_LA_ISLAND_LOUD_DB)
+                stop++;
+            if (quiet >= NM_LA_ISLAND_QUIET_FRAMES && stop - f >= NM_LA_ISLAND_MIN_FRAMES)
+                return f * per_frame;
+            quiet = 0;
+            f = stop;
+        } else {
+            f++;
+        }
+    }
+    return -1;
+}
+
+/* What the onset steps know about one accepted line. */
+typedef struct NMLaLineOnset {
+    int spike_frame;            /* the first phone's first emission frame */
+    int prev_end_frame;         /* the previous placed line's end, -1 for the first placed line */
+    int soft_onset;             /* the first phone is a vowel or a sonorant (nm_lp_soft_onset) */
+    int words;                  /* the line's words that have phones ... */
+    double first_word_score;    /* ... and the score of the first of them, as words[] reports it */
+} NMLaLineOnset;
+
+/* ---------------------------------------------------------------------------
+ * The written start of an accepted line, as a 10 ms hop. lead_in is the
+ * spike minus this.
+ *
+ *   7   after a pause of 1.0 s, or on the first placed line: the walk-back,
+ *       at most 0.8 s. Otherwise the start is the spike.
+ *   7b  when the start is still the spike and the first phone is soft: the
+ *       same walk-back, at most soft_max_hops. The model fires on the steady
+ *       part of a vowel or sonorant, a few hops after the voice came in; a
+ *       plosive or fricative has no such rise. soft_max_hops 0 turns it off.
+ *   7c  when the line has two words or more and the first scored below 0.01:
+ *       the island in front of the start (nm_la_island_onset), if its onset
+ *       is more than 0.2 s before the start. No word claims that sound, so
+ *       it is the word the model did not hear. island 0 turns it off.
+ *
+ * env is the 10 ms envelope, frames the 20 ms RMS (NULL also turns 7c off).
+ * With both refinements off this is step 7 as v1.0.46 ran it.
+ * ------------------------------------------------------------------------- */
+static inline int nm_la_written_start(const float *env, int n_env, const float *frames, int n_frames,
+                                      const NMLaLineOnset *line, int soft_max_hops, int island)
+{
+    const int spike_hop = line->spike_frame * (NM_LA_HOP / NM_LA_ENV_HOP);
+    int start = spike_hop;
+
+    if (nm_la_pause_before(line->spike_frame, line->prev_end_frame))
+        start = nm_la_walk_back(env, n_env, line->spike_frame, line->prev_end_frame);
+
+    /* spike_hop < n_env: a spike past the envelope's end has nothing to walk through */
+    if (start == spike_hop && line->soft_onset && soft_max_hops > 0 && spike_hop < n_env)
+        start = nm_la_walk_back_max(env, n_env, line->spike_frame, line->prev_end_frame, soft_max_hops);
+
+    if (island && frames && line->words >= 2 && line->first_word_score < NM_LA_ISLAND_SCORE) {
+        int onset = nm_la_island_onset(frames, n_frames, start, line->prev_end_frame);
+
+        if (onset >= 0 && start - onset > NM_LA_ISLAND_MOVE_HOPS)
+            start = onset;
+    }
+    return start;
 }
 
 #endif /* NM_LYRICSALIGN_ALIGN_H */

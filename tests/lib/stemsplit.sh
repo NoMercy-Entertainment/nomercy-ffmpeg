@@ -1,7 +1,9 @@
 #!/bin/bash
 # The stemsplit release gates (docs/superpowers/specs/2026-10-31-stemsplit-1.1.0-ci-gates-design.md),
 # plus the use_gpu=auto runs stemsplit 1.2.0's hand-over asks for in the
-# clean-exit loop (ffmpeg-stemsplit docs/handover-1.2.0.md, "nomercy-ffmpeg").
+# clean-exit loop (ffmpeg-stemsplit docs/handover-1.2.0.md, "nomercy-ffmpeg"),
+# and, since stemsplit 2.0.0 made use_gpu=auto the default, the same hold on a
+# run that names no use_gpu at all (docs/handover-2.0.0.md, "nomercy-ffmpeg").
 #
 # Three functions, each following run_custom_test's exit-code protocol in
 # tests.sh: 0 pass, 2 skip (reason on a "SKIP: " line), anything else fail.
@@ -10,10 +12,12 @@
 #                               the binary under test with the tiny RoFormer
 #                               models and the Spleeter model (contract §8, the
 #                               CI row)
-#   test_stemsplit_clean_exit   20 Spleeter runs, 20 RoFormer runs and 20
-#                               RoFormer runs under use_gpu=auto, every one
+#   test_stemsplit_clean_exit   20 Spleeter runs, 20 RoFormer runs with the
+#                               defaults and 20 under use_gpu=auto, every one
 #                               of which must leave on its own, with exit 0
-#                               (contract §7 rule 7)
+#                               (contract §7 rule 7); where such a run
+#                               computed on the CPU, its stems are use_gpu=0's
+#                               bytes
 #   test_stemsplit_spleeter_ab  the Spleeter stems are byte-identical with the
 #                               previous release's binary, per CPU variant this
 #                               machine can run (contract §8, the Spleeter A/B row)
@@ -278,12 +282,16 @@ test_stemsplit_clean_exit() {
 		-hide_banner -nostdin -nostats -loglevel info -y -i audio/short.wav \
 		-af "stemsplit=model=${SS_MODEL}:stem=accompaniment,ametadata=mode=print:key=lavfi.stemsplit.version" \
 		-f wav work/spleeter.wav || fail=1
-	# RoFormer: the tiny Mel model, both pads. "weights loaded" is the engine's
-	# own line; a run that exits 0 without it never ran RoFormer.
+	# RoFormer with the defaults: the tiny Mel model, both pads. "weights
+	# loaded" is the engine's own line; a run that exits 0 without it never ran
+	# RoFormer. Since stemsplit 2.0.0 the default is use_gpu=auto, so this run
+	# walks the device list too; its stems are written so the bytes can be held
+	# against use_gpu=0's below.
 	_stemsplit_series roformer "${runs}" 300 "weights loaded" \
 		-hide_banner -nostdin -nostats -v verbose -y -i audio/short.wav \
-		-filter_complex "[0:a]stemsplit=model=${SS_TINY}/tiny-mel-v1.gguf[v][a]" \
-		-map "[v]" -f null - -map "[a]" -f null - || fail=1
+		-filter_complex "[0:a]stemsplit=model=${SS_TINY}/tiny-mel-v1.gguf[v0][a];[v0]ametadata=mode=print:key=lavfi.stemsplit.backend[v]" \
+		-map "[v]" -c:a pcm_f32le -fflags +bitexact -f wav work/default_v.wav \
+		-map "[a]" -c:a pcm_f32le -fflags +bitexact -f wav work/default_a.wav || fail=1
 	# RoFormer under use_gpu=auto (stemsplit 1.2.0): the device list, the
 	# calibration and the self-check run before the first chunk, and every
 	# run must still exit on its own. A runner has no usable GPU, so auto
@@ -303,35 +311,44 @@ test_stemsplit_clean_exit() {
 	fi
 	echo "every run of the three series exited cleanly"
 
-	# The last auto run against one use_gpu=0 run of the same graph. Which
-	# backend made the auto stems comes from the frame metadata that run
-	# printed (lavfi.stemsplit.backend), never from an init line. On a
+	# The last run of each RoFormer series against one use_gpu=0 run of the
+	# same graph. Which backend made the stems comes from the frame metadata
+	# that run printed (lavfi.stemsplit.backend), never from an init line. On a
 	# machine where auto took a device the stems may differ (within 45 dB,
 	# not equal), and that is the one case this check must not fail on; only
 	# a CPU run is held to the bytes. CI never has a device; the owner's
 	# machine may.
-	local backend
-	backend="$(grep -ao 'lavfi.stemsplit.backend=[a-z|]*' "${SS_WORK}/roformer-auto-${runs}.log" | tail -1 | cut -d= -f2)"
-	if [[ -z "${backend}" ]]; then
-		echo "FAIL: the use_gpu=auto run printed no lavfi.stemsplit.backend metadata (stemsplit 1.2.0 sets it on every frame)"
-		return 1
-	fi
-	if (cd "${SS_ASSETS}" && "${SS_FFMPEG}" -hide_banner -nostdin -nostats -v error -y -i audio/short.wav \
+	if ! (cd "${SS_ASSETS}" && "${SS_FFMPEG}" -hide_banner -nostdin -nostats -v error -y -i audio/short.wav \
 		-filter_complex "[0:a]stemsplit=model=${SS_TINY}/tiny-mel-v1.gguf:use_gpu=0[v][a]" \
 		-map "[v]" -c:a pcm_f32le -fflags +bitexact -f wav work/cpu_v.wav \
 		-map "[a]" -c:a pcm_f32le -fflags +bitexact -f wav work/cpu_a.wav >"${SS_WORK}/roformer-cpu.log" 2>&1); then
-		if [[ "${backend}" != cpu ]]; then
-			echo "use_gpu=auto took a device on this machine (backend ${backend}); its bytes are not held against the CPU's here"
-		elif cmp -s "${SS_ASSETS}/work/auto_v.wav" "${SS_ASSETS}/work/cpu_v.wav" \
-			&& cmp -s "${SS_ASSETS}/work/auto_a.wav" "${SS_ASSETS}/work/cpu_a.wav"; then
-			echo "use_gpu=auto landed on the CPU (backend cpu) and gives use_gpu=0's bytes (both stems identical)"
-		else
-			echo "FAIL: use_gpu=auto ran on the CPU but its stems differ from use_gpu=0's (contract: auto without a device is the exact CPU run)"
-			return 1
-		fi
-	else
 		tail -5 "${SS_WORK}/roformer-cpu.log"
-		echo "FAIL: the use_gpu=0 reference run for the auto comparison failed"
+		echo "FAIL: the use_gpu=0 reference run for the comparison failed"
+		return 1
+	fi
+	_stemsplit_held_to_cpu roformer default "the defaults (use_gpu=auto since stemsplit 2.0.0)" "${runs}" || return 1
+	_stemsplit_held_to_cpu roformer-auto auto "use_gpu=auto" "${runs}" || return 1
+	return 0
+}
+
+# _stemsplit_held_to_cpu <series> <stem file prefix> <what the run was> <runs>
+# The last run of a series printed which backend made its stems. A run on the
+# CPU must have written the bytes of work/cpu_{v,a}.wav; a run on a device is
+# reported and not compared.
+_stemsplit_held_to_cpu() {
+	local series="$1" stems="$2" what="$3" runs="$4" backend
+	backend="$(grep -ao 'lavfi.stemsplit.backend=[a-z|]*' "${SS_WORK}/${series}-${runs}.log" | tail -1 | cut -d= -f2)"
+	if [[ -z "${backend}" ]]; then
+		echo "FAIL: the run with ${what} printed no lavfi.stemsplit.backend metadata (stemsplit sets it on every frame since 1.2.0)"
+		return 1
+	fi
+	if [[ "${backend}" != cpu ]]; then
+		echo "${what} took a device on this machine (backend ${backend}); its bytes are not held against the CPU's here"
+	elif cmp -s "${SS_ASSETS}/work/${stems}_v.wav" "${SS_ASSETS}/work/cpu_v.wav" \
+		&& cmp -s "${SS_ASSETS}/work/${stems}_a.wav" "${SS_ASSETS}/work/cpu_a.wav"; then
+		echo "${what} landed on the CPU (backend cpu) and gives use_gpu=0's bytes (both stems identical)"
+	else
+		echo "FAIL: ${what} ran on the CPU but its stems differ from use_gpu=0's (contract: auto without a device is the exact CPU run)"
 		return 1
 	fi
 	return 0
@@ -428,9 +445,9 @@ test_stemsplit_spleeter_ab() {
 			_stemsplit_ab_run "${ref}" "${b}" "${in}" "${opts}" "${v}"
 			rc=$?
 			if [[ ${rc} -eq 136 ]]; then
-				# SIGFPE: the reference (v1.0.44) opens the host's Vulkan loader,
+				# SIGFPE: a reference up to v1.0.44 opens the host's Vulkan loader,
 				# which brings the host's glibc in as a second libc, and dies when
-				# that is not the 2.39 it was linked with (fixed in this build;
+				# that is not the 2.39 it was linked with (fixed since v1.0.45;
 				# design note 2026-11-02-vulkan-loader-glibc-guard). No A/B is
 				# possible on such a host; CI runs this gate on ubuntu-24.04.
 				echo "SKIP: the reference build dies on this host (SIGFPE: its Vulkan loader brings in a glibc other than its own 2.39); run the A/B gate on a glibc-2.39 host"

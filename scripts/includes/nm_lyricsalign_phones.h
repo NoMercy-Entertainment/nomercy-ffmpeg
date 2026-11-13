@@ -396,4 +396,332 @@ static inline int nm_lp_map_phone(const char *phone, const char *const *vocab, i
     return -1;
 }
 
+/* ---------------------------------------------------------------------------
+ * The first sound of a line (#130, step 7b)
+ * ------------------------------------------------------------------------- */
+
+/* Is the phone a soft onset: a vowel or a sonorant? Its first code point
+ * decides, a precomposed letter by its base letter (ã is a), so a length
+ * mark, a second vowel or a nasal mark behind it changes nothing. Everything
+ * else (plosives, fricatives, h and ɦ, affricates) is a hard onset.
+ *
+ * Measured on the reference set (#130): the model's spike sits 30 to 40 ms
+ * late on a line that begins soft and on time on one that begins hard. */
+static inline int nm_lp_soft_onset(const char *phone)
+{
+    static const uint16_t soft[] = {
+        /* vowels: a e i o u y æ ɑ ɐ ɒ ɔ ə ɘ ɛ ɜ ɞ ɤ ɨ ɪ ʉ ʊ ʌ ʏ ø œ ɵ ɯ ɶ */
+        'a', 'e', 'i', 'o', 'u', 'y', 0x00E6, 0x0251, 0x0250, 0x0252, 0x0254, 0x0259, 0x0258, 0x025B,
+        0x025C, 0x025E, 0x0264, 0x0268, 0x026A, 0x0289, 0x028A, 0x028C, 0x028F, 0x00F8, 0x0153, 0x0275,
+        0x026F, 0x0276,
+        /* sonorants: m n ɲ ŋ ɳ l ɫ ʎ ɭ r ɾ ɹ ɻ ʀ ʁ j w ʋ ɥ ɰ */
+        'm', 'n', 0x0272, 0x014B, 0x0273, 'l', 0x026B, 0x028E, 0x026D, 'r', 0x027E, 0x0279, 0x027B,
+        0x0280, 0x0281, 'j', 'w', 0x028B, 0x0265, 0x0270,
+    };
+    int len;
+    uint32_t c = nm_lp_utf8_decode((const unsigned char *) phone, &len);
+
+    for (int pass = 0; pass < 2; pass++) {
+        for (size_t i = 0; i < sizeof(soft) / sizeof(soft[0]); i++)
+            if (c == soft[i])
+                return 1;
+        if (pass || c < 0xC0 || c > 0xFFFF)
+            break;
+        /* not listed as it stands: try the base letter of a precomposed one */
+        for (size_t i = 0; i < sizeof(nm_lp_decomp) / sizeof(nm_lp_decomp[0]); i++) {
+            if (nm_lp_decomp[i].cp == c) {
+                c = nm_lp_decomp[i].base[0];
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Words and lyric tokens (#131)
+ *
+ * espeak-ng phonemizes a line as a whole, and the filter aligns those phones.
+ * The words[] of the output are the line's whitespace tokens, so each token
+ * is phonemized on its own as well, to learn which of the line's phones are
+ * its own. Three things happen:
+ *
+ *   - The token's words are the line's words, one for one ("ask", or "1999"
+ *     as its three words). The count says so; nothing else is looked at.
+ *   - espeak joins tokens into one word: en-us writes "of the" as ʌvðə. When
+ *     that word is exactly the tokens' own phones one after the other, it is
+ *     split where the token ends and each token keeps its own entry. When
+ *     the joined word sounds different from the tokens alone ("to the" is
+ *     təðə, "to" alone is tuː), where to cut is not known: the tokens share
+ *     one entry, labelled with both ("to the").
+ *   - Neither: the word gets an entry without a label.
+ *
+ * When the counts add up (the usual case) the first rule is all there is,
+ * as before #131. When they do not, the tokens are laid along the line's
+ * words so that the fewest phones differ: the words that are the same alone
+ * and in the line pin the others down.
+ * ------------------------------------------------------------------------- */
+
+/* One lyric token phonemized on its own: n is 0 when espeak says nothing for
+ * it ("-", "..."). */
+typedef struct NMLpToken {
+    NMLpWord *words;
+    int n;
+} NMLpToken;
+
+/* One entry of a line's words[]. */
+typedef struct NMLpSpan {
+    int tok;            /* the first token of its label ... */
+    int n_tok;          /* ... and how many tokens the label runs over, the unspoken ones between
+                         * them included; 0: no label */
+    int phone;          /* its first phone, counted over the line's words ... */
+    int n_phones;       /* ... and how many phones it has */
+} NMLpSpan;
+
+#define NM_LP_TIE_JOIN 4            /* tokens espeak may join into one word */
+#define NM_LP_TIE_CELLS 65536       /* (line words + 1) x (spoken tokens + 1) the tie will work through */
+
+/* Costs of a way to lay the tokens along the words. A phone that differs
+ * outweighs everything else; the rest only settles which of two equally
+ * good ways wins. Leaving a token out is the cheaper of the two, so a word
+ * is called joined only when the second token accounts for a phone of it:
+ * a word that is one token's phones exactly stays that token's. */
+#define NM_LP_TIE_PHONE 8           /* per phone that differs */
+#define NM_LP_TIE_JOINED 2          /* per token joined to the one before it */
+#define NM_LP_TIE_LEFT 1            /* a word without a token, or a token without a word */
+
+/* How many phones differ between a[na] and b[nb]: the edit distance, a phone
+ * being the unit. row has room for nb + 1 ints. */
+static inline int nm_lp_phones_apart(char *const *a, int na, char *const *b, int nb, int *row)
+{
+    for (int j = 0; j <= nb; j++)
+        row[j] = j;
+    for (int i = 1; i <= na; i++) {
+        int diag = row[0];
+
+        row[0] = i;
+        for (int j = 1; j <= nb; j++) {
+            int up = row[j];
+            int best = diag + (strcmp(a[i - 1], b[j - 1]) != 0);
+
+            if (up + 1 < best)
+                best = up + 1;
+            if (row[j - 1] + 1 < best)
+                best = row[j - 1] + 1;
+            row[j] = best;
+            diag = up;
+        }
+    }
+    return row[nb];
+}
+
+/* Tie the n_tok tokens of a line to its n_line words. On success returns 0
+ * and *spans holds *n_spans entries in the line's order (NM_LP_FREE it);
+ * -1 when memory ran out. A line of more words than NM_LP_TIE_CELLS allows
+ * whose counts do not add up keeps one unlabelled entry per word. */
+static inline int nm_lp_tie(const NMLpWord *line, int n_line, const NMLpToken *tok, int n_tok,
+                            NMLpSpan **spans, int *n_spans)
+{
+    NMLpSpan *out = NULL;
+    char **lp = NULL, **tp = NULL;      /* the phones of the line, and of the spoken tokens */
+    int *lw = NULL, *tw = NULL;         /* where each line word / spoken token starts in them */
+    int *st = NULL;                     /* the token index of each spoken token */
+    int *cost = NULL, *back = NULL, *row = NULL, *steps = NULL;
+    int n_lp = 0, n_tp = 0, m = 0, total = 0, n = 0, rc = -1, n_steps = 0;
+
+    *spans = NULL;
+    *n_spans = 0;
+    for (int i = 0; i < n_line; i++)
+        n_lp += line[i].n;
+    for (int t = 0; t < n_tok; t++) {
+        total += tok[t].n;
+        if (tok[t].n)
+            m++;
+        for (int w = 0; w < tok[t].n; w++)
+            n_tp += tok[t].words[w].n;
+    }
+    out = (NMLpSpan *) NM_LP_MALLOC(sizeof(*out) * (size_t) (n_line + n_tok + 1));
+    lw = (int *) NM_LP_MALLOC(sizeof(*lw) * (size_t) (n_line + 1));
+    if (!out || !lw)
+        goto done;
+    lw[0] = 0;
+    for (int i = 0; i < n_line; i++)
+        lw[i + 1] = lw[i] + line[i].n;
+
+    if (total == n_line) {
+        /* the counts add up: every spoken token is its own words */
+        int w = 0;
+
+        for (int t = 0; t < n_tok; t++) {
+            if (!tok[t].n)
+                continue;
+            out[n].tok = t;
+            out[n].n_tok = 1;
+            out[n].phone = lw[w];
+            out[n].n_phones = lw[w + tok[t].n] - lw[w];
+            n++;
+            w += tok[t].n;
+        }
+        rc = 0;
+        goto done;
+    }
+    if ((size_t) (n_line + 1) * (size_t) (m + 1) > NM_LP_TIE_CELLS) {
+        for (int i = 0; i < n_line; i++) {
+            out[n].tok = 0;
+            out[n].n_tok = 0;
+            out[n].phone = lw[i];
+            out[n].n_phones = line[i].n;
+            n++;
+        }
+        rc = 0;
+        goto done;
+    }
+
+    {
+        const int cols = m + 1, cells = (n_line + 1) * cols;
+        int u = 0, q = 0, i, at;
+
+        lp = (char **) NM_LP_MALLOC(sizeof(*lp) * (size_t) (n_lp + 1));
+        tp = (char **) NM_LP_MALLOC(sizeof(*tp) * (size_t) (n_tp + 1));
+        tw = (int *) NM_LP_MALLOC(sizeof(*tw) * (size_t) (m + 1));
+        st = (int *) NM_LP_MALLOC(sizeof(*st) * (size_t) (m + 1));
+        cost = (int *) NM_LP_MALLOC(sizeof(*cost) * (size_t) cells);
+        back = (int *) NM_LP_MALLOC(sizeof(*back) * (size_t) cells);
+        row = (int *) NM_LP_MALLOC(sizeof(*row) * (size_t) (n_tp + 1));
+        steps = (int *) NM_LP_MALLOC(sizeof(*steps) * (size_t) (n_line + m + 1));
+        if (!lp || !tp || !tw || !st || !cost || !back || !row || !steps)
+            goto done;
+        for (i = 0; i < n_line; i++)
+            for (int k = 0; k < line[i].n; k++)
+                lp[lw[i] + k] = line[i].phones[k];
+        for (int t = 0; t < n_tok; t++) {
+            if (!tok[t].n)
+                continue;
+            st[u] = t;
+            tw[u++] = q;
+            for (int w = 0; w < tok[t].n; w++)
+                for (int k = 0; k < tok[t].words[w].n; k++)
+                    tp[q++] = tok[t].words[w].phones[k];
+        }
+        tw[m] = q;
+
+        /* cost[i][u]: the cheapest way to account for the first i words with
+         * the first u spoken tokens. back[] remembers the step that got
+         * there as words * (NM_LP_TIE_JOIN + 1) + tokens:
+         *   r words, 1 token    the token is the r words it makes alone
+         *   1 word,  k tokens   the word is those tokens joined (k >= 2)
+         *   1 word,  0 tokens   a word no token accounts for
+         *   0 words, 1 token    a token the line does not speak
+         * The last two always exist, so there is always a way through. */
+#define NM_LP_TIE_STEP(words, tokens) ((words) * (NM_LP_TIE_JOIN + 1) + (tokens))
+#define NM_LP_TIE_TRY(ci, cu, value, step) do {                                 \
+            const int to_ = (ci) * cols + (cu), v_ = (value);                   \
+            if (v_ < cost[to_])                                                 \
+                cost[to_] = v_, back[to_] = (step);                             \
+        } while (0)
+        for (i = 0; i < cells; i++)
+            cost[i] = INT32_MAX, back[i] = 0;
+        cost[0] = 0;
+        for (i = 0; i <= n_line; i++) {
+            for (u = 0; u <= m; u++) {
+                const int c = cost[i * cols + u];
+
+                if (c == INT32_MAX)
+                    continue;
+                if (u < m) {
+                    const int r = tok[st[u]].n, n_q = tw[u + 1] - tw[u];
+
+                    if (i + r <= n_line) {
+                        int d = nm_lp_phones_apart(lp + lw[i], lw[i + r] - lw[i], tp + tw[u], n_q, row);
+                        NM_LP_TIE_TRY(i + r, u + 1, c + d * NM_LP_TIE_PHONE, NM_LP_TIE_STEP(r, 1));
+                    }
+                    NM_LP_TIE_TRY(i, u + 1, c + n_q * NM_LP_TIE_PHONE + NM_LP_TIE_LEFT, NM_LP_TIE_STEP(0, 1));
+                }
+                if (i < n_line) {
+                    const int n_p = lw[i + 1] - lw[i];
+                    int most = m - u < NM_LP_TIE_JOIN ? m - u : NM_LP_TIE_JOIN;
+
+                    for (int k = 2; k <= most; k++) {
+                        int d = nm_lp_phones_apart(lp + lw[i], n_p, tp + tw[u], tw[u + k] - tw[u], row);
+                        NM_LP_TIE_TRY(i + 1, u + k, c + d * NM_LP_TIE_PHONE + (k - 1) * NM_LP_TIE_JOINED,
+                                      NM_LP_TIE_STEP(1, k));
+                    }
+                    NM_LP_TIE_TRY(i + 1, u, c + n_p * NM_LP_TIE_PHONE + NM_LP_TIE_LEFT, NM_LP_TIE_STEP(1, 0));
+                }
+            }
+        }
+#undef NM_LP_TIE_TRY
+
+        /* walk the steps back from the end, then write the entries forwards */
+        for (i = n_line, u = m; i > 0 || u > 0;) {
+            const int step = back[i * cols + u];
+
+            steps[n_steps++] = step;
+            i -= step / (NM_LP_TIE_JOIN + 1);
+            u -= step % (NM_LP_TIE_JOIN + 1);
+        }
+        i = u = 0;
+        for (at = n_steps - 1; at >= 0; at--) {
+            const int r = steps[at] / (NM_LP_TIE_JOIN + 1), k = steps[at] % (NM_LP_TIE_JOIN + 1);
+
+            if (r >= 1 && k == 1) {
+                out[n].tok = st[u];
+                out[n].n_tok = 1;
+                out[n].phone = lw[i];
+                out[n].n_phones = lw[i + r] - lw[i];
+                n++;
+            } else if (r == 1 && k >= 2) {
+                const int n_p = lw[i + 1] - lw[i];
+                int same = n_p == tw[u + k] - tw[u];
+
+                for (int p = 0; same && p < n_p; p++)
+                    same = !strcmp(lp[lw[i] + p], tp[tw[u] + p]);
+                if (same) {
+                    /* the word is the tokens' own phones: cut it where each token ends */
+                    for (int v = u; v < u + k; v++) {
+                        out[n].tok = st[v];
+                        out[n].n_tok = 1;
+                        out[n].phone = lw[i] + (tw[v] - tw[u]);
+                        out[n].n_phones = tw[v + 1] - tw[v];
+                        n++;
+                    }
+                } else {
+                    out[n].tok = st[u];
+                    out[n].n_tok = st[u + k - 1] - st[u] + 1;
+                    out[n].phone = lw[i];
+                    out[n].n_phones = n_p;
+                    n++;
+                }
+            } else if (r == 1) {
+                out[n].tok = 0;
+                out[n].n_tok = 0;
+                out[n].phone = lw[i];
+                out[n].n_phones = lw[i + 1] - lw[i];
+                n++;
+            }
+            i += r;
+            u += k;
+        }
+#undef NM_LP_TIE_STEP
+        rc = 0;
+    }
+done:
+    NM_LP_FREE(lp);
+    NM_LP_FREE(tp);
+    NM_LP_FREE(lw);
+    NM_LP_FREE(tw);
+    NM_LP_FREE(st);
+    NM_LP_FREE(cost);
+    NM_LP_FREE(back);
+    NM_LP_FREE(row);
+    NM_LP_FREE(steps);
+    if (rc) {
+        NM_LP_FREE(out);
+        return rc;
+    }
+    *spans = out;
+    *n_spans = n;
+    return 0;
+}
+
 #endif /* NM_LYRICSALIGN_PHONES_H */

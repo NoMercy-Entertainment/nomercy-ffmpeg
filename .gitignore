@@ -23,3 +23,7 @@ tmp/*
 # cannot stop it being created.
 *;C
 *;C/
+
+# Python bytecode
+__pycache__/
+*.pyc

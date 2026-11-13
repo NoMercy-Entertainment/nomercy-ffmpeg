@@ -29,6 +29,10 @@
  * agree before a line is written; a line that fails any test is skipped
  * with its reason, never guessed. The method and every constant are the
  * prototype's, measured on a verified reference set (nomercy-ffmpeg #126).
+ * Where a written line starts has two refinements measured on the same set
+ * (#130, nm_lyricsalign_align.h), and the words of a line keep their text
+ * when espeak-ng writes two lyric tokens as one word (#131,
+ * nm_lyricsalign_phones.h).
  *
  * Two inputs (vocals, backing), one output: input 0, unchanged, streamed as
  * it arrives. The alignment runs once, when both inputs have ended, before
@@ -113,19 +117,19 @@
 #define NM_W2V2_FREE(p)     av_free(p)
 #include "nm_lyricsalign_w2v2.h"
 
-#define LA_VERSION "1.0.0"
+#define LA_VERSION "1.1.0"
 
 typedef struct LaLine {
     char *text;                 /* the text line, without its line ending */
     NMLpWord *words;            /* espeak's words of phones; NULL for an empty line */
     int n_words;
-    int **word_ids;             /* per word, the mapped vocabulary ids */
-    int *word_n;
+    NMLpSpan *spans;            /* the entries of words[]: the phones each one spans (nm_lp_tie) ... */
+    char **labels;              /* ... and its text, NULL for an entry without one */
+    int n_spans;
     int *ids;                   /* every mapped id of the line, in order */
     int n_ids;
-    int *tok_words;             /* per whitespace token of the text, espeak's word count;
-                                 * NULL when the counts do not add up to n_words */
-    int n_tok;
+    int *id_at;                 /* per phone of the line, and one past the last: the ids before it */
+    int soft_onset;             /* the first phone that kept an id is a vowel or a sonorant */
 } LaLine;
 
 typedef struct LyricsAlignContext {
@@ -141,6 +145,8 @@ typedef struct LyricsAlignContext {
     int threads;
     int use_gpu;
     int gpu_device;
+    float soft_walkback;
+    int unheard_island;
 
     /* text */
     LaLine *lines;
@@ -301,26 +307,45 @@ static int la_ipa_words(const char *text, NMLpWord **words, int *n_words)
     return ret ? AVERROR(ENOMEM) : 0;
 }
 
+/* The text of one words[] entry: the tokens its label runs over, a space
+ * between them, without the ones espeak does not speak. */
+static char *la_span_label(const NMLpSpan *span, const NMLpToken *toks, char *const *tok_text)
+{
+    AVBPrint b;
+    char *label = NULL;
+    int any = 0;
+
+    av_bprint_init(&b, 0, AV_BPRINT_SIZE_UNLIMITED);
+    for (int t = span->tok; t < span->tok + span->n_tok; t++) {
+        if (!toks[t].n)
+            continue;
+        av_bprintf(&b, "%s%s", any ? " " : "", tok_text[t]);
+        any = 1;
+    }
+    if (av_bprint_is_complete(&b))
+        av_bprint_finalize(&b, &label);
+    else
+        av_bprint_finalize(&b, NULL);
+    return label;
+}
+
 /* The whole line for the alignment; then every whitespace token on its own,
- * only to count the words espeak makes of it ("-" makes none, "1999" makes
- * three), so the JSON can label each lyric token with its own span. When
- * the counts do not add up to the line's words, the labels are null. */
+ * to learn which of the line's phones are that token's ("-" has none,
+ * "1999" has three words of them), so the JSON can give each lyric token
+ * its own span. nm_lp_tie() does the tying, and says what happens when
+ * espeak wrote two tokens as one word. */
 static int la_phonemize_line(LaLine *line)
 {
     const char *p = line->text;
-    int ret, sum = 0, t = 0, cap = 8;
+    NMLpToken *toks = NULL;
+    char **tok_text = NULL;
+    int ret, n_tok = 0, cap = 0;
 
     ret = la_ipa_words(line->text, &line->words, &line->n_words);
     if (ret < 0)
         return ret;
-    line->tok_words = av_malloc_array(cap, sizeof(*line->tok_words));
-    if (!line->tok_words)
-        return AVERROR(ENOMEM);
     while (*p) {
         const char *tok;
-        char *one;
-        NMLpWord *words = NULL;
-        int n = 0;
 
         while (*p && nm_lp_is_space((unsigned char) *p))
             p++;
@@ -329,28 +354,62 @@ static int la_phonemize_line(LaLine *line)
         tok = p;
         while (*p && !nm_lp_is_space((unsigned char) *p))
             p++;
-        one = av_strndup(tok, p - tok);
-        if (!one)
-            return AVERROR(ENOMEM);
-        ret = la_ipa_words(one, &words, &n);
-        av_free(one);
-        if (ret < 0)
-            return ret;
-        nm_lp_free_words(words, n);
-        if (t == cap) {
-            int *grown = av_realloc_array(line->tok_words, cap * 2, sizeof(*grown));
-            if (!grown)
-                return AVERROR(ENOMEM);
-            line->tok_words = grown;
-            cap *= 2;
+        if (n_tok == cap) {
+            NMLpToken *grown_toks;
+            char **grown_text;
+
+            cap = cap ? cap * 2 : 16;
+            grown_toks = av_realloc_array(toks, cap, sizeof(*grown_toks));
+            if (grown_toks)
+                toks = grown_toks;
+            grown_text = av_realloc_array(tok_text, cap, sizeof(*grown_text));
+            if (grown_text)
+                tok_text = grown_text;
+            if (!grown_toks || !grown_text) {
+                ret = AVERROR(ENOMEM);
+                goto done;
+            }
         }
-        line->tok_words[t++] = n;
-        sum += n;
+        toks[n_tok].words = NULL;
+        toks[n_tok].n = 0;
+        tok_text[n_tok] = av_strndup(tok, p - tok);
+        if (!tok_text[n_tok]) {
+            ret = AVERROR(ENOMEM);
+            goto done;
+        }
+        n_tok++;
+        ret = la_ipa_words(tok_text[n_tok - 1], &toks[n_tok - 1].words, &toks[n_tok - 1].n);
+        if (ret < 0)
+            goto done;
     }
-    line->n_tok = t;
-    if (sum != line->n_words)
-        av_freep(&line->tok_words);
-    return 0;
+
+    if (nm_lp_tie(line->words, line->n_words, toks, n_tok, &line->spans, &line->n_spans)) {
+        ret = AVERROR(ENOMEM);
+        goto done;
+    }
+    line->labels = av_calloc(FFMAX(line->n_spans, 1), sizeof(*line->labels));
+    if (!line->labels) {
+        ret = AVERROR(ENOMEM);
+        goto done;
+    }
+    for (int i = 0; i < line->n_spans; i++) {
+        if (!line->spans[i].n_tok)
+            continue;
+        line->labels[i] = la_span_label(&line->spans[i], toks, tok_text);
+        if (!line->labels[i]) {
+            ret = AVERROR(ENOMEM);
+            goto done;
+        }
+    }
+    ret = 0;
+done:
+    for (int t = 0; t < n_tok; t++) {
+        nm_lp_free_words(toks[t].words, toks[t].n);
+        av_free(tok_text[t]);
+    }
+    av_free(toks);
+    av_free(tok_text);
+    return ret;
 }
 
 static int la_phonemize(AVFilterContext *ctx)
@@ -481,13 +540,13 @@ static void la_free_lines(LyricsAlignContext *s)
         LaLine *l = &s->lines[i];
         av_free(l->text);
         nm_lp_free_words(l->words, l->n_words);
-        if (l->word_ids)
-            for (int w = 0; w < l->n_words; w++)
-                av_free(l->word_ids[w]);
-        av_free(l->word_ids);
-        av_free(l->word_n);
+        if (l->labels)
+            for (int w = 0; w < l->n_spans; w++)
+                av_free(l->labels[w]);
+        av_free(l->labels);
+        av_free(l->spans);
         av_free(l->ids);
-        av_free(l->tok_words);
+        av_free(l->id_at);
     }
     av_freep(&s->lines);
     s->n_lines = 0;
@@ -508,33 +567,37 @@ static int la_map_phones(AVFilterContext *ctx)
     s->mapping_misses = 0;
     for (int i = 0; i < s->n_lines; i++) {
         LaLine *l = &s->lines[i];
-        int total = 0;
+        int phones = 0, p = 0;
 
         if (!l->n_words)
             continue;
-        l->word_ids = av_calloc(l->n_words, sizeof(*l->word_ids));
-        l->word_n = av_calloc(l->n_words, sizeof(*l->word_n));
-        if (!l->word_ids || !l->word_n)
+        for (int w = 0; w < l->n_words; w++)
+            phones += l->words[w].n;
+        av_freep(&l->ids);
+        av_freep(&l->id_at);
+        l->n_ids = 0;
+        l->soft_onset = 0;
+        l->ids = av_malloc_array(phones + 1, sizeof(*l->ids));
+        l->id_at = av_malloc_array(phones + 1, sizeof(*l->id_at));
+        if (!l->ids || !l->id_at)
             goto oom;
         for (int w = 0; w < l->n_words; w++) {
-            l->word_ids[w] = av_malloc_array(l->words[w].n + 1, sizeof(int));
-            if (!l->word_ids[w])
-                goto oom;
             for (int k = 0; k < l->words[w].n; k++) {
-                int id = nm_lp_map_phone(l->words[w].phones[k], vocab, n_vocab);
-                if (id < 0)
+                const char *phone = l->words[w].phones[k];
+                int id = nm_lp_map_phone(phone, vocab, n_vocab);
+
+                l->id_at[p++] = l->n_ids;
+                if (id < 0) {
                     s->mapping_misses++;
-                else
-                    l->word_ids[w][l->word_n[w]++] = id;
+                    continue;
+                }
+                /* the line's spike is this phone's when it is the first to keep an id */
+                if (!l->n_ids)
+                    l->soft_onset = nm_lp_soft_onset(phone);
+                l->ids[l->n_ids++] = id;
             }
-            total += l->word_n[w];
         }
-        l->ids = av_malloc_array(total + 1, sizeof(int));
-        if (!l->ids)
-            goto oom;
-        for (int w = 0; w < l->n_words; w++)
-            for (int k = 0; k < l->word_n[w]; k++)
-                l->ids[l->n_ids++] = l->word_ids[w][k];
+        l->id_at[p] = l->n_ids;
     }
     av_free(vocab);
     return 0;
@@ -703,7 +766,6 @@ static void la_json_written(AVFilterContext *ctx, AVBPrint *b, int index, const 
     LyricsAlignContext *s = ctx->priv;
     const LaLine *l = &s->lines[index];
     double score = 0.0;
-    int k = 0;
 
     for (int i = 0; i < l->n_ids; i++)
         score += tok_place[i].post;
@@ -712,43 +774,39 @@ static void la_json_written(AVFilterContext *ctx, AVBPrint *b, int index, const 
     la_json_str(b, l->text);
     av_bprintf(b, ",\"start\":%.3f,\"end\":%.3f,\"score\":%.3f,\"lead_in\":%.3f,\"words\":[",
                start_s, la_frame_s(tok_place[l->n_ids - 1].last + 1), score, lead_in_s);
-    if (l->tok_words) {
-        /* one word per lyric token, spanning the espeak words the token made */
-        const char *p = l->text;
-        int t = 0, w = 0, first = 1;
-        while (*p && t < l->n_tok) {
-            const char *tok;
-            char *text;
-            int cnt, n = 0;
+    /* one entry per span: the placed tokens of the phones it kept */
+    for (int w = 0; w < l->n_spans; w++) {
+        const NMLpSpan *span = &l->spans[w];
+        const int k = l->id_at[span->phone];
 
-            while (*p && nm_lp_is_space((unsigned char) *p))
-                p++;
-            if (!*p)
-                break;
-            tok = p;
-            while (*p && !nm_lp_is_space((unsigned char) *p))
-                p++;
-            cnt = l->tok_words[t++];
-            if (!cnt)
-                continue;           /* espeak says nothing for it ("-", "...") */
-            for (int i = 0; i < cnt; i++)
-                n += l->word_n[w + i];
-            text = av_strndup(tok, p - tok);
-            la_json_word(b, first, text, tok_place, k, n);
-            av_free(text);
-            first = 0;
-            w += cnt;
-            k += n;
-        }
-    } else {
-        /* espeak's words could not be tied to the text's tokens: a word per
-         * espeak word, its text null */
-        for (int w = 0; w < l->n_words; w++) {
-            la_json_word(b, !w, NULL, tok_place, k, l->word_n[w]);
-            k += l->word_n[w];
-        }
+        la_json_word(b, !w, l->labels[w], tok_place, k, l->id_at[span->phone + span->n_phones] - k);
     }
     av_bprintf(b, "]}");
+}
+
+/* How many of the line's words[] entries have phones, and the score of the
+ * first of them, as la_json_word() reports it. */
+static int la_scored_words(const LaLine *l, const NMLaPlace *tok_place, double *first_score)
+{
+    int words = 0;
+
+    *first_score = 0.0;
+    for (int w = 0; w < l->n_spans; w++) {
+        const NMLpSpan *span = &l->spans[w];
+        const int k = l->id_at[span->phone];
+        const int n = l->id_at[span->phone + span->n_phones] - k;
+
+        if (n <= 0)
+            continue;
+        if (!words++) {
+            double sum = 0.0;
+
+            for (int i = 0; i < n; i++)
+                sum += tok_place[k + i].post;
+            *first_score = sum / n;
+        }
+    }
+    return words;
 }
 
 static int la_align_and_write(AVFilterContext *ctx)
@@ -758,8 +816,10 @@ static int la_align_and_write(AVFilterContext *ctx)
     int *tokens = NULL, *line_first = NULL;
     int n_tokens = 0, written = 0, rc_v, rc_c = 1, ret = 0;
     NMLaPlace *placed_v = NULL, *placed_c = NULL;
-    float *check = NULL, *env = NULL;
-    int n_env = 0, common, backing_silent = 1, prev_end = -1;
+    float *check = NULL, *env = NULL, *rms20 = NULL;
+    /* soft_walkback is seconds; the walk counts envelope hops of 10 ms */
+    const int soft_hops = (int) lrint(s->soft_walkback * (double) NM_LA_RATE / NM_LA_ENV_HOP);
+    int n_env = 0, n_rms20 = 0, common, backing_silent = 1, prev_end = -1;
     const char *check_name;
     AVBPrint body;
 
@@ -831,9 +891,11 @@ static int la_align_and_write(AVFilterContext *ctx)
             av_log(ctx, AV_LOG_WARNING, "lyricsalign: the check alignment has no path; every line is check_failed\n");
     }
 
-    /* step 7 needs the vocals' envelope */
+    /* step 7 needs the vocals' envelope, 7c their level per 20 ms as well */
     env = nm_la_envelope_db(s->pcm[0], s->n[0], &n_env);
-    if (!env) {
+    if (env && s->unheard_island)
+        rms20 = nm_la_rms_db(s->pcm[0], s->n[0], NM_LA_HOP, &n_rms20);
+    if (!env || (s->unheard_island && !rms20)) {
         ret = AVERROR(ENOMEM);
         goto done;
     }
@@ -842,8 +904,9 @@ static int la_align_and_write(AVFilterContext *ctx)
         const LaLine *l = &s->lines[i];
         const NMLaPlace *line, *chk;
         enum NMLaReason reason;
-        int spike, start_hop = -1;
-        double start_s, lead_in_s = 0.0;
+        NMLaLineOnset onset;
+        int spike, start_hop;
+        double lead_in_s;
 
         if (line_first[i] < 0) {
             la_write_skipped_to(ctx, &body, i, l->text[0] ? NM_LA_NO_PHONES : NM_LA_EMPTY, -1, -1);
@@ -860,16 +923,16 @@ static int la_align_and_write(AVFilterContext *ctx)
             prev_end = line[l->n_ids - 1].first;
             continue;
         }
-        if (nm_la_pause_before(spike, prev_end)) {
-            start_hop = nm_la_walk_back(env, n_env, spike, prev_end);
-            start_s = start_hop * 0.01;
-            lead_in_s = la_frame_s(spike) - start_s;
-            if (lead_in_s < 0)
-                lead_in_s = 0;
-        } else {
-            start_s = la_frame_s(spike);
-        }
-        la_json_written(ctx, &body, i, line, start_s, lead_in_s);
+        /* step 7 and its refinements 7b and 7c: the written start, a 10 ms hop */
+        onset.spike_frame = spike;
+        onset.prev_end_frame = prev_end;
+        onset.soft_onset = l->soft_onset;
+        onset.words = la_scored_words(l, line, &onset.first_word_score);
+        start_hop = nm_la_written_start(env, n_env, rms20, n_rms20, &onset, soft_hops, s->unheard_island);
+        lead_in_s = (spike * (NM_LA_HOP / NM_LA_ENV_HOP) - start_hop) * 0.01;
+        if (lead_in_s < 0)
+            lead_in_s = 0;
+        la_json_written(ctx, &body, i, line, start_hop * 0.01, lead_in_s);
         av_bprint_chars(&body, '\n', 1);
         written++;
         prev_end = line[l->n_ids - 1].first;
@@ -904,6 +967,7 @@ done:
     av_free(placed_c);
     av_free(check);
     av_free(env);
+    av_free(rms20);
     if (s->out) {
         avio_flush(s->out);
         if (s->out->error < 0 && ret >= 0) {
@@ -1274,6 +1338,8 @@ static const AVOption lyricsalign_options[] = {
     { "threads", "ggml CPU threads (0: half the physical cores, capped by -filter_threads)", OFFSET(threads), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, .flags = FLAGS },
     { "use_gpu", "Allow the ggml GPU backend (Vulkan, Metal)", OFFSET(use_gpu), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, .flags = FLAGS },
     { "gpu_device", "GPU device to use", OFFSET(gpu_device), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, .flags = FLAGS },
+    { "soft_walkback", "Seconds a line that begins on a vowel or sonorant may start before its first phone; 0 disables", OFFSET(soft_walkback), AV_OPT_TYPE_FLOAT, { .dbl = 0.1 }, 0.0, 0.8, .flags = FLAGS },
+    { "unheard_island", "Start a line whose first word was not heard on the sound no word claims before it; 0 disables", OFFSET(unheard_island), AV_OPT_TYPE_INT, { .i64 = 1 }, 0, 1, .flags = FLAGS },
     { NULL }
 };
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ZVBI_VERSION="0.2.44"
+ZVBI_VERSION="0.2.46"
 
 cd /build
 

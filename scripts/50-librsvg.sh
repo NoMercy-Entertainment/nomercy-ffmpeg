@@ -6,68 +6,72 @@ if [[ ${TARGET_OS} == "darwin" || ${TARGET_OS} == "freebsd" || ${ARCH} == "arm64
 fi
 
 #region Set library versions
-LIBPCRE2_VERSION="10.44"
-LIBGLIB_VERSION="2.86.2"
+LIBPCRE2_VERSION="10.49"
+LIBGLIB_VERSION="2.88.4"
 LIBPIXMAN_VERSION="0.46.4"
 LIBCAIRO_VERSION="1.18.4"
 LIBPANGO_VERSION="1.57.0"
-LIBGDKPIXBUF_VERSION="2.44.4"
-LIBRSVG_VERSION="2.61.3"
+LIBGDKPIXBUF_VERSION="2.44.8"
+LIBRSVG_VERSION="2.61.5"
+#endregion
+
+# pcre2 for every platform this script builds (it used to be Windows only): glib
+# takes it from the prefix, not from its own pcre2 wrap, whose 10.44/10.46 carry
+# CVE-2026-86145, -89156, -89160, -89161 and -103111 (fixed in 10.48/10.49).
+#region pcre2 (required by glib for regex support)
+cd /build
+
+# Download pcre2 source code
+if [ ! -d "/build/pcre2" ]; then
+	echo "Downloading pcre2..."
+	git clone --branch pcre2-${LIBPCRE2_VERSION} https://github.com/PCRE2Project/pcre2.git pcre2 >/dev/null 2>&1
+fi
+
+cd /build/pcre2
+
+# Configure and build pcre2
+./autogen.sh --prefix=${PREFIX} \
+	--enable-static \
+	--disable-shared \
+	--host=${CROSS_PREFIX%-} \
+	--enable-pcre2-16 \
+	--enable-pcre2-32 \
+	--disable-pcre2grep-libz \
+	--disable-pcre2grep-libbz2 \
+	--disable-pcre2test-libreadline >/dev/null 2>&1
+
+./configure --prefix=${PREFIX} \
+	--enable-static \
+	--disable-shared \
+	--host=${CROSS_PREFIX%-} \
+	--enable-pcre2-16 \
+	--enable-pcre2-32 \
+	--disable-pcre2grep-libz \
+	--disable-pcre2grep-libbz2 \
+	--disable-pcre2test-libreadline 2>&1 | log
+
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+	log "pcre2 configure failed"
+	exit 1
+fi
+
+make -j$(nproc) 2>&1 | log -a
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+	log "pcre2 build failed"
+	exit 1
+fi
+
+make install >/dev/null 2>&1
+
+if [ ! -f "${PREFIX}/lib/pkgconfig/libpcre2-8.pc" ]; then
+	log "pcre2 install failed"
+	exit 1
+fi
+
+rm -rf /build/pcre2
 #endregion
 
 if [ ${TARGET_OS} == "windows" ]; then
-	#region pcre2 (required by glib for regex support)
-	cd /build
-
-	# Download pcre2 source code
-	if [ ! -d "/build/pcre2" ]; then
-		echo "Downloading pcre2..."
-		git clone --branch pcre2-${LIBPCRE2_VERSION} https://github.com/PCRE2Project/pcre2.git pcre2 >/dev/null 2>&1
-	fi
-
-	cd /build/pcre2
-
-	# Configure and build pcre2
-	./autogen.sh --prefix=${PREFIX} \
-		--enable-static \
-		--disable-shared \
-		--host=${CROSS_PREFIX%-} \
-		--enable-pcre2-16 \
-		--enable-pcre2-32 \
-		--disable-pcre2grep-libz \
-		--disable-pcre2grep-libbz2 \
-		--disable-pcre2test-libreadline >/dev/null 2>&1
-
-	./configure --prefix=${PREFIX} \
-		--enable-static \
-		--disable-shared \
-		--host=${CROSS_PREFIX%-} \
-		--enable-pcre2-16 \
-		--enable-pcre2-32 \
-		--disable-pcre2grep-libz \
-		--disable-pcre2grep-libbz2 \
-		--disable-pcre2test-libreadline 2>&1 | log
-
-	if [ ${PIPESTATUS[0]} -ne 0 ]; then
-		log "pcre2 configure failed"
-		exit 1
-	fi
-
-	make -j$(nproc) 2>&1 | log -a
-	if [ ${PIPESTATUS[0]} -ne 0 ]; then
-		log "pcre2 build failed"
-		exit 1
-	fi
-
-	make install >/dev/null 2>&1
-
-	if [ ! -f "${PREFIX}/lib/pkgconfig/libpcre2-8.pc" ]; then
-		log "pcre2 install failed"
-		exit 1
-	fi
-
-	rm -rf /build/pcre2
-	#endregion
 
 	#region gettext (required by glib for localization)
 	cd /build
@@ -143,9 +147,9 @@ if [ ${TARGET_OS} == "windows" ]; then
 	# not built anywhere else in the Windows pipeline, so provide it here, before
 	# cairo, so the subproject both compiles and links it.
 	cd /build
-	wget -O expat.tar.gz https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz || exit 1
-	echo "fd03b7172b3bd7427a3e7a812063f74754f24542429b634e0db6511b53fb2278  expat.tar.gz" | sha256sum -c - || exit 1
-	tar -xzf expat.tar.gz && rm expat.tar.gz && mv expat-2.6.4 expat
+	wget -O expat.tar.gz https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.gz || exit 1
+	echo "5466a341f9c692ef7a958a6881311be597f8e1ce345984cf78414f54793dea4c  expat.tar.gz" | sha256sum -c - || exit 1
+	tar -xzf expat.tar.gz && rm expat.tar.gz && mv expat-2.10.0 expat
 	cd expat
 
 	./configure --prefix=${PREFIX} \
@@ -239,6 +243,23 @@ fi
 
 cd /build/glib
 
+# glib 2.87+ takes three WinRT headers from the toolchain, which the
+# windows-x86_64 mingw-w64 (11.0.1) does not have. Where the compiler cannot
+# find them, glib's own definitions come back (the patch file says why that is
+# safe); where it can (windows-aarch64's llvm-mingw), glib is built as it is.
+if [[ ${TARGET_OS} == "windows" ]] \
+	&& ! echo '#include <windows.applicationmodel.core.h>' | ${CC} -x c -E - >/dev/null 2>&1; then
+	if ! git apply /scripts/includes/glib-win32-own-winrt-definitions.patch; then
+		log "glib ${LIBGLIB_VERSION}: glib-win32-own-winrt-definitions.patch does not apply"
+		exit 1
+	fi
+	if [ ! -f gio/gwin32api-package.h ] || grep -q 'windows.applicationmodel.core.h' gio/gwin32packageparser.c; then
+		log "glib ${LIBGLIB_VERSION}: the WinRT revert did not take (gwin32api-package.h missing or the system header still included)"
+		exit 1
+	fi
+	log "glib ${LIBGLIB_VERSION}: this toolchain has no WinRT headers, glib's own definitions restored"
+fi
+
 rm -rf build
 # Configure with meson
 cp /build/cross_file.txt /build/glib/cross_file.txt
@@ -257,7 +278,16 @@ if [[ ${TARGET_OS} == "windows" ]]; then
 		echo "cpp_link_args = ['-L${PREFIX}/lib', '-lpthread', '-lbcrypt', '-lws2_32', '-lintl', '-liconv']"
 	} >>/build/glib/cross_file.txt
 	
-	sed -i "2345s/^/# /" ./meson.build
+	# glib asserts that libintl is its own proxy-libintl subproject; the gettext
+	# built above is a real one, so the assert goes. By its text, not by its line:
+	# a line number is another line in the next glib, and that edit would not
+	# fail, it would comment out something else.
+	intl_assert="^  assert(libintl.type_name() == 'internal')\$"
+	if [ "$(grep -c "${intl_assert}" ./meson.build)" != 1 ]; then
+		log "glib ${LIBGLIB_VERSION}: the libintl assert is not in meson.build exactly once; check the edit below"
+		exit 1
+	fi
+	sed -i "/${intl_assert}/s/^/# /" ./meson.build
 
 	if [ ! -d "./subprojects" ]; then
 		mkdir ./subprojects
@@ -288,8 +318,7 @@ meson setup build --prefix=${PREFIX} \
 	-Dlibmount=disabled \
 	-Dselinux=disabled \
 	-Dnls=enabled \
-	--wrap-mode=forcefallback \
-	--force-fallback-for=proxy-libintl \
+	--force-fallback-for=proxy-libintl,libffi \
 	--cross-file="/build/glib/cross_file.txt" 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -297,6 +326,17 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	log "glib configure failed"
 	exit 1
 fi
+# zlib and pcre2 must be the ones in the prefix (zlib 1.4 from 03-zlib.sh,
+# pcre2 from above). Until 2026-11 this step ran with --wrap-mode=forcefallback,
+# which built glib's own wraps instead: zlib 1.3.1 and pcre2 10.44 shipped in
+# the Windows and Linux x64 binaries whatever the pins said. A wrap meson falls
+# back to leaves its directory under subprojects/; there must be none.
+for wrapped in zlib pcre2; do
+	if ls -d ./subprojects/${wrapped}-* >/dev/null 2>&1; then
+		log "glib took its own ${wrapped} wrap ($(ls -d ./subprojects/${wrapped}-* | tr '\n' ' ')) instead of the prefix's"
+		exit 1
+	fi
+done
 
 ninja -j$(nproc) -C build 2>&1 | log -a
 
