@@ -1,0 +1,1269 @@
+glib 2.88.4, Windows: the revert of upstream 5a3231dbd ("GIO/Win32: Remove
+custom definitions of system interfaces", 2025-07-29, first released in 2.87).
+
+That commit dropped glib's own gio/gwin32api-*.h and made gio include the
+WinRT headers windows.storage.h, windows.applicationmodel.core.h and
+windows.management.deployment.h from the toolchain. The windows-x86_64
+toolchain (Ubuntu 24.04's mingw-w64 11.0.1) has none of them, and gio stops
+at gwin32packageparser.c. This restores the five headers and the two files
+as they were. The code is the UWP package parser behind GAppInfo on Windows,
+which neither librsvg nor FFmpeg calls; the rest of glib stays 2.88.4, which
+is the point: 2.88.3/2.88.4 fix CVE-2026-15588 and CVE-2026-16118, which no
+2.86 release does.
+
+scripts/50-librsvg.sh applies it only when the compiler cannot find
+windows.applicationmodel.core.h (windows-aarch64's llvm-mingw has it). Drop
+it when the x86_64 toolchain has the WinRT headers.
+
+diff --git a/gio/gwin32api-application-activation-manager.h b/gio/gwin32api-application-activation-manager.h
+new file mode 100755
+index 000000000..9ec34d6b4
+--- /dev/null
++++ b/gio/gwin32api-application-activation-manager.h
+@@ -0,0 +1,134 @@
++/*
++ * SPDX-FileCopyrightText: This file has no copyright assigned and is placed in the Public Domain.
++ * SPDX-License-Identifier: CC0-1.0
++ *
++ * This file is part of the w64 mingw-runtime package.
++ * No warranty is given; refer to https://github.com/kinke/mingw-w64-crt/blob/master/DISCLAIMER.PD.
++ */
++
++#if NTDDI_VERSION < NTDDI_WIN8
++/* The following code is copied verbatim from MinGW-w64 shobjidl.h */
++/*
++ * IApplicationActivationManager interface
++ */
++typedef enum ACTIVATEOPTIONS {
++    AO_NONE = 0x0,
++    AO_DESIGNMODE = 0x1,
++    AO_NOERRORUI = 0x2,
++    AO_NOSPLASHSCREEN = 0x4
++} ACTIVATEOPTIONS;
++
++DEFINE_ENUM_FLAG_OPERATORS(ACTIVATEOPTIONS)
++
++#ifndef __IApplicationActivationManager_INTERFACE_DEFINED__
++#define __IApplicationActivationManager_INTERFACE_DEFINED__
++
++DEFINE_GUID(IID_IApplicationActivationManager, 0x2e941141, 0x7f97, 0x4756, 0xba,0x1d, 0x9d,0xec,0xde,0x89,0x4a,0x3d);
++#if defined(__cplusplus) && !defined(CINTERFACE)
++MIDL_INTERFACE("2e941141-7f97-4756-ba1d-9decde894a3d")
++IApplicationActivationManager : public IUnknown
++{
++    virtual HRESULT STDMETHODCALLTYPE ActivateApplication(
++        LPCWSTR appUserModelId,
++        LPCWSTR arguments,
++        ACTIVATEOPTIONS options,
++        DWORD *processId) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE ActivateForFile(
++        LPCWSTR appUserModelId,
++        IShellItemArray *itemArray,
++        LPCWSTR verb,
++        DWORD *processId) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE ActivateForProtocol(
++        LPCWSTR appUserModelId,
++        IShellItemArray *itemArray,
++        DWORD *processId) = 0;
++
++};
++#ifdef __CRT_UUID_DECL
++__CRT_UUID_DECL(IApplicationActivationManager, 0x2e941141, 0x7f97, 0x4756, 0xba,0x1d, 0x9d,0xec,0xde,0x89,0x4a,0x3d)
++#endif
++#else
++typedef struct IApplicationActivationManagerVtbl {
++    BEGIN_INTERFACE
++
++    /*** IUnknown methods ***/
++    HRESULT (STDMETHODCALLTYPE *QueryInterface)(
++        IApplicationActivationManager *This,
++        REFIID riid,
++        void **ppvObject);
++
++    ULONG (STDMETHODCALLTYPE *AddRef)(
++        IApplicationActivationManager *This);
++
++    ULONG (STDMETHODCALLTYPE *Release)(
++        IApplicationActivationManager *This);
++
++    /*** IApplicationActivationManager methods ***/
++    HRESULT (STDMETHODCALLTYPE *ActivateApplication)(
++        IApplicationActivationManager *This,
++        LPCWSTR appUserModelId,
++        LPCWSTR arguments,
++        ACTIVATEOPTIONS options,
++        DWORD *processId);
++
++    HRESULT (STDMETHODCALLTYPE *ActivateForFile)(
++        IApplicationActivationManager *This,
++        LPCWSTR appUserModelId,
++        IShellItemArray *itemArray,
++        LPCWSTR verb,
++        DWORD *processId);
++
++    HRESULT (STDMETHODCALLTYPE *ActivateForProtocol)(
++        IApplicationActivationManager *This,
++        LPCWSTR appUserModelId,
++        IShellItemArray *itemArray,
++        DWORD *processId);
++
++    END_INTERFACE
++} IApplicationActivationManagerVtbl;
++
++interface IApplicationActivationManager {
++    CONST_VTBL IApplicationActivationManagerVtbl* lpVtbl;
++};
++
++#ifdef COBJMACROS
++#ifndef WIDL_C_INLINE_WRAPPERS
++/*** IUnknown methods ***/
++#define IApplicationActivationManager_QueryInterface(This,riid,ppvObject) (This)->lpVtbl->QueryInterface(This,riid,ppvObject)
++#define IApplicationActivationManager_AddRef(This) (This)->lpVtbl->AddRef(This)
++#define IApplicationActivationManager_Release(This) (This)->lpVtbl->Release(This)
++/*** IApplicationActivationManager methods ***/
++#define IApplicationActivationManager_ActivateApplication(This,appUserModelId,arguments,options,processId) (This)->lpVtbl->ActivateApplication(This,appUserModelId,arguments,options,processId)
++#define IApplicationActivationManager_ActivateForFile(This,appUserModelId,itemArray,verb,processId) (This)->lpVtbl->ActivateForFile(This,appUserModelId,itemArray,verb,processId)
++#define IApplicationActivationManager_ActivateForProtocol(This,appUserModelId,itemArray,processId) (This)->lpVtbl->ActivateForProtocol(This,appUserModelId,itemArray,processId)
++#else
++/*** IUnknown methods ***/
++static FORCEINLINE HRESULT IApplicationActivationManager_QueryInterface(IApplicationActivationManager* This,REFIID riid,void **ppvObject) {
++    return This->lpVtbl->QueryInterface(This,riid,ppvObject);
++}
++static FORCEINLINE ULONG IApplicationActivationManager_AddRef(IApplicationActivationManager* This) {
++    return This->lpVtbl->AddRef(This);
++}
++static FORCEINLINE ULONG IApplicationActivationManager_Release(IApplicationActivationManager* This) {
++    return This->lpVtbl->Release(This);
++}
++/*** IApplicationActivationManager methods ***/
++static FORCEINLINE HRESULT IApplicationActivationManager_ActivateApplication(IApplicationActivationManager* This,LPCWSTR appUserModelId,LPCWSTR arguments,ACTIVATEOPTIONS options,DWORD *processId) {
++    return This->lpVtbl->ActivateApplication(This,appUserModelId,arguments,options,processId);
++}
++static FORCEINLINE HRESULT IApplicationActivationManager_ActivateForFile(IApplicationActivationManager* This,LPCWSTR appUserModelId,IShellItemArray *itemArray,LPCWSTR verb,DWORD *processId) {
++    return This->lpVtbl->ActivateForFile(This,appUserModelId,itemArray,verb,processId);
++}
++static FORCEINLINE HRESULT IApplicationActivationManager_ActivateForProtocol(IApplicationActivationManager* This,LPCWSTR appUserModelId,IShellItemArray *itemArray,DWORD *processId) {
++    return This->lpVtbl->ActivateForProtocol(This,appUserModelId,itemArray,processId);
++}
++#endif
++#endif
++
++#endif
++
++
++#endif  /* __IApplicationActivationManager_INTERFACE_DEFINED__ */
++#endif /* NTDDI_VERSION < NTDDI_WIN8 */
+\ No newline at end of file
+diff --git a/gio/gwin32api-iterator.h b/gio/gwin32api-iterator.h
+new file mode 100755
+index 000000000..c850a5b8d
+--- /dev/null
++++ b/gio/gwin32api-iterator.h
+@@ -0,0 +1,133 @@
++/*
++ * SPDX-FileCopyrightText: This file has no copyright assigned and is placed in the Public Domain.
++ * SPDX-License-Identifier: CC0-1.0
++ *
++ * This file is part of the w64 mingw-runtime package.
++ * No warranty is given; refer to https://github.com/kinke/mingw-w64-crt/blob/master/DISCLAIMER.PD.
++ */
++
++typedef interface IIterator IIterator;
++typedef interface IIterable IIterable;
++
++/* IIterator */
++typedef struct IIteratorVtbl {
++  BEGIN_INTERFACE
++
++  /*** IUnknown methods ***/
++  HRESULT (STDMETHODCALLTYPE *QueryInterface)(
++    IIterator *This,
++    REFIID riid,
++    void **ppvObject);
++
++  ULONG (STDMETHODCALLTYPE *AddRef)(
++    IIterator *This);
++
++  ULONG (STDMETHODCALLTYPE *Release)(
++    IIterator *This);
++
++  /*** IInspectable methods ***/
++  HRESULT (STDMETHODCALLTYPE *GetIids)(
++    IIterator *This,
++    UINT32 *count,
++    IID **ids);
++
++  HRESULT (STDMETHODCALLTYPE *GetRuntimeClassName)(
++    IIterator *This,
++    HSTRING *className);
++
++  HRESULT (STDMETHODCALLTYPE *GetTrustLevel)(
++    IIterator *This,
++    TrustLevel *trustLevel);
++
++  /*** IIterator methods ***/
++  HRESULT (STDMETHODCALLTYPE *get_Current)(
++    IIterator *This,
++    IUnknown **current);
++
++  HRESULT (STDMETHODCALLTYPE *get_HasCurrent)(
++    IIterator *This,
++    CHAR *hasCurrent);
++
++  HRESULT (STDMETHODCALLTYPE *MoveNext)(
++    IIterator *This,
++    CHAR *hasCurrent);
++
++  HRESULT (STDMETHODCALLTYPE *GetMany)(
++    IIterator *This,
++    UINT capacity,
++    void *value,
++    UINT *actual);
++
++  END_INTERFACE
++} IIteratorVtbl;
++
++interface IIterator {
++  CONST_VTBL IIteratorVtbl* lpVtbl;
++};
++
++/*** IUnknown methods ***/
++#define IIterator_QueryInterface(This,riid,ppvObject) (This)->lpVtbl->QueryInterface(This,riid,ppvObject)
++#define IIterator_AddRef(This) (This)->lpVtbl->AddRef(This)
++#define IIterator_Release(This) (This)->lpVtbl->Release(This)
++/*** IInspectable methods ***/
++#define IIterator_GetIids(This,count,ids) (This)->lpVtbl->GetIids(This,count,ids)
++#define IIterator_GetRuntimeClassName(This,name) (This)->lpVtbl->GetRuntimeClassName(This,name)
++#define IIterator_GetTrustLevel(This,level) (This)->lpVtbl->GetTrustLevel(This,level)
++/*** IIterator methods ***/
++#define IIterator_get_Current(This,current) (This)->lpVtbl->get_Current(This,current)
++#define IIterator_get_HasCurrent(This,hasCurrent) (This)->lpVtbl->get_HasCurrent(This,hasCurrent)
++#define IIterator_MoveNext(This,hasCurrent) (This)->lpVtbl->MoveNext(This,hasCurrent)
++#define IIterator_GetMany(This,capacity,value,actual) (This)->lpVtbl->GetMany(This,capacity,value,actual)
++
++/* IIterable */
++typedef struct IIterableVtbl {
++  BEGIN_INTERFACE
++
++  /*** IUnknown methods ***/
++  HRESULT (STDMETHODCALLTYPE *QueryInterface)(
++    IIterable *This,
++    REFIID riid,
++    void **ppvObject);
++
++  ULONG (STDMETHODCALLTYPE *AddRef)(
++    IIterable *This);
++
++  ULONG (STDMETHODCALLTYPE *Release)(
++    IIterable *This);
++
++  /*** IInspectable methods ***/
++  HRESULT (STDMETHODCALLTYPE *GetIids)(
++    IIterable *This,
++    UINT32 *count,
++    IID **ids);
++
++  HRESULT (STDMETHODCALLTYPE *GetRuntimeClassName)(
++    IIterable *This,
++    HSTRING *className);
++
++  HRESULT (STDMETHODCALLTYPE *GetTrustLevel)(
++    IIterable *This,
++    TrustLevel *trustLevel);
++
++  /*** IIterable methods ***/
++  HRESULT (STDMETHODCALLTYPE *First)(
++    IIterable *This,
++    IIterator **first);
++
++  END_INTERFACE
++} IIterableVtbl;
++
++interface IIterable {
++  CONST_VTBL IIterableVtbl* lpVtbl;
++};
++
++/*** IUnknown methods ***/
++#define IIterable_QueryInterface(This,riid,ppvObject) (This)->lpVtbl->QueryInterface(This,riid,ppvObject)
++#define IIterable_AddRef(This) (This)->lpVtbl->AddRef(This)
++#define IIterable_Release(This) (This)->lpVtbl->Release(This)
++/*** IInspectable methods ***/
++#define IIterable_GetIids(This,count,ids) (This)->lpVtbl->GetIids(This,count,ids)
++#define IIterable_GetRuntimeClassName(This,name) (This)->lpVtbl->GetRuntimeClassName(This,name)
++#define IIterable_GetTrustLevel(This,level) (This)->lpVtbl->GetTrustLevel(This,level)
++/*** IIterable methods ***/
++#define IIterable_First(This,retval) (This)->lpVtbl->First(This,retval)
+diff --git a/gio/gwin32api-misc.h b/gio/gwin32api-misc.h
+new file mode 100755
+index 000000000..814cc0531
+--- /dev/null
++++ b/gio/gwin32api-misc.h
+@@ -0,0 +1,9 @@
++/*
++ * SPDX-FileCopyrightText: This file has no copyright assigned and is placed in the Public Domain.
++ * SPDX-License-Identifier: CC0-1.0
++ *
++ * This file is part of the w64 mingw-runtime package.
++ * No warranty is given; refer to https://github.com/kinke/mingw-w64-crt/blob/master/DISCLAIMER.PD.
++ */
++
++typedef interface IProcessorArchitecture IProcessorArchitecture;
+diff --git a/gio/gwin32api-package.h b/gio/gwin32api-package.h
+new file mode 100755
+index 000000000..3a0ecf5a6
+--- /dev/null
++++ b/gio/gwin32api-package.h
+@@ -0,0 +1,382 @@
++/*
++ * SPDX-FileCopyrightText: This file has no copyright assigned and is placed in the Public Domain.
++ * SPDX-License-Identifier: CC0-1.0
++ *
++ * This file is part of the w64 mingw-runtime package.
++ * No warranty is given; refer to https://github.com/kinke/mingw-w64-crt/blob/master/DISCLAIMER.PD.
++ *
++ * Additional code derived from the windows-rs repository on GitHub
++ * (https://github.com/microsoft/windows-rs) with the MIT license:
++ *
++ * MIT License
++ *
++ * Copyright (c) Microsoft Corporation.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++ * SOFTWARE
++ */
++
++typedef interface IPackageManager IPackageManager;
++typedef interface IPackage IPackage;
++typedef interface IPackageId IPackageId;
++typedef interface IPackageVersion IPackageVersion;
++typedef interface IPackage2 IPackage2;
++
++DEFINE_GUID(IID_IPackageManager, 0x9A7D4B65, 0x5E8F, 0x4FC7, 0xA2, 0xE5, 0x7F, 0x69, 0x25, 0xCB, 0x8B, 0x53);
++DEFINE_GUID(IID_IPackage, 0x163C792F, 0xBD75, 0x413C, 0xBF, 0x23, 0xB1, 0xFE, 0x7B, 0x95, 0xD8, 0x25);
++DEFINE_GUID(IID_IPackage2, 0xA6612fb6, 0x7688, 0x4ACE, 0x95, 0xFB, 0x35, 0x95, 0x38, 0xE7, 0xAA, 0x01);
++
++/* IPackageManager */
++typedef struct IPackageManagerVtbl {
++  BEGIN_INTERFACE
++
++  /*** IUnknown methods ***/
++  HRESULT (STDMETHODCALLTYPE *QueryInterface)(
++    IPackageManager *This,
++    REFIID riid,
++    void **ppvObject);
++
++  ULONG (STDMETHODCALLTYPE *AddRef)(
++    IPackageManager *This);
++
++  ULONG (STDMETHODCALLTYPE *Release)(
++    IPackageManager *This);
++
++  /*** IInspectable methods ***/
++  HRESULT (STDMETHODCALLTYPE *GetIids)(
++    IPackageManager *This,
++    UINT32 *count,
++    IID **ids);
++
++  HRESULT (STDMETHODCALLTYPE *GetRuntimeClassName)(
++    IPackageManager *This,
++    HSTRING *className);
++
++  HRESULT (STDMETHODCALLTYPE *GetTrustLevel)(
++    IPackageManager *This,
++    TrustLevel *trustLevel);
++
++  /*** IPackageManager methods ***/
++  HRESULT (STDMETHODCALLTYPE *stub_AddPackageAsync)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_UpdatePackageAsync)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_RemovePackageAsync)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_StagePackageAsync)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_RegisterPackageAsync)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *FindPackages)(
++    IPackageManager *This,
++    IIterable **retval);
++
++  HRESULT (STDMETHODCALLTYPE *FindPackagesByUserSecurityId)(
++    IPackageManager *This,
++    HSTRING userSecurityId,
++    IIterable **retval);
++
++  HRESULT (STDMETHODCALLTYPE *stub_FindPackagesByNamePublisher)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_FindPackagesByUserSecurityIdNamePublisher)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_FindUsers)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_SetPackageState)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_FindPackageByPackageFullName)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_CleanupPackageForUserAsync)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_FindPackagesByPackageFamilyName)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_FindPackagesByUserSecurityIdPackageFamilyName)(
++    IPackageManager *This);
++
++  HRESULT (STDMETHODCALLTYPE *stub_FindPackageByUserSecurityIdPackageFullName)(
++    IPackageManager *This);
++
++  END_INTERFACE
++} IPackageManagerVtbl;
++
++interface IPackageManager {
++  CONST_VTBL IPackageManagerVtbl* lpVtbl;
++};
++
++/*** IUnknown methods ***/
++#define IPackageManager_QueryInterface(This,riid,ppvObject) (This)->lpVtbl->QueryInterface(This,riid,ppvObject)
++#define IPackageManager_AddRef(This) (This)->lpVtbl->AddRef(This)
++#define IPackageManager_Release(This) (This)->lpVtbl->Release(This)
++/*** IInspectable methods ***/
++#define IPackageManager_GetIids(This,count,ids) (This)->lpVtbl->GetIids(This,count,ids)
++#define IPackageManager_GetRuntimeClassName(This,name) (This)->lpVtbl->GetRuntimeClassName(This,name)
++#define IPackageManager_GetTrustLevel(This,level) (This)->lpVtbl->GetTrustLevel(This,level)
++/*** IPackageManager methods ***/
++#define IPackageManager_FindPackages(This,retval) (This)->lpVtbl->FindPackages(This,retval)
++#define IPackageManager_FindPackagesByUserSecurityId(This,userSecurityId,retval) (This)->lpVtbl->FindPackagesByUserSecurityId(This,userSecurityId,retval)
++
++/* IPackageId */
++typedef struct IPackageIdVtbl {
++  BEGIN_INTERFACE
++
++  /*** IUnknown methods ***/
++  HRESULT (STDMETHODCALLTYPE *QueryInterface)(
++    IPackageId *This,
++    REFIID riid,
++    void **ppvObject);
++
++  ULONG (STDMETHODCALLTYPE *AddRef)(
++    IPackageId *This);
++
++  ULONG (STDMETHODCALLTYPE *Release)(
++    IPackageId *This);
++
++  /*** IInspectable methods ***/
++  HRESULT (STDMETHODCALLTYPE *GetIids)(
++    IPackageId *This,
++    UINT32 *count,
++    IID **ids);
++
++  HRESULT (STDMETHODCALLTYPE *GetRuntimeClassName)(
++    IPackageId *This,
++    HSTRING *className);
++
++  HRESULT (STDMETHODCALLTYPE *GetTrustLevel)(
++    IPackageId *This,
++    TrustLevel *trustLevel);
++
++  /*** IPackageId methods ***/
++  HRESULT (STDMETHODCALLTYPE *get_Name)(
++    IPackageId *This,
++    HSTRING *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_Version)(
++    IPackageId *This,
++    IPackageVersion *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_Architecture)(
++    IPackageId *This,
++    IProcessorArchitecture *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_ResourceId)(
++    IPackageId *This,
++    HSTRING *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_Publisher)(
++    IPackageId *This,
++    HSTRING *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_PublisherId)(
++    IPackageId *This,
++    HSTRING *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_FullName)(
++    IPackageId *This,
++    HSTRING *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_FamilyName)(
++    IPackageId *This,
++    HSTRING *value);
++
++  END_INTERFACE
++} IPackageIdVtbl;
++
++interface IPackageId {
++  CONST_VTBL IPackageIdVtbl* lpVtbl;
++};
++
++/*** IUnknown methods ***/
++#define IPackageId_QueryInterface(This,riid,ppvObject) (This)->lpVtbl->QueryInterface(This,riid,ppvObject)
++#define IPackageId_AddRef(This) (This)->lpVtbl->AddRef(This)
++#define IPackageId_Release(This) (This)->lpVtbl->Release(This)
++/*** IInspectable methods ***/
++#define IPackageId_GetIids(This,count,ids) (This)->lpVtbl->GetIids(This,count,ids)
++#define IPackageId_GetRuntimeClassName(This,name) (This)->lpVtbl->GetRuntimeClassName(This,name)
++#define IPackageId_GetTrustLevel(This,level) (This)->lpVtbl->GetTrustLevel(This,level)
++/*** IPackageId methods ***/
++#define IPackageId_get_Name(This,value) (This)->lpVtbl->get_Name(This,value)
++#define IPackageId_get_Version(This,value) (This)->lpVtbl->get_Version(This,value)
++#define IPackageId_get_Architecture(This,value) (This)->lpVtbl->get_Architecture(This,value)
++#define IPackageId_get_ResourceId(This,value) (This)->lpVtbl->get_ResourceId(This,value)
++#define IPackageId_get_Publisher(This,value) (This)->lpVtbl->get_Publisher(This,value)
++#define IPackageId_get_PublisherId(This,value) (This)->lpVtbl->get_PublisherId(This,value)
++#define IPackageId_get_FullName(This,value) (This)->lpVtbl->get_FullName(This,value)
++#define IPackageId_get_FamilyName(This,value) (This)->lpVtbl->get_FamilyName(This,value)
++
++/* IPackage */
++typedef struct IPackageVtbl {
++  BEGIN_INTERFACE
++
++  /*** IUnknown methods ***/
++  HRESULT (STDMETHODCALLTYPE *QueryInterface)(
++    IPackage *This,
++    REFIID riid,
++    void **ppvObject);
++
++  ULONG (STDMETHODCALLTYPE *AddRef)(
++    IPackage *This);
++
++  ULONG (STDMETHODCALLTYPE *Release)(
++    IPackage *This);
++
++  /*** IInspectable methods ***/
++  HRESULT (STDMETHODCALLTYPE *GetIids)(
++    IPackage *This,
++    UINT32 *count,
++    IID **ids);
++
++  HRESULT (STDMETHODCALLTYPE *GetRuntimeClassName)(
++    IPackage *This,
++    HSTRING *className);
++
++  HRESULT (STDMETHODCALLTYPE *GetTrustLevel)(
++    IPackage *This,
++    TrustLevel *trustLevel);
++
++  /*** IPackage methods ***/
++  HRESULT (STDMETHODCALLTYPE *get_Id)(
++    IPackage *This,
++    IPackageId **value);
++
++  HRESULT (STDMETHODCALLTYPE *get_InstalledLocation)(
++    IPackage *This,
++    IUnknown **value);
++
++  HRESULT (STDMETHODCALLTYPE *get_IsFramework)(
++    IPackage *This,
++    CHAR *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_Dependencies)(
++    IPackage *This,
++    void **value);
++
++  END_INTERFACE
++} IPackageVtbl;
++
++interface IPackage {
++  CONST_VTBL IPackageVtbl* lpVtbl;
++};
++
++/*** IUnknown methods ***/
++#define IPackage_QueryInterface(This,riid,ppvObject) (This)->lpVtbl->QueryInterface(This,riid,ppvObject)
++#define IPackage_AddRef(This) (This)->lpVtbl->AddRef(This)
++#define IPackage_Release(This) (This)->lpVtbl->Release(This)
++/*** IInspectable methods ***/
++#define IPackage_GetIids(This,count,ids) (This)->lpVtbl->GetIids(This,count,ids)
++#define IPackage_GetRuntimeClassName(This,name) (This)->lpVtbl->GetRuntimeClassName(This,name)
++#define IPackage_GetTrustLevel(This,level) (This)->lpVtbl->GetTrustLevel(This,level)
++/*** IPackage methods ***/
++#define IPackage_get_Id(This,value) (This)->lpVtbl->get_Id(This,value)
++#define IPackage_get_InstalledLocation(This,value) (This)->lpVtbl->get_InstalledLocation(This,value)
++#define IPackage_get_IsFramework(This,value) (This)->lpVtbl->get_IsFramework(This,value)
++#define IPackage_get_Dependencies(This,value) (This)->lpVtbl->get_Dependencies(This,value)
++
++/* IPackage2 */
++typedef struct IPackage2Vtbl {
++  BEGIN_INTERFACE
++
++  /*** IUnknown methods ***/
++  HRESULT (STDMETHODCALLTYPE *QueryInterface)(
++    IPackage2  *This,
++    REFIID      riid,
++    void      **ppvObject);
++
++  ULONG (STDMETHODCALLTYPE *AddRef)(
++    IPackage2  *This);
++
++  ULONG (STDMETHODCALLTYPE *Release)(
++    IPackage2  *This);
++
++  /*** IInspectable methods ***/
++  HRESULT (STDMETHODCALLTYPE *GetIids)(
++    IPackage2  *This,
++    UINT32     *count,
++    IID       **ids);
++
++  HRESULT (STDMETHODCALLTYPE *GetRuntimeClassName)(
++    IPackage2  *This,
++    HSTRING    *className);
++
++  HRESULT (STDMETHODCALLTYPE *GetTrustLevel)(
++    IPackage2  *This,
++    TrustLevel *trustLevel);
++
++  /*** IPackage2 methods ***/
++  HRESULT (STDMETHODCALLTYPE *get_DisplayName)(
++    IPackage2  *This,
++    HSTRING    *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_PublisherDisplayName)(
++    IPackage2  *This,
++    HSTRING    *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_Description)(
++    IPackage2  *This,
++    HSTRING    *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_Logo)(
++    IPackage2  *This,
++    void      **value);
++
++  HRESULT (STDMETHODCALLTYPE *get_IsResourcePackage)(
++    IPackage2  *This,
++    UCHAR      *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_IsBundle)(
++    IPackage2  *This,
++    UCHAR      *value);
++
++  HRESULT (STDMETHODCALLTYPE *get_IsDevelopmentMode)(
++    IPackage2  *This,
++    UCHAR      *value);
++
++  END_INTERFACE
++} IPackage2Vtbl;
++
++interface IPackage2 {
++  CONST_VTBL IPackage2Vtbl* lpVtbl;
++};
++
++/*** IUnknown methods ***/
++#define IPackage2_QueryInterface(This,riid,ppvObject) (This)->lpVtbl->QueryInterface(This,riid,ppvObject)
++#define IPackage2_AddRef(This) (This)->lpVtbl->AddRef(This)
++#define IPackage2_Release(This) (This)->lpVtbl->Release(This)
++/*** IInspectable methods ***/
++#define IPackage2_GetIids(This,count,ids) (This)->lpVtbl->GetIids(This,count,ids)
++#define IPackage2_GetRuntimeClassName(This,name) (This)->lpVtbl->GetRuntimeClassName(This,name)
++#define IPackage2_GetTrustLevel(This,level) (This)->lpVtbl->GetTrustLevel(This,level)
++/*** IPackage2 methods ***/
++#define IPackage2_get_DisplayName(This,value) (This)->lpVtbl->get_DisplayName(This,value)
++#define IPackage2_get_PublisherDisplayName(This,value) (This)->lpVtbl->get_PublisherDisplayName(This,value)
++#define IPackage2_get_Description(This,value) (This)->lpVtbl->get_Description(This,value)
++#define IPackage2_get_Logo(This,value) (This)->lpVtbl->get_Logo(This,value)
++#define IPackage2_get_IsResourcePackage(This,value) (This)->lpVtbl->get_IsResourcePackage(This,value)
++#define IPackage2_get_IsBundle(This,value) (This)->lpVtbl->get_IsBundle(This,value)
++#define IPackage2_get_IsDevelopmentMode(This,value) (This)->lpVtbl->get_IsDevelopmentMode(This,value)
+diff --git a/gio/gwin32api-storage.h b/gio/gwin32api-storage.h
+new file mode 100755
+index 000000000..03eedddee
+--- /dev/null
++++ b/gio/gwin32api-storage.h
+@@ -0,0 +1,347 @@
++/*
++ * SPDX-FileCopyrightText: This file has no copyright assigned and is placed in the Public Domain.
++ * SPDX-License-Identifier: CC0-1.0
++ *
++ * This file is part of the w64 mingw-runtime package.
++ * No warranty is given; refer to https://github.com/kinke/mingw-w64-crt/blob/master/DISCLAIMER.PD.
++ */
++
++struct DateTime;
++
++typedef struct DateTime {
++    UINT64 UniversalTime;
++} DateTime;
++
++/* The following is copied verbatim from MinGW-w64 windows.storage.h */
++enum StorageItemTypes;
++enum FileAttributes;
++enum NameCollisionOption;
++enum StorageDeleteOption;
++
++typedef enum NameCollisionoption {
++    NameCollisionoption_GenerateUniqueName = 0,
++    NameCollisionoption_ReplaceExisting = 1,
++    NameCollisionoption_FailIfExists = 2
++} NameCollisionOption;
++
++typedef enum FileAttributes {
++    FileAttributes_Normal = 0,
++    FileAttributes_ReadOnly = 1,
++    FileAttributes_Directory = 2,
++    FileAttributes_Archive = 3,
++    FileAttributes_Temporary = 4
++} FileAttributes;
++
++typedef enum StorageItemTypes {
++    StorageItemTypes_None = 0,
++    StorageItemTypes_File = 1,
++    StorageItemTypes_Folder = 2
++} StorageItemTypes;
++
++typedef enum StorageDeleteOption {
++    StorageDeleteOption_Default = 0,
++    StorageDeleteOption_PermanentDelete = 1
++} StorageDeleteOption;
++
++#ifndef __IStorageItem_FWD_DEFINED__
++#define __IStorageItem_FWD_DEFINED__
++typedef interface IStorageItem IStorageItem;
++#endif
++
++/*
++ * IStorageItem interface
++ */
++#ifndef __IStorageItem_INTERFACE_DEFINED__
++#define __IStorageItem_INTERFACE_DEFINED__
++
++DEFINE_GUID(IID_IStorageItem, 0x4207a996, 0xca2f, 0x42f7, 0xbd,0xe8, 0x8b,0x10,0x45,0x7a,0x7f,0x30);
++#if defined(__cplusplus) && !defined(CINTERFACE)
++MIDL_INTERFACE("4207a996-ca2f-42f7-bde8-8b10457a7f30")
++IStorageItem : public IInspectable
++{
++    virtual HRESULT STDMETHODCALLTYPE RenameAsyncOverloadDefaultOptions(
++        HSTRING desiredName,
++        IInspectable **action) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE RenameAsync(
++        HSTRING desiredName,
++        NameCollisionOption option,
++        IInspectable **action) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE DeleteAsyncOverloadDefaultOptions(
++        IInspectable **action) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE DeleteAsync(
++        StorageDeleteOption option,
++        IInspectable **action) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE GetBasicPropertiesAsync(
++        IInspectable **action) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE get_Name(
++        HSTRING *value) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE get_Path(
++        HSTRING *value) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE get_Attributes(
++        FileAttributes *value) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE get_DateCreated(
++        DateTime *value) = 0;
++
++    virtual HRESULT STDMETHODCALLTYPE IsOfType(
++        StorageItemTypes itemType,
++        boolean *value) = 0;
++
++};
++#ifdef __CRT_UUID_DECL
++__CRT_UUID_DECL(IStorageItem, 0x4207a996, 0xca2f, 0x42f7, 0xbd,0xe8, 0x8b,0x10,0x45,0x7a,0x7f,0x30)
++#endif
++#else
++typedef struct IStorageItemVtbl {
++    BEGIN_INTERFACE
++
++    /*** IUnknown methods ***/
++    HRESULT (STDMETHODCALLTYPE *QueryInterface)(
++        IStorageItem* This,
++        REFIID riid,
++        void **ppvObject);
++
++    ULONG (STDMETHODCALLTYPE *AddRef)(
++        IStorageItem* This);
++
++    ULONG (STDMETHODCALLTYPE *Release)(
++        IStorageItem* This);
++
++    /*** IInspectable methods ***/
++    HRESULT (STDMETHODCALLTYPE *GetIids)(
++        IStorageItem* This,
++        ULONG *iidCount,
++        IID **iids);
++
++    HRESULT (STDMETHODCALLTYPE *GetRuntimeClassName)(
++        IStorageItem* This,
++        HSTRING *className);
++
++    HRESULT (STDMETHODCALLTYPE *GetTrustLevel)(
++        IStorageItem* This,
++        TrustLevel *trustLevel);
++
++    /*** IStorageItem methods ***/
++    HRESULT (STDMETHODCALLTYPE *RenameAsyncOverloadDefaultOptions)(
++        IStorageItem* This,
++        HSTRING desiredName,
++        IInspectable **action);
++
++    HRESULT (STDMETHODCALLTYPE *RenameAsync)(
++        IStorageItem* This,
++        HSTRING desiredName,
++        NameCollisionOption option,
++        IInspectable **action);
++
++    HRESULT (STDMETHODCALLTYPE *DeleteAsyncOverloadDefaultOptions)(
++        IStorageItem* This,
++        IInspectable **action);
++
++    HRESULT (STDMETHODCALLTYPE *DeleteAsync)(
++        IStorageItem* This,
++        StorageDeleteOption option,
++        IInspectable **action);
++
++    HRESULT (STDMETHODCALLTYPE *GetBasicPropertiesAsync)(
++        IStorageItem* This,
++        IInspectable **action);
++
++    HRESULT (STDMETHODCALLTYPE *get_Name)(
++        IStorageItem* This,
++        HSTRING *value);
++
++    HRESULT (STDMETHODCALLTYPE *get_Path)(
++        IStorageItem* This,
++        HSTRING *value);
++
++    HRESULT (STDMETHODCALLTYPE *get_Attributes)(
++        IStorageItem* This,
++        FileAttributes *value);
++
++    HRESULT (STDMETHODCALLTYPE *get_DateCreated)(
++        IStorageItem* This,
++        DateTime *value);
++
++    HRESULT (STDMETHODCALLTYPE *IsOfType)(
++        IStorageItem* This,
++        StorageItemTypes itemType,
++        boolean *value);
++
++    END_INTERFACE
++} IStorageItemVtbl;
++interface IStorageItem {
++    CONST_VTBL IStorageItemVtbl* lpVtbl;
++};
++
++#ifdef COBJMACROS
++#ifndef WIDL_C_INLINE_WRAPPERS
++/*** IUnknown methods ***/
++#define IStorageItem_QueryInterface(This,riid,ppvObject) (This)->lpVtbl->QueryInterface(This,riid,ppvObject)
++#define IStorageItem_AddRef(This) (This)->lpVtbl->AddRef(This)
++#define IStorageItem_Release(This) (This)->lpVtbl->Release(This)
++/*** IInspectable methods ***/
++#define IStorageItem_GetIids(This,iidCount,iids) (This)->lpVtbl->GetIids(This,iidCount,iids)
++#define IStorageItem_GetRuntimeClassName(This,className) (This)->lpVtbl->GetRuntimeClassName(This,className)
++#define IStorageItem_GetTrustLevel(This,trustLevel) (This)->lpVtbl->GetTrustLevel(This,trustLevel)
++/*** IStorageItem methods ***/
++#define IStorageItem_RenameAsyncOverloadDefaultOptions(This,desiredName,action) (This)->lpVtbl->RenameAsyncOverloadDefaultOptions(This,desiredName,action)
++#define IStorageItem_RenameAsync(This,desiredName,option,action) (This)->lpVtbl->RenameAsync(This,desiredName,option,action)
++#define IStorageItem_DeleteAsyncOverloadDefaultOptions(This,action) (This)->lpVtbl->DeleteAsyncOverloadDefaultOptions(This,action)
++#define IStorageItem_DeleteAsync(This,option,action) (This)->lpVtbl->DeleteAsync(This,option,action)
++#define IStorageItem_GetBasicPropertiesAsync(This,action) (This)->lpVtbl->GetBasicPropertiesAsync(This,action)
++#define IStorageItem_get_Name(This,value) (This)->lpVtbl->get_Name(This,value)
++#define IStorageItem_get_Path(This,value) (This)->lpVtbl->get_Path(This,value)
++#define IStorageItem_get_Attributes(This,value) (This)->lpVtbl->get_Attributes(This,value)
++#define IStorageItem_get_DateCreated(This,value) (This)->lpVtbl->get_DateCreated(This,value)
++#define IStorageItem_IsOfType(This,itemType,value) (This)->lpVtbl->IsOfType(This,itemType,value)
++#else
++/*** IUnknown methods ***/
++static FORCEINLINE HRESULT IStorageItem_QueryInterface(IStorageItem* This,REFIID riid,void **ppvObject) {
++    return This->lpVtbl->QueryInterface(This,riid,ppvObject);
++}
++static FORCEINLINE ULONG IStorageItem_AddRef(IStorageItem* This) {
++    return This->lpVtbl->AddRef(This);
++}
++static FORCEINLINE ULONG IStorageItem_Release(IStorageItem* This) {
++    return This->lpVtbl->Release(This);
++}
++/*** IInspectable methods ***/
++static FORCEINLINE HRESULT IStorageItem_GetIids(IStorageItem* This,ULONG *iidCount,IID **iids) {
++    return This->lpVtbl->GetIids(This,iidCount,iids);
++}
++static FORCEINLINE HRESULT IStorageItem_GetRuntimeClassName(IStorageItem* This,HSTRING *className) {
++    return This->lpVtbl->GetRuntimeClassName(This,className);
++}
++static FORCEINLINE HRESULT IStorageItem_GetTrustLevel(IStorageItem* This,TrustLevel *trustLevel) {
++    return This->lpVtbl->GetTrustLevel(This,trustLevel);
++}
++/*** IStorageItem methods ***/
++static FORCEINLINE HRESULT IStorageItem_RenameAsyncOverloadDefaultOptions(IStorageItem* This,HSTRING desiredName,IInspectable **action) {
++    return This->lpVtbl->RenameAsyncOverloadDefaultOptions(This,desiredName,action);
++}
++static FORCEINLINE HRESULT IStorageItem_RenameAsync(IStorageItem* This,HSTRING desiredName,NameCollisionOption option,IInspectable **action) {
++    return This->lpVtbl->RenameAsync(This,desiredName,option,action);
++}
++static FORCEINLINE HRESULT IStorageItem_DeleteAsyncOverloadDefaultOptions(IStorageItem* This,IInspectable **action) {
++    return This->lpVtbl->DeleteAsyncOverloadDefaultOptions(This,action);
++}
++static FORCEINLINE HRESULT IStorageItem_DeleteAsync(IStorageItem* This,StorageDeleteOption option,IInspectable **action) {
++    return This->lpVtbl->DeleteAsync(This,option,action);
++}
++static FORCEINLINE HRESULT IStorageItem_GetBasicPropertiesAsync(IStorageItem* This,IInspectable **action) {
++    return This->lpVtbl->GetBasicPropertiesAsync(This,action);
++}
++static FORCEINLINE HRESULT IStorageItem_get_Name(IStorageItem* This,HSTRING *value) {
++    return This->lpVtbl->get_Name(This,value);
++}
++static FORCEINLINE HRESULT IStorageItem_get_Path(IStorageItem* This,HSTRING *value) {
++    return This->lpVtbl->get_Path(This,value);
++}
++static FORCEINLINE HRESULT IStorageItem_get_Attributes(IStorageItem* This,FileAttributes *value) {
++    return This->lpVtbl->get_Attributes(This,value);
++}
++static FORCEINLINE HRESULT IStorageItem_get_DateCreated(IStorageItem* This,DateTime *value) {
++    return This->lpVtbl->get_DateCreated(This,value);
++}
++static FORCEINLINE HRESULT IStorageItem_IsOfType(IStorageItem* This,StorageItemTypes itemType,boolean *value) {
++    return This->lpVtbl->IsOfType(This,itemType,value);
++}
++#endif
++#endif
++
++#endif
++
++HRESULT STDMETHODCALLTYPE IStorageItem_RenameAsyncOverloadDefaultOptions_Proxy(
++    IStorageItem* This,
++    HSTRING desiredName,
++    IInspectable **action);
++void __RPC_STUB IStorageItem_RenameAsyncOverloadDefaultOptions_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_RenameAsync_Proxy(
++    IStorageItem* This,
++    HSTRING desiredName,
++    NameCollisionOption option,
++    IInspectable **action);
++void __RPC_STUB IStorageItem_RenameAsync_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_DeleteAsyncOverloadDefaultOptions_Proxy(
++    IStorageItem* This,
++    IInspectable **action);
++void __RPC_STUB IStorageItem_DeleteAsyncOverloadDefaultOptions_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_DeleteAsync_Proxy(
++    IStorageItem* This,
++    StorageDeleteOption option,
++    IInspectable **action);
++void __RPC_STUB IStorageItem_DeleteAsync_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_GetBasicPropertiesAsync_Proxy(
++    IStorageItem* This,
++    IInspectable **action);
++void __RPC_STUB IStorageItem_GetBasicPropertiesAsync_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_get_Name_Proxy(
++    IStorageItem* This,
++    HSTRING *value);
++void __RPC_STUB IStorageItem_get_Name_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_get_Path_Proxy(
++    IStorageItem* This,
++    HSTRING *value);
++void __RPC_STUB IStorageItem_get_Path_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_get_Attributes_Proxy(
++    IStorageItem* This,
++    FileAttributes *value);
++void __RPC_STUB IStorageItem_get_Attributes_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_get_DateCreated_Proxy(
++    IStorageItem* This,
++    DateTime *value);
++void __RPC_STUB IStorageItem_get_DateCreated_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++HRESULT STDMETHODCALLTYPE IStorageItem_IsOfType_Proxy(
++    IStorageItem* This,
++    StorageItemTypes itemType,
++    boolean *value);
++void __RPC_STUB IStorageItem_IsOfType_Stub(
++    IRpcStubBuffer* This,
++    IRpcChannelBuffer* pRpcChannelBuffer,
++    PRPC_MESSAGE pRpcMessage,
++    DWORD* pdwStubPhase);
++
++#endif  /* __IStorageItem_INTERFACE_DEFINED__ */
+diff --git a/gio/gwin32appinfo.c b/gio/gwin32appinfo.c
+index a14a9e32a..b147f192c 100644
+--- a/gio/gwin32appinfo.c
++++ b/gio/gwin32appinfo.c
+@@ -22,12 +22,6 @@
+  *          Руслан Ижбулатов  <lrn1986@gmail.com>
+  */
+ 
+-#ifdef NTDDI_VERSION
+-#undef NTDDI_VERSION
+-#endif
+-
+-#define NTDDI_VERSION NTDDI_WIN8
+-
+ #include "config.h"
+ 
+ #define COBJMACROS
+@@ -45,7 +39,11 @@
+ #include "glibintl.h"
+ #include <gio/gwin32registrykey.h>
+ #include <shlobj.h>
+-#include <shobjidl.h>
++/* Contains the definitions from shlobj.h that are
++ * guarded as Windows8-or-newer and are unavailable
++ * to GLib, being only Windows7-or-newer.
++ */
++#include "gwin32api-application-activation-manager.h"
+ 
+ #include <windows.h>
+ /* For SHLoadIndirectString() */
+diff --git a/gio/gwin32packageparser.c b/gio/gwin32packageparser.c
+index 5938498a9..a73dbba64 100755
+--- a/gio/gwin32packageparser.c
++++ b/gio/gwin32packageparser.c
+@@ -32,15 +32,17 @@
+ #include <windows.h>
+ #include <winstring.h>
+ #include <roapi.h>
++#include <stdio.h>
+ #include <shlwapi.h>
+-#include <xmllite.h>
+ 
+-#include <windows.storage.h>
+-#include <windows.applicationmodel.core.h>
+-#include <windows.management.deployment.h>
++#include "gwin32api-storage.h"
++#include "gwin32api-misc.h"
++#include "gwin32api-iterator.h"
++#include "gwin32api-package.h"
++
++#include <xmllite.h>
+ 
+ #include <glib.h>
+-#include <stdio.h>
+ 
+ #include "gwin32file-sync-stream.h"
+ #include "gwin32packageparser.h"
+@@ -62,11 +64,6 @@ typedef HRESULT (STDAPICALLTYPE *CreateXmlReader_func)(REFIID riid, void **ppvOb
+ #define sax_CreateXmlReader sax->CreateXmlReader
+ #endif
+ 
+-DEFINE_GUID(IID_IPackageManager, 0x9A7D4B65, 0x5E8F, 0x4FC7, 0xA2, 0xE5, 0x7F, 0x69, 0x25, 0xCB, 0x8B, 0x53);
+-DEFINE_GUID(IID_IPackage, 0x163C792F, 0xBD75, 0x413C, 0xBF, 0x23, 0xB1, 0xFE, 0x7B, 0x95, 0xD8, 0x25);
+-DEFINE_GUID(IID_IPackage2, 0xA6612fb6, 0x7688, 0x4ACE, 0x95, 0xFB, 0x35, 0x95, 0x38, 0xE7, 0xAA, 0x01);
+-DEFINE_GUID(IID_IStorageItem, 0x4207a996, 0xca2f, 0x42f7, 0xbd,0xe8, 0x8b,0x10,0x45,0x7a,0x7f,0x30);
+-
+ static gsize
+ g_utf16_len (const gunichar2 *str)
+ {
+@@ -187,10 +184,10 @@ g_win32_package_parser_enum_packages (GWin32PackageParserCallback   callback,
+   HSTRING_HEADER packageanager_name_header;
+   const wchar_t *packman_id = L"Windows.Management.Deployment.PackageManager";
+   IInspectable *ii_pm = NULL;
+-  __x_ABI_CWindows_CManagement_CDeployment_CIPackageManager *pm = NULL;
+-  __FIIterable_1_Windows__CApplicationModel__CPackage *packages_iterable = NULL;
+-  __FIIterator_1_Windows__CApplicationModel__CPackage *packages_iterator = NULL;
+-  boolean has_current;
++  IPackageManager *pm = NULL;
++  IIterable *packages_iterable = NULL;
++  IIterator *packages_iterator = NULL;
++  CHAR has_current;
+   gsize package_index;
+   const wchar_t *bslash_appmanifest = L"\\AppxManifest.xml";
+   struct _xml_sax_state sax_stack;
+@@ -313,22 +310,23 @@ g_win32_package_parser_enum_packages (GWin32PackageParserCallback   callback,
+   hr = IInspectable_QueryInterface (ii_pm, &IID_IPackageManager, (void**) &pm);
+   canned_com_error_handler ("IInspectable_QueryInterface()", cleanup);
+ 
+-  hr = __x_ABI_CWindows_CManagement_CDeployment_CIPackageManager_FindPackagesByUserSecurityId (pm, 0, &packages_iterable);
++  hr = IPackageManager_FindPackagesByUserSecurityId (pm, 0, &packages_iterable);
+   canned_com_error_handler ("IPackageManager_FindPackagesByUserSecurityId()", cleanup);
+ 
+-  hr = __FIIterable_1_Windows__CApplicationModel__CPackage_First (packages_iterable, &packages_iterator);
++  hr = IIterable_First (packages_iterable, &packages_iterator);
+   canned_com_error_handler ("IIterable_First()", cleanup);
+ 
+-  hr = __FIIterator_1_Windows__CApplicationModel__CPackage_get_HasCurrent (packages_iterator, &has_current);
++  hr = IIterator_get_HasCurrent (packages_iterator, &has_current);
+   canned_com_error_handler ("IIterator_get_HasCurrent()", cleanup);
+ 
+   for (package_index = 0; SUCCEEDED (hr) && has_current; package_index++)
+     {
+-      __x_ABI_CWindows_CApplicationModel_CIPackage *ipackage = NULL;
+-      __x_ABI_CWindows_CApplicationModel_CIPackage2 *ipackage2 = NULL;
+-      __x_ABI_CWindows_CApplicationModel_CIPackageId *ipackageid = NULL;
+-      __x_ABI_CWindows_CStorage_CIStorageFolder *package_install_location = NULL;
+-      __x_ABI_CWindows_CStorage_CIStorageItem *storage_item = NULL;
++      IUnknown *item = NULL;
++      IPackage *ipackage = NULL;
++      IPackage2 *ipackage2 = NULL;
++      IPackageId *ipackageid = NULL;
++      IUnknown *package_install_location = NULL;
++      IStorageItem *storage_item = NULL;
+       HSTRING path = NULL;
+       HSTRING name = NULL;
+       HSTRING full_name = NULL;
+@@ -353,22 +351,25 @@ g_win32_package_parser_enum_packages (GWin32PackageParserCallback   callback,
+           } \
+       } while (0)
+ 
+-      hr = __FIIterator_1_Windows__CApplicationModel__CPackage_get_Current (packages_iterator, &ipackage);
++      hr = IIterator_get_Current (packages_iterator, &item);
+       canned_com_error_handler_pkg ("IIterator_get_Current()", package_cleanup);
+ 
+-      hr = __x_ABI_CWindows_CApplicationModel_CIPackage_QueryInterface (ipackage, &IID_IPackage2, (void **) &ipackage2);
+-      canned_com_error_handler_pkg ("IPackage_QueryInterface(IID_IPackage2)", package_cleanup);
++      hr = IUnknown_QueryInterface (item, &IID_IPackage, (void **) &ipackage);
++      canned_com_error_handler_pkg ("IUnknown_QueryInterface(IID_IPackage)", package_cleanup);
++
++      hr = IUnknown_QueryInterface (item, &IID_IPackage2, (void **) &ipackage2);
++      canned_com_error_handler_pkg ("IUnknown_QueryInterface(IID_IPackage2)", package_cleanup);
+ 
+-      hr = __x_ABI_CWindows_CApplicationModel_CIPackage_get_Id (ipackage, &ipackageid);
++      hr = IPackage_get_Id (ipackage, &ipackageid);
+       canned_com_error_handler_pkg ("IPackage_get_Id()", package_cleanup);
+ 
+-      hr = __x_ABI_CWindows_CApplicationModel_CIPackageId_get_FullName (ipackageid, &full_name);
++      hr = IPackageId_get_FullName (ipackageid, &full_name);
+       canned_com_error_handler_pkg ("IPackageId_get_FullName()", package_cleanup);
+ 
+-      hr = __x_ABI_CWindows_CApplicationModel_CIPackageId_get_Name (ipackageid, &name);
++      hr = IPackageId_get_Name (ipackageid, &name);
+       canned_com_error_handler_pkg ("IPackageId_get_Name()", package_cleanup);
+ 
+-      hr = __x_ABI_CWindows_CApplicationModel_CIPackage2_get_DisplayName (ipackage2, &display_name);
++      hr = IPackage2_get_DisplayName (ipackage2, &display_name);
+       canned_com_error_handler_pkg ("IPackage2_get_DisplayName()", package_cleanup);
+ 
+       wcs_full_name = LoadedWindowsGetStringRawBuffer (full_name, NULL);
+@@ -387,16 +388,16 @@ g_win32_package_parser_enum_packages (GWin32PackageParserCallback   callback,
+           } \
+       } while (0)
+ 
+-      hr = __x_ABI_CWindows_CApplicationModel_CIPackage_get_InstalledLocation (ipackage, &package_install_location);
++      hr = IPackage_get_InstalledLocation (ipackage, &package_install_location);
+       canned_com_error_handler_pkg_named ("IPackage_get_InstalledLocation()", package_cleanup);
+ 
+       hr = IUnknown_QueryInterface (package_install_location, &IID_IStorageItem, (void **) &storage_item);
+       canned_com_error_handler_pkg_named ("IUnknown_QueryInterface(IID_IStorageItem)", package_cleanup);
+ 
+-      hr = __x_ABI_CWindows_CApplicationModel_CIPackageId_get_FamilyName (ipackageid, &package_family);
++      hr = IPackageId_get_FamilyName (ipackageid, &package_family);
+       canned_com_error_handler_pkg_named ("IPackageId_get_FamilyName()", package_cleanup);
+ 
+-      hr = __x_ABI_CWindows_CStorage_CIStorageItem_get_Path (storage_item, &path);
++      hr = IStorageItem_get_Path (storage_item, &path);
+       canned_com_error_handler_pkg_named ("IStorageItem_get_Path()", package_cleanup);
+ 
+       wcs_path = LoadedWindowsGetStringRawBuffer (path, NULL);
+@@ -425,7 +426,7 @@ g_win32_package_parser_enum_packages (GWin32PackageParserCallback   callback,
+        */
+       parse_manifest_file (sax);
+ 
+-      hr = __FIIterator_1_Windows__CApplicationModel__CPackage_MoveNext (packages_iterator, &has_current);
++      hr = IIterator_MoveNext (packages_iterator, &has_current);
+       canned_com_error_handler_pkg_named ("IIterator_MoveNext()", package_cleanup);
+ 
+ #undef canned_com_error_handler_pkg_named
+@@ -447,27 +448,29 @@ g_win32_package_parser_enum_packages (GWin32PackageParserCallback   callback,
+         LoadedWindowsDeleteString (full_name);
+ 
+       if (storage_item)
+-        (void) __x_ABI_CWindows_CStorage_CIStorageItem_Release (storage_item);
++        (void) IStorageItem_Release (storage_item);
+       if (package_install_location)
+-        (void) __x_ABI_CWindows_CStorage_CIStorageFolder_Release (package_install_location);
++        (void) IUnknown_Release (package_install_location);
+       if (ipackage2)
+-        (void) __x_ABI_CWindows_CApplicationModel_CIPackage2_Release (ipackage2);
++        (void) IPackage2_Release (ipackage2);
+       if (ipackage)
+-        (void) __x_ABI_CWindows_CApplicationModel_CIPackage_Release (ipackage);
++        (void) IPackage_Release (ipackage);
++      if (item)
++        (void) IUnknown_Release (item);
+ 
+       if (ipackageid)
+-        (void) __x_ABI_CWindows_CApplicationModel_CIPackageId_Release (ipackageid);
++        (void) IPackageId_Release (ipackageid);
+       if (sax->exit_early)
+         break;
+     }
+ 
+   cleanup:
+   if (packages_iterator)
+-    (void) __FIIterator_1_Windows__CApplicationModel__CPackage_Release (packages_iterator);
++    (void) IIterator_Release (packages_iterator);
+   if (packages_iterable)
+-    (void) __FIIterable_1_Windows__CApplicationModel__CPackage_Release (packages_iterable);
++    (void) IIterable_Release (packages_iterable);
+   if (pm)
+-    (void) __x_ABI_CWindows_CManagement_CDeployment_CIPackageManager_Release (pm);
++    (void) IPackageManager_Release (pm);
+   if (ii_pm)
+     (void) IInspectable_Release (ii_pm);
+ 

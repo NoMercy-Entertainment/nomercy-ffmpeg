@@ -5,14 +5,14 @@ if [[ ${TARGET_OS} == "linux" || ${TARGET_OS} == "windows" || ${ARCH} == "arm64"
 fi
 
 # Versions
-LIBRSVG_VERSION=2.61.3
-GLIB_VERSION=2.82.4
+LIBRSVG_VERSION=2.61.5
+GLIB_VERSION=2.88.4
 CAIRO_VERSION=1.18.2
 PANGO_VERSION=1.54.0
-GDK_PIXBUF_VERSION=2.42.12
+GDK_PIXBUF_VERSION=2.44.8
 PIXMAN_VERSION=0.44.2
 LIBFFI_VERSION=3.4.6
-PCRE2_VERSION=10.44
+PCRE2_VERSION=10.49
 
 # Store original flags
 ORIG_CFLAGS="${CFLAGS}"
@@ -93,6 +93,17 @@ build_pcre2() {
         }
     fi
     cd pcre2
+    # The JIT this build enables (PCRE2_SUPPORT_JIT=ON) is sljit, a git
+    # submodule since pcre2 10.45: a plain clone has an empty deps/sljit and
+    # pcre2_jit_compile.c stops at its #include of sljitLir.c.
+    retry git submodule update --init --depth 1 deps/sljit || {
+        log "pcre2: fetching the sljit submodule failed after retries"
+        exit 1
+    }
+    if [[ ! -f deps/sljit/sljit_src/sljitLir.c ]]; then
+        log "pcre2: deps/sljit/sljit_src/sljitLir.c is missing after the submodule update"
+        exit 1
+    fi
     
     mkdir -p build && cd build
     cmake -S .. -B . \
@@ -107,9 +118,16 @@ build_pcre2() {
         return 1
     fi
 
-    make -j$(nproc) && make install
-    if [ $? -ne 0 ]; then
+    # Checked through PIPESTATUS, with make's own output in the log: the error
+    # of a failed pcre2 build used to go nowhere (the 10.49 sljit case).
+    make -j$(nproc) 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
         log "pcre2 build failed"
+        return 1
+    fi
+    make install 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        log "pcre2 install failed"
         return 1
     fi
 
@@ -148,6 +166,15 @@ build_glib2() {
     # For macOS, add objc and objcpp compilers to [binaries] section
     # Add objc compilers right after the [binaries] section header
     sed -i "s/^\[binaries\]$/[binaries]\nobjc = '${CROSS_PREFIX}clang'\nobjcpp = '${CROSS_PREFIX}clang++'/" "${glib_cross_file}"
+    # glib 2.88 asks meson for host_machine.subsystem() on darwin, which a
+    # cross build only has when the cross file names it.
+    if ! grep -q "^subsystem *=" "${glib_cross_file}"; then
+        sed -i "s/^system = 'darwin'$/system = 'darwin'\nsubsystem = 'macos'/" "${glib_cross_file}"
+    fi
+    if ! grep -q "^subsystem = 'macos'$" "${glib_cross_file}"; then
+        log "glib2: could not add subsystem = 'macos' to ${glib_cross_file}"
+        return 1
+    fi
     
     # Add glib-specific properties using built-in options (meson 1.0+ style)
     {
@@ -178,6 +205,18 @@ build_glib2() {
         log "glib2 configure failed"
         return 1
     fi
+    # zlib and pcre2 must be the prefix's (zlib from 03-zlib.sh, pcre2 from
+    # build_pcre2 above). glib carries wraps of its own (zlib 1.3.1 and pcre2
+    # 10.46 in 2.88.4, both with known CVEs) and falls back to them without a
+    # word when a lookup fails; a wrap it fell back to leaves its directory
+    # under subprojects/.
+    local wrapped
+    for wrapped in zlib pcre2; do
+        if ls -d ../subprojects/${wrapped}-* >/dev/null 2>&1; then
+            log "glib2 took its own ${wrapped} wrap ($(ls -d ../subprojects/${wrapped}-* | tr '\n' ' ')) instead of the prefix's"
+            return 1
+        fi
+    done
 
     # Two steps, each checked through PIPESTATUS, the way build_cairo below
     # already does it. This was `ninja | log -a && ninja install | log -a`

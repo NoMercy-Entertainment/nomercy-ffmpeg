@@ -26,9 +26,32 @@
 
 FFDIR="/build/ffmpeg/libavformat"
 
+# The four files replace upstream's whole, so each copy is upstream's file at
+# one release plus our changes. The digests below are those upstream files
+# (FFmpeg 9.0.2). If FFmpeg's own file is anything else, our copy would put
+# back what that release changed: 9.0.2 fixed two buffer overruns in
+# hlsenc.c's playlist parser, which a 9.0-based copy reverted without a
+# word. So a different upstream file stops the build here; rebase the copy
+# (a three-way merge of the old upstream file, ours and the new upstream
+# file) and update the digest.
+upstream_sha256() {
+    case "$1" in
+    hlsenc.c)      echo 6169f1f23d9b19b50ce19b19ead66a2b52e99c14e3688119624e1385fa4501f6 ;;
+    hlsplaylist.c) echo de88e13c46c3c5cd9975487c0337f7b28d31c6e2fad8a0f090791122b9cfd79d ;;
+    hlsplaylist.h) echo 985a70567796656e87bf1f1b958198f1ee7490d54e60d2b5c803333fa7e72d81 ;;
+    codecstring.c) echo b5a934ad499b9dbb10571f5dd9cb8fcb4c0dae80b0c98dd19425859c4742f776 ;;
+    esac
+}
+
 for f in hlsenc.c hlsplaylist.c hlsplaylist.h codecstring.c; do
     if [ ! -f "/scripts/includes/${f}" ]; then
         log "  ERROR: /scripts/includes/${f} not found"
+        exit 1
+    fi
+    got=$(sha256sum "${FFDIR}/${f}" | cut -d' ' -f1)
+    if [ "${got}" != "$(upstream_sha256 "${f}")" ]; then
+        log "  ERROR: FFmpeg's libavformat/${f} is not the file scripts/includes/${f} is based on"
+        log "         (sha256 ${got}, expected $(upstream_sha256 "${f}")): rebase the copy onto it"
         exit 1
     fi
     cp "/scripts/includes/${f}" "${FFDIR}/${f}"

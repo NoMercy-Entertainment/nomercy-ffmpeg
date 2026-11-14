@@ -32,10 +32,11 @@ RUN mkdir -p /build && cd /build \
 # shape the darwin platforms use, so the lab links the stock libggml-cpu.a
 # plus a fixed-mode ggml_cpu_dispatch.o (build.sh compiles that one from the
 # repository every run, so a dispatcher change is picked up too).
-COPY whisper-dtw-median-filter.patch /tmp/whisper-dtw-median-filter.patch
+COPY whisper-dtw-median-filter.patch whisper-security-backports.patch /tmp/
 RUN mkdir -p /build/whisper && cd /build/whisper \
     && git clone --quiet --depth 1 --branch v${whisper_version} https://github.com/ggml-org/whisper.cpp.git . \
     && git apply /tmp/whisper-dtw-median-filter.patch \
+    && git apply /tmp/whisper-security-backports.patch \
     && grep -q 'narrow the filter instead of aborting' src/whisper.cpp \
     && cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${PREFIX} \
          -DBUILD_SHARED_LIBS=OFF -DWHISPER_STATIC=ON \

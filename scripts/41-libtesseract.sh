@@ -60,6 +60,23 @@ if [[ ${TARGET_OS} == "darwin" && ${ARCH} == "x86_64" ]]; then
         -e 's/#include <memory>/#include <memory>\n#include <dirent.h>\n#include <sys\/stat.h>/' \
         -e '/void addAvailableLanguages(const std::string \&datadir,/,/^}/c\\n void addAvailableLanguages(const std::string \&datadir, std::vector<std::string> *langs) {\n  DIR *dir = opendir(datadir.c_str());\n  if (!dir) return;\n\n  struct dirent *entry;\n  while ((entry = readdir(dir)) != nullptr) {\n    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;\n\n    std::string fullpath = datadir + "/" + entry->d_name;\n    struct stat statbuf;\n    if (stat(fullpath.c_str(), \&statbuf) != 0) continue;\n\n    if (S_ISDIR(statbuf.st_mode)) {\n      addAvailableLanguages(fullpath, langs);\n    } else {\n      std::string name = entry->d_name;\n      size_t pos = name.rfind(".traineddata");\n      if (pos != std::string::npos && pos == name.length() - 12) {\n        langs->push_back(name.substr(0, pos));\n      }\n    }\n  }\n  closedir(dir);\n}' src/api/baseapi.cpp
 fi
+
+# macOS 10.13 (the darwin-x86_64 target) has no std::filesystem. The seds
+# above take <filesystem> out of the two files that need it and replace the
+# calls (a call they miss then fails to compile, which is loud; the one left
+# in ccutil.cpp sits in an _WIN32 block). Check the includes are gone. The
+# graphics files (paramsd.cpp, pgedit.cpp: tesseract's ScrollView parameter
+# editor, which FFmpeg never opens) use it as well since 5.5.4, and are not
+# built there (--disable-graphics).
+TESS_EXTRA=()
+if [[ ${TARGET_OS} == "darwin" && ${ARCH} == "x86_64" ]]; then
+    if grep -l '#include <filesystem>' src/ccutil/ccutil.cpp src/api/baseapi.cpp; then
+        log "libtesseract: <filesystem> is still included in the file(s) above; the darwin-x86_64 replacements no longer match this version"
+        exit 1
+    fi
+    TESS_EXTRA+=(--disable-graphics)
+fi
+
 ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared \
     --disable-doc \
     --without-archive \
@@ -67,6 +84,7 @@ fi
     --without-curl \
     --with-extra-includes=${PREFIX}/include \
     --with-extra-libraries=${PREFIX}/lib \
+    "${TESS_EXTRA[@]}" \
     --host=${CROSS_PREFIX%-}
 ./configure --prefix=${PREFIX} --enable-static --disable-shared \
     --disable-doc \
@@ -75,6 +93,7 @@ fi
     --without-curl \
     --with-extra-includes=${PREFIX}/include \
     --with-extra-libraries=${PREFIX}/lib \
+    "${TESS_EXTRA[@]}" \
     --host=${CROSS_PREFIX%-} 2>&1 | log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then

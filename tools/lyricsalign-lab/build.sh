@@ -102,7 +102,8 @@ cp /scripts/includes/af_whisper.c ${FF}/libavfilter/af_whisper.c
 cp /scripts/includes/nm_whisper_words.h ${FF}/libavfilter/nm_whisper_words.h
 [[ -f /scripts/includes/nm_ggml_threads.h ]] && cp /scripts/includes/nm_ggml_threads.h ${FF}/libavfilter/nm_ggml_threads.h
 echo "✓ af_whisper.c"
-FILTERS="whisper,anullsrc,aresample,aformat,atrim,asetnsamples,sine,aevalsrc,amix,volume,asplit,apad,ametadata,anull"
+# amerge and pan: the lyrics-creator eval harness makes its backing with them (the mix minus the stem).
+FILTERS="whisper,anullsrc,aresample,aformat,atrim,asetnsamples,sine,aevalsrc,amix,volume,asplit,apad,ametadata,anull,amerge,pan"
 if [[ -f ${REPO}/scripts/66-lyricsalign.sh ]]; then
 	cp "${REPO}/scripts/66-lyricsalign.sh" /scripts/66-lyricsalign.sh && sed -i 's/\r$//' /scripts/66-lyricsalign.sh
 	run_step /scripts/66-lyricsalign.sh

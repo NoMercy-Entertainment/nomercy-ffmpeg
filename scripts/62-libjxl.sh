@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LIBJXL_VERSION=0.12.0
+LIBJXL_VERSION=0.13.0
 
 cd /build || exit 1
 retry git clone --depth 1 --branch "v${LIBJXL_VERSION}" https://github.com/libjxl/libjxl.git libjxl 2>&1 | log

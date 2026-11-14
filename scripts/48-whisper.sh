@@ -26,6 +26,22 @@ if [[ $(grep -c 'narrow the filter instead of aborting' src/whisper.cpp) -ne 1 ]
 fi
 log "Applied whisper.cpp DTW median-filter backport (a46fadb)"
 
+# Three security fixes of v1.9.5, taken alone so ggml stays the one every
+# whisper/stemsplit/lyricsalign gate was measured on (the patch header lists
+# them; CVE-2026-110810 is one). Same rule as above: the patch must apply,
+# and each fix must be in the tree afterwards.
+git apply /scripts/includes/whisper-security-backports.patch \
+    || { log "Error: whisper-security-backports.patch does not apply to whisper.cpp v${whisper_version}"; exit 1; }
+if [[ $(grep -c 'invalid ttype %d in model file' src/whisper.cpp) -ne 2 ]]; then
+    log "Error: the ttype checks (CVE-2026-110810) are not in src/whisper.cpp after applying the patch"
+    exit 1
+fi
+if ! grep -q 'invalid n_dims' src/whisper.cpp; then
+    log "Error: the n_dims check is not in src/whisper.cpp after applying the patch"
+    exit 1
+fi
+log "Applied whisper.cpp security backports (60c0be6 CVE-2026-110810, df1547b, 8631825)"
+
 # chmod +x ./models/download-ggml-model.sh
 # ./models/download-ggml-model.sh base
 
@@ -811,6 +827,16 @@ lib_private_flags="Libs.private: -lstdc++"
 # lavfi.whisper.language_confidence) and as a leading JSON detection object.
 # See: https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/issues/38
 if [[ -f /scripts/includes/af_whisper.c ]]; then
+    # Our copy replaces upstream's whole file, so it is upstream's file at one
+    # release plus our changes; the digest is that upstream file (FFmpeg 9.0
+    # and 9.0.2 have the same one). Any other upstream file means the copy
+    # would put back what FFmpeg changed there: rebase it first (see
+    # 57-hls-master-playlist.sh for the hlsenc.c case that made this check).
+    whisper_upstream=$(sha256sum /build/ffmpeg/libavfilter/af_whisper.c | cut -d' ' -f1)
+    if [[ "${whisper_upstream}" != 322a8d54baa69b74f91552ad809a43ad0e3934632b256adf2123e4325a3b85d6 ]]; then
+        log "Error: FFmpeg's libavfilter/af_whisper.c (sha256 ${whisper_upstream}) is not the file scripts/includes/af_whisper.c is based on: rebase the copy"
+        exit 1
+    fi
     cp /scripts/includes/af_whisper.c /build/ffmpeg/libavfilter/af_whisper.c
     log "Applied af_whisper.c language-detection patch"
     # The JSON escaping and word-timing code af_whisper.c includes (#112). A

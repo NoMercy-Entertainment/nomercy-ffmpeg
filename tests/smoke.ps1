@@ -351,7 +351,10 @@ function Invoke-LyricsalignCheck($name, $fn) {
             Write-Host "✅ $name"
         }
         'Skip' {
-            if ($env:LYRICSALIGN_TEST_REQUIRED -eq '1' -and $fn -ne 'test_lyricsalign_gpu') { Write-Host $r.Output; Fail "${name}: skipped, but LYRICSALIGN_TEST_REQUIRED=1" }
+            # Two checks may skip even when the assets are required: the GPU
+            # check (only on a GPU runner) and the write-error check, which
+            # needs /dev/full and so can never run on Windows.
+            if ($env:LYRICSALIGN_TEST_REQUIRED -eq '1' -and $fn -notin @('test_lyricsalign_gpu', 'test_lyricsalign_write_error')) { Write-Host $r.Output; Fail "${name}: skipped, but LYRICSALIGN_TEST_REQUIRED=1" }
             Note "${name}: $($r.Reason)"
         }
         default {

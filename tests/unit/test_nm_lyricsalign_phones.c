@@ -246,6 +246,442 @@ static void test_strip_marks(void)
     CHECK_EQ_INT(nm_lp_strip_marks("x", out, 1), -1);                 /* no room */
 }
 
+/* ------------------------------------------------------------------------
+ * The first sound of a line (#130, step 7b)
+ * ---------------------------------------------------------------------- */
+
+static void test_soft_onset(void)
+{
+    /* every code point #130 lists, as UTF-8 */
+    static const char *const vowels[] = {
+        "a", "e", "i", "o", "u", "y", "\xC3\xA6", "\xC9\x91", "\xC9\x90", "\xC9\x92", "\xC9\x94", "\xC9\x99",
+        "\xC9\x98", "\xC9\x9B", "\xC9\x9C", "\xC9\x9E", "\xC9\xA4", "\xC9\xA8", "\xC9\xAA", "\xCA\x89", "\xCA\x8A",
+        "\xCA\x8C", "\xCA\x8F", "\xC3\xB8", "\xC5\x93", "\xC9\xB5", "\xC9\xAF", "\xC9\xB6",
+    };      /* a e i o u y æ ɑ ɐ ɒ ɔ ə ɘ ɛ ɜ ɞ ɤ ɨ ɪ ʉ ʊ ʌ ʏ ø œ ɵ ɯ ɶ */
+    static const char *const sonorants[] = {
+        "m", "n", "\xC9\xB2", "\xC5\x8B", "\xC9\xB3", "l", "\xC9\xAB", "\xCA\x8E", "\xC9\xAD", "r", "\xC9\xBE",
+        "\xC9\xB9", "\xC9\xBB", "\xCA\x80", "\xCA\x81", "j", "w", "\xCA\x8B", "\xC9\xA5", "\xC9\xB0",
+    };      /* m n ɲ ŋ ɳ l ɫ ʎ ɭ r ɾ ɹ ɻ ʀ ʁ j w ʋ ɥ ɰ */
+    static const char *const hard[] = {
+        "p", "b", "t", "d", "k", "g", "\xC9\xA1", "\xCA\x94",                   /* plosives, ɡ and ʔ among them */
+        "f", "v", "s", "z", "\xCA\x83", "\xCA\x92", "\xCE\xB8", "\xC3\xB0", "x", "\xC3\xA7",  /* f v s z ʃ ʒ θ ð x ç */
+        "h", "\xC9\xA6",                                                        /* h ɦ */
+        "t\xCA\x83", "d\xCA\x92", "ts",                                         /* tʃ dʒ ts */
+        "",
+    };
+
+    CHECK_EQ_INT((int) (sizeof(vowels) / sizeof(vowels[0])), 28);
+    CHECK_EQ_INT((int) (sizeof(sonorants) / sizeof(sonorants[0])), 20);
+    for (size_t i = 0; i < sizeof(vowels) / sizeof(vowels[0]); i++) {
+        checks++;
+        if (!nm_lp_soft_onset(vowels[i])) {
+            failures++;
+            fprintf(stderr, "FAIL vowel %zu '%s' is not a soft onset\n", i, vowels[i]);
+        }
+    }
+    for (size_t i = 0; i < sizeof(sonorants) / sizeof(sonorants[0]); i++) {
+        checks++;
+        if (!nm_lp_soft_onset(sonorants[i])) {
+            failures++;
+            fprintf(stderr, "FAIL sonorant %zu '%s' is not a soft onset\n", i, sonorants[i]);
+        }
+    }
+    for (size_t i = 0; i < sizeof(hard) / sizeof(hard[0]); i++) {
+        checks++;
+        if (nm_lp_soft_onset(hard[i])) {
+            failures++;
+            fprintf(stderr, "FAIL '%s' is a soft onset\n", hard[i]);
+        }
+    }
+    /* the first code point decides: length, a second vowel, a nasal mark change nothing */
+    CHECK_EQ_INT(nm_lp_soft_onset("i\xCB\x90"), 1);                 /* iː */
+    CHECK_EQ_INT(nm_lp_soft_onset("a\xC9\xAA"), 1);                 /* aɪ */
+    CHECK_EQ_INT(nm_lp_soft_onset("\xC5\x93y"), 1);                 /* œy, the Dutch ui */
+    CHECK_EQ_INT(nm_lp_soft_onset("\xC9\x9B\xCC\x83"), 1);          /* ɛ̃ */
+    CHECK_EQ_INT(nm_lp_soft_onset("j\xCA\x8A\xC9\xB9"), 1);         /* jʊɹ */
+    /* a precomposed letter counts as its base letter: ãː is a vowel, ç stays hard */
+    CHECK_EQ_INT(nm_lp_soft_onset("\xC3\xA3\xCB\x90"), 1);
+    /* a mark with no letter under it is not a sound */
+    CHECK_EQ_INT(nm_lp_soft_onset("\xCB\x90"), 0);                  /* ː */
+    CHECK_EQ_INT(nm_lp_soft_onset("\xCC\x83"), 0);
+    /* the JFK line begins on æ */
+    CHECK_EQ_INT(nm_lp_soft_onset(JFK_PHONE_STRINGS[0]), 1);
+}
+
+/* ------------------------------------------------------------------------
+ * Words and lyric tokens (#131)
+ * ---------------------------------------------------------------------- */
+
+/* Tie a line to its tokens and write the entries as "label:phones |
+ * label:phones". The label is the text of the tokens the entry runs over,
+ * a space between them, without the ones espeak does not speak (the way the
+ * filter labels an entry); "~" stands for an entry without a label. Returns
+ * 0, or -1 when the entries do not hold every phone of the line once and in
+ * order. */
+static int tie_text(const char *line_ipa, const char *const *tok_text, const char *const *tok_ipa, int n_tok,
+                    char *out, size_t cap)
+{
+    NMLpWord *line = NULL;
+    NMLpToken *toks = calloc(n_tok ? n_tok : 1, sizeof(*toks));
+    NMLpSpan *spans = NULL;
+    int n_line = 0, n_spans = 0, next = 0, phones = 0, ok = 1;
+    size_t len = 0;
+
+    out[0] = 0;
+    if (!toks || nm_lp_parse_ipa(line_ipa, &line, &n_line))
+        return -1;
+    for (int t = 0; t < n_tok; t++)
+        if (nm_lp_parse_ipa(tok_ipa[t], &toks[t].words, &toks[t].n))
+            return -1;
+    if (nm_lp_tie(line, n_line, toks, n_tok, &spans, &n_spans))
+        return -1;
+    for (int i = 0; i < n_line; i++)
+        phones += line[i].n;
+    for (int s = 0; s < n_spans && len + 1 < cap; s++) {
+        int any = 0;
+
+        if (spans[s].phone != next || spans[s].n_phones <= 0)
+            ok = 0;
+        next = spans[s].phone + spans[s].n_phones;
+        len += snprintf(out + len, cap - len, "%s", s ? " | " : "");
+        if (!spans[s].n_tok && len + 1 < cap)
+            len += snprintf(out + len, cap - len, "~");
+        for (int t = spans[s].tok; t < spans[s].tok + spans[s].n_tok && len + 1 < cap; t++) {
+            if (t >= n_tok) {
+                ok = 0;
+                break;
+            }
+            if (!toks[t].n)
+                continue;
+            len += snprintf(out + len, cap - len, "%s%s", any ? " " : "", tok_text[t]);
+            any = 1;
+        }
+        if (len + 1 < cap)
+            len += snprintf(out + len, cap - len, ":%d", spans[s].n_phones);
+    }
+    if (next != phones || len + 1 >= cap)
+        ok = 0;
+    NM_LP_FREE(spans);
+    nm_lp_free_words(line, n_line);
+    for (int t = 0; t < n_tok; t++)
+        nm_lp_free_words(toks[t].words, toks[t].n);
+    free(toks);
+    return ok ? 0 : -1;
+}
+
+/* The rule of v1.0.46, written out again here: when the words the tokens
+ * make alone add up to the line's words, every spoken token is its own
+ * words, in order. Returns 1 and the entries in tie_text()'s form, 0 when
+ * the counts do not add up. */
+static int count_rule_text(const char *line_ipa, const char *const *tok_text, const char *const *tok_ipa, int n_tok,
+                           char *out, size_t cap)
+{
+    NMLpWord *line = NULL;
+    int n_line = 0, total = 0, w = 0, any = 0;
+    size_t len = 0;
+
+    out[0] = 0;
+    nm_lp_parse_ipa(line_ipa, &line, &n_line);
+    for (int t = 0; t < n_tok; t++) {
+        NMLpWord *alone = NULL;
+        int n = 0;
+
+        nm_lp_parse_ipa(tok_ipa[t], &alone, &n);
+        nm_lp_free_words(alone, n);
+        total += n;
+    }
+    if (total != n_line) {
+        nm_lp_free_words(line, n_line);
+        return 0;
+    }
+    for (int t = 0; t < n_tok && len + 1 < cap; t++) {
+        NMLpWord *alone = NULL;
+        int n = 0, phones = 0;
+
+        nm_lp_parse_ipa(tok_ipa[t], &alone, &n);
+        nm_lp_free_words(alone, n);
+        if (!n)
+            continue;
+        for (int i = 0; i < n; i++)
+            phones += line[w + i].n;
+        w += n;
+        len += snprintf(out + len, cap - len, "%s%s:%d", any ? " | " : "", tok_text[t], phones);
+        any = 1;
+    }
+    nm_lp_free_words(line, n_line);
+    return 1;
+}
+
+/* Split a fixture row at its tabs, empty fields kept. Returns the count. */
+static int split_tabs(char *row, char **field, int max)
+{
+    int n = 0;
+
+    while (n < max) {
+        char *tab = strchr(row, '\t');
+
+        field[n++] = row;
+        if (!tab)
+            break;
+        *tab = 0;
+        row = tab + 1;
+    }
+    return n;
+}
+
+#define FIXTURE_TOKENS 64
+
+static void check_tie_block(const char *text, const char *want, const char *line_ipa, const char *const *tok_text,
+                            const char *const *tok_ipa, int n_tok, int *by_count, int *with_join)
+{
+    char got[2048], old[2048];
+
+    checks++;
+    if (tie_text(line_ipa, tok_text, tok_ipa, n_tok, got, sizeof(got))) {
+        failures++;
+        fprintf(stderr, "FAIL '%s': the entries do not cover the line's phones: '%s'\n", text, got);
+        return;
+    }
+    checks++;
+    if (strcmp(got, want)) {
+        failures++;
+        fprintf(stderr, "FAIL '%s': entries '%s', want '%s'\n", text, got, want);
+    }
+    /* espeak speaks every word of these lines, and every word has a token: never an entry without a label */
+    checks++;
+    if (strchr(got, '~')) {
+        failures++;
+        fprintf(stderr, "FAIL '%s': an entry without a label: '%s'\n", text, got);
+    }
+    /* a line that tied before #131 is tied the same way */
+    if (count_rule_text(line_ipa, tok_text, tok_ipa, n_tok, old, sizeof(old))) {
+        (*by_count)++;
+        checks++;
+        if (strcmp(got, old)) {
+            failures++;
+            fprintf(stderr, "FAIL '%s': the counts add up, yet the entries are '%s' and v1.0.46 gave '%s'\n", text, got,
+                    old);
+        }
+    } else {
+        (*with_join)++;
+    }
+}
+
+/* The real thing: lines and their tokens as espeak-ng 1.52.0 gives them. */
+static void test_tie_fixture(void)
+{
+    char *file = read_file("lyricsalign-words.tsv");
+    char *row, *save = NULL;
+    const char *text = NULL, *want = NULL, *line_ipa = NULL;
+    const char *tok_text[FIXTURE_TOKENS], *tok_ipa[FIXTURE_TOKENS];
+    int n_tok = 0, lines = 0, by_count = 0, with_join = 0;
+    int saw_of_the = 0, saw_in_the = 0, saw_number = 0, saw_joined_label = 0;
+
+    CHECK(file != NULL);
+    if (!file)
+        return;
+    row = strtok_r(file, "\n", &save);
+    for (;;) {
+        char *f[5];
+        int nf = row ? split_tabs(row, f, 5) : 0;
+
+        if (!row || (nf == 5 && !strcmp(f[0], "LINE"))) {
+            if (line_ipa) {
+                lines++;
+                check_tie_block(text, want, line_ipa, tok_text, tok_ipa, n_tok, &by_count, &with_join);
+                /* the cases #131 names, held here as well, so the fixture cannot lose them unseen */
+                if (!strcmp(text, "of the people")) {
+                    saw_of_the = 1;
+                    CHECK(!strcmp(want, "of:2 | the:2 | people:4"));
+                }
+                if (!strcmp(text, "I was in the house")) {
+                    saw_in_the = 1;
+                    CHECK(!strcmp(want, "I:1 | was:3 | in:2 | the:2 | house:3"));
+                }
+                if (!strcmp(text, "back in the summer of 1999")) {
+                    saw_number = 1;         /* espeak joins "in the" here, and 1999 is still one entry of three words */
+                    CHECK(!strcmp(want, "back:3 | in:2 | the:2 | summer:5 | of:2 | 1999:21"));
+                }
+                if (!strcmp(text, "I want to be free")) {
+                    saw_joined_label = 1;   /* "to be" is təbi, "to" alone is tuː: one entry for the two */
+                    CHECK(!strcmp(want, "I:1 | want:4 | to be:4 | free:3"));
+                }
+            }
+            if (!row)
+                break;
+            text = f[2];
+            want = f[3];
+            line_ipa = f[4];
+            n_tok = 0;
+        } else if (nf >= 2 && !strcmp(f[0], "TOK") && n_tok < FIXTURE_TOKENS) {
+            tok_text[n_tok] = f[1];
+            tok_ipa[n_tok++] = nf >= 3 ? f[2] : "";
+        }
+        row = strtok_r(NULL, "\n", &save);
+    }
+    CHECK(lines >= 11);
+    CHECK(by_count >= 4);       /* lines that tied before #131 ... */
+    CHECK(with_join >= 7);      /* ... and lines where espeak joined tokens */
+    CHECK(saw_of_the && saw_in_the && saw_number && saw_joined_label);
+    free(file);
+}
+
+/* The same rules on phones made up for the purpose: a letter is a phone. */
+static void test_tie_plain(void)
+{
+    char got[512];
+
+#define TIE(line, ...) do {                                                                             \
+        static const char *const text_[] = { __VA_ARGS__ };                                            \
+        const char *names_[16], *ipa_[16];                                                              \
+        const int n_ = (int) (sizeof(text_) / sizeof(text_[0])) / 2;                                    \
+        for (int i_ = 0; i_ < n_; i_++)                                                                 \
+            names_[i_] = text_[2 * i_], ipa_[i_] = text_[2 * i_ + 1];                                   \
+        CHECK_EQ_INT(tie_text(line, names_, ipa_, n_, got, sizeof(got)), 0);                            \
+    } while (0)
+#define WANT(entries) do {                                                                              \
+        checks++;                                                                                       \
+        if (strcmp(got, entries)) {                                                                     \
+            failures++;                                                                                 \
+            fprintf(stderr, "FAIL %s:%d: entries '%s', want '%s'\n", __FILE__, __LINE__, got, entries); \
+        }                                                                                               \
+    } while (0)
+
+    /* the counts add up: the tokens take their words in order, whatever the phones are;
+     * a token espeak does not speak has no entry, one that makes two words spans both */
+    TIE("a_b c_d e f_g", "one", "x", "two", "y_y z", "-", "", "three", "q");
+    WANT("one:2 | two:3 | three:2");
+
+    /* espeak joins two tokens, and the word is their phones exactly: cut where the token ends */
+    TIE("a_b_c_d e_f", "ab", "a_b", "cd", "c_d", "ef", "e_f");
+    WANT("ab:2 | cd:2 | ef:2");
+    /* one phone of the joined word is another: one entry, labelled with both tokens */
+    TIE("a_b_c_x e_f", "ab", "a_b", "cd", "c_d", "ef", "e_f");
+    WANT("ab cd:4 | ef:2");
+    /* a phone more, a phone fewer */
+    TIE("a_b_x_c_d e_f", "ab", "a_b", "cd", "c_d", "ef", "e_f");
+    WANT("ab cd:5 | ef:2");
+    TIE("a_b_d e_f", "ab", "a_b", "cd", "c_d", "ef", "e_f");
+    WANT("ab cd:3 | ef:2");
+    /* the joined word stops a phone short of the tokens' phones: not the same, so not cut */
+    TIE("a_b_c e_f", "ab", "a_b", "cd", "c_d", "ef", "e_f");
+    WANT("ab cd:3 | ef:2");
+    TIE("a_b_c", "ab", "a_b", "cd", "c_d");
+    WANT("ab cd:3");
+    /* three tokens in one word; the join at the start and at the end of a line */
+    TIE("a_b_c e_f", "a", "a", "b", "b", "c", "c", "ef", "e_f");
+    WANT("a:1 | b:1 | c:1 | ef:2");
+    TIE("e_f a_b_c_d", "ef", "e_f", "ab", "a_b", "cd", "c_d");
+    WANT("ef:2 | ab:2 | cd:2");
+    /* two joins in one line, one of each kind */
+    TIE("a_b_c_d e_f g_h_i_x", "ab", "a_b", "cd", "c_d", "ef", "e_f", "gh", "g_h", "ij", "i_j");
+    WANT("ab:2 | cd:2 | ef:2 | gh ij:4");
+    /* the words that are the same alone and in the line pin the join down,
+     * also when every word is the same word */
+    TIE("l_a l_a_l_a l_a", "la", "l_a", "la", "l_a", "la", "l_a", "la", "l_a");
+    WANT("la:2 | la:2 | la:2 | la:2");
+    /* a word that sounds different in the line is still its token's (the counts differ elsewhere) */
+    TIE("t_e a_b_c_d", "to", "t_u", "ab", "a_b", "cd", "c_d");
+    WANT("to:2 | ab:2 | cd:2");
+    /* a number next to a join keeps its one entry over its three words */
+    TIE("a_b_c_d n t_y n_n", "ab", "a_b", "cd", "c_d", "1999", "n t_y n_n");
+    WANT("ab:2 | cd:2 | 1999:5");
+
+    /* a token espeak does not speak between two joined ones stays out of the label */
+    TIE("a_b_c_x e_f", "ab", "a_b", "-", "", "cd", "c_d", "ef", "e_f");
+    WANT("ab cd:4 | ef:2");
+
+    /* a word no token accounts for: that word has no label, the others keep theirs */
+    TIE("a_b x_y c_d", "ab", "a_b", "cd", "c_d");
+    WANT("ab:2 | ~:2 | cd:2");
+    TIE("a_b c_d x_y", "ab", "a_b", "cd", "c_d");
+    WANT("ab:2 | cd:2 | ~:2");
+    /* a token the line does not speak: no entry, and no word is called joined for it */
+    TIE("a_b c_d", "ab", "a_b", "zz", "z_z_z", "cd", "c_d");
+    WANT("ab:2 | cd:2");
+    TIE("a_b", "ab", "a_b", "c", "c");
+    WANT("ab:2");
+    /* words and nothing spoken to label them with */
+    TIE("a_b c", "-", "");
+    WANT("~:2 | ~:1");
+    /* nothing at all */
+    TIE("", "-", "");
+    WANT("");
+#undef TIE
+#undef WANT
+}
+
+/* The label's token range runs over an unspoken token between two joined
+ * ones; and a long line. */
+static void test_tie_spans(void)
+{
+    enum { LONG = 300 };
+    static char *phone_a[] = { "a" };
+    static char *phones_aa[] = { "a", "a" };
+    static char *phones_to[] = { "t", "e" }, *phones_be[] = { "b", "i" }, *phones_tobe[] = { "t", "u", "b", "i" };
+    NMLpWord word_to = { phones_to, 2 }, word_be = { phones_be, 2 }, word_tobe = { phones_tobe, 4 };
+    NMLpToken three[3] = { { &word_to, 1 }, { NULL, 0 }, { &word_be, 1 } };
+    NMLpWord *line = malloc(sizeof(*line) * LONG);
+    NMLpToken *toks = malloc(sizeof(*toks) * LONG);
+    NMLpWord word_a = { phone_a, 1 };
+    NMLpSpan *spans = NULL;
+    int n = 0, labelled = 0, phones = 0;
+
+    /* "to - be" spoken as one word that is not to + be: one entry over tokens 0..2 */
+    CHECK_EQ_INT(nm_lp_tie(&word_tobe, 1, three, 3, &spans, &n), 0);
+    CHECK_EQ_INT(n, 1);
+    if (n == 1) {
+        CHECK_EQ_INT(spans[0].tok, 0);
+        CHECK_EQ_INT(spans[0].n_tok, 3);
+        CHECK_EQ_INT(spans[0].phone, 0);
+        CHECK_EQ_INT(spans[0].n_phones, 4);
+    }
+    NM_LP_FREE(spans);
+
+    CHECK(line != NULL && toks != NULL);
+    if (!line || !toks)
+        return;
+    for (int i = 0; i < LONG; i++) {
+        line[i] = word_a;
+        toks[i].words = &word_a;
+        toks[i].n = 1;
+    }
+    /* 300 words, 300 tokens: the counts add up, whatever the length */
+    CHECK_EQ_INT(nm_lp_tie(line, LONG, toks, LONG, &spans, &n), 0);
+    CHECK_EQ_INT(n, LONG);
+    for (int i = 0; i < n; i++)
+        labelled += spans[i].n_tok == 1 && spans[i].tok == i && spans[i].phone == i && spans[i].n_phones == 1;
+    CHECK_EQ_INT(labelled, LONG);
+    NM_LP_FREE(spans);
+
+    /* 200 tokens in 199 words, the hundredth word being two of them: found, and cut */
+    line[99].phones = phones_aa;
+    line[99].n = 2;
+    CHECK_EQ_INT(nm_lp_tie(line, 199, toks, 200, &spans, &n), 0);
+    CHECK_EQ_INT(n, 200);
+    labelled = 0;
+    for (int i = 0; i < n; i++)
+        labelled += spans[i].n_tok == 1 && spans[i].tok == i && spans[i].phone == i && spans[i].n_phones == 1;
+    CHECK_EQ_INT(labelled, 200);
+    NM_LP_FREE(spans);
+
+    /* 300 tokens in 299 words is more than the tie works through: an entry
+     * per word, none with a label, every phone still in one */
+    CHECK((size_t) 300 * 301 > NM_LP_TIE_CELLS);
+    CHECK_EQ_INT(nm_lp_tie(line, 299, toks, LONG, &spans, &n), 0);
+    CHECK_EQ_INT(n, 299);
+    labelled = 0;
+    for (int i = 0; i < n; i++) {
+        labelled += spans[i].n_tok != 0;
+        phones += spans[i].n_phones;
+    }
+    CHECK_EQ_INT(labelled, 0);
+    CHECK_EQ_INT(phones, 300);
+    NM_LP_FREE(spans);
+    free(line);
+    free(toks);
+}
+
 int main(void)
 {
     load_vocab();
@@ -255,6 +691,10 @@ int main(void)
     test_map_fixture_rows();
     test_map_chain_order();
     test_strip_marks();
+    test_soft_onset();
+    test_tie_fixture();
+    test_tie_plain();
+    test_tie_spans();
     fprintf(stderr, "%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

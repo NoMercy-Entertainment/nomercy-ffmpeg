@@ -22,7 +22,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     rm -rf /build/libxxf86vm && cd /build
 
     # xrender
-    git clone --branch libXrender-0.9.12 https://github.com/NoMercy-CI-Mirrors/libxrender.git /build/libxrender
+    git clone --branch libXrender-0.9.13 https://github.com/NoMercy-CI-Mirrors/libxrender.git /build/libxrender
     cd /build/libxrender
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}
@@ -64,7 +64,7 @@ if [[ ${TARGET_OS} == "linux" && ${ARCH} == "x86_64" ]]; then
     rm -rf /build/libxrandr && cd /build
 
     # xi
-    git clone --branch libXi-1.8.2 https://github.com/NoMercy-CI-Mirrors/libxi.git /build/libxi
+    git clone --branch libXi-1.8.4 https://github.com/NoMercy-CI-Mirrors/libxi.git /build/libxi
     cd /build/libxi
     ./autogen.sh --prefix=${PREFIX} --enable-static --disable-shared --with-pic \
         --host=${CROSS_PREFIX%-} ${EXTRA_FLAGS}

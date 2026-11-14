@@ -448,9 +448,20 @@ function Test-VulkanStartup {
     $notes = New-Object System.Collections.Generic.List[string]
     $inconclusive = $false
     foreach ($c in $cases) {
-        foreach ($k in $c.Vars.Keys) { Set-Item -Path "Env:$k" -Value $c.Vars[$k] }
+        # Each case's variables are set for its probe and then put back as they
+        # were: removing them would also remove a value the caller set before
+        # the suite started (NOMERCY_GGML_GPU=0 on a machine with a GPU), and
+        # every check after this one would run without it.
+        $saved = @{}
+        foreach ($k in $c.Vars.Keys) {
+            $saved[$k] = [Environment]::GetEnvironmentVariable($k)
+            Set-Item -Path "Env:$k" -Value $c.Vars[$k]
+        }
         $r = & $probe $FFmpegExe $inSpec
-        foreach ($k in $c.Vars.Keys) { Remove-Item -Path "Env:$k" -ErrorAction SilentlyContinue }
+        foreach ($k in $c.Vars.Keys) {
+            if ($null -eq $saved[$k]) { Remove-Item -Path "Env:$k" -ErrorAction SilentlyContinue }
+            else { Set-Item -Path "Env:$k" -Value $saved[$k] }
+        }
         switch ($r.R) {
             0 { }
             1 {

@@ -4,6 +4,66 @@
 
 ### Unreleased
 
+- **Security: every bundled library with a known CVE that upstream has fixed
+  is on the fixed release.** Checked 2026-11-12 against the CVE records, OSV,
+  the Debian tracker and NVD, for every library linked into the binaries.
+  - FFmpeg 9.0 → **9.0.2** (the archives keep the `ffmpeg-9.0-` name, so no
+    download URL changes; `ffmpeg -version` says 9.0.2)
+  - OpenSSL 4.0.0 → **4.0.3**; libsrt 1.5.5 → **1.5.7**; libass 0.17.4 →
+    **0.17.5**; libaom 3.13.3 → **3.15.3**; libvpx 1.16.0 → **1.17.0**
+  - libjxl 0.12.0 → **0.13.0** (brotli 1.2.1 inside); zlib 1.3.2 → **1.4**;
+    freetype 2.14.3 → **2.15.0**; harfbuzz 14.2.0 → **15.1.0**; libpng 1.6.47
+    → **1.6.59**; libtiff 4.7.0 → **4.7.2**; giflib 5.2.2 → **6.1.3**
+  - librsvg 2.61.3 → **2.61.5**; glib → **2.88.4**; gdk-pixbuf → **2.44.8**;
+    pcre2 10.44 → **10.49**; expat 2.6.4 → **2.10.0**
+  - libdvdnav 6.1.1 → **7.0.0**; zvbi 0.2.44 → **0.2.46**; tesseract 5.5.2 →
+    **5.5.4**; libX11 1.8.13 → **1.8.14**, libXi 1.8.2 → **1.8.4**, libXrender
+    0.9.12 → **0.9.13**
+  - whisper.cpp stays **1.9.1** with three security fixes of 1.9.5 applied
+    (CVE-2026-110810 among them, `scripts/includes/whisper-security-backports.patch`):
+    1.9.5 also moves ggml by 773 commits, and ggml is what whisper, stemsplit
+    and lyricsalign were measured on.
+  - Found while checking: on Windows x64 and Linux x64 glib was built with
+    `--wrap-mode=forcefallback`, which compiled glib's own zlib 1.3.1 and
+    pcre2 10.44 into the binaries whatever the pins said. glib now takes both
+    from the build, and the step fails if it falls back to a wrap.
+  - The HLS muxer sources this build ships (`scripts/includes/hlsenc.c`,
+    `codecstring.c`, `hlsplaylist.c/.h`, the #12 master-playlist work) are
+    whole-file copies. They are now FFmpeg 9.0.2's files plus our changes,
+    by a three-way merge: a 9.0-based copy would have reverted 9.0.2's fix
+    of two buffer overruns in hlsenc.c's playlist parser (`URI="..."` and
+    `IV=0x...` of an existing playlist). The build now checks the SHA-256
+    of the upstream file each copy is based on, also for `af_whisper.c`, and
+    stops when FFmpeg's file is a different one.
+  - glib 2.88 takes three WinRT headers from the toolchain that the
+    windows-x86_64 mingw-w64 (11.0.1) lacks. On that toolchain one upstream
+    commit, the one that dropped glib's own definitions of them, is reverted
+    (`scripts/includes/glib-win32-own-winrt-definitions.patch`); the rest of
+    glib is 2.88.4, which no 2.86 release matches for CVE-2026-15588 and
+    CVE-2026-16118.
+  - **Known CVEs without an upstream fix yet** are listed in
+    `docs/security/known-unfixed.md`: 125 in FFmpeg 9.0.2 (every record says
+    "through 9.0.2" and no newer FFmpeg release exists; 12 of them are in code
+    these builds do not compile), 5 in OpenSSL 4.0.3 (fixed in 4.0.4, not
+    tagged yet), and 15 in other libraries whose newest release still has
+    them.
+- **Breaking, stemsplit 2.0.0:** `use_gpu` defaults to `auto` (it was `0`).
+  Spleeter is unchanged: `auto` never takes a GPU for it, same bytes, same
+  log lines. A RoFormer run that names no `use_gpu` now takes a GPU that
+  passes the filter's checks; on a machine without one it is the CPU run,
+  byte for byte, with a few device lines more in the log. `use_gpu=0` gives
+  the behaviour of 1.x. Also in 2.0.0: `auto` takes cards with a
+  half-precision path (an RTX 3070), because the filter now sets
+  `GGML_VK_DISABLE_COOPMAT=1` and `GGML_VK_DISABLE_F16=1` for its process
+  itself (process-wide: a `whisper` filter on a GPU in the same ffmpeg
+  process is about 3.5 times slower, so run it in another process);
+  `cpu_fallback=0` refuses a RoFormer run that would compute on the CPU;
+  `cpu_assist` (on by default) lets the CPU compute chunks beside a GPU.
+  This release ships stemsplit 2.0.1, which is 2.0.0 with two of its own
+  suite checks fixed for machines with a usable GPU; the filter computes as
+  2.0.0 and `lavfi.stemsplit.version` says `2.0.1`. The smoke gates run the
+  2.0.1 suite, hold a default run and a `use_gpu=auto` run that land on the CPU to
+  `use_gpu=0`'s bytes, and compare Spleeter with the v1.0.46 release.
 - stemsplit 1.2.1: `use_gpu=auto` runs the RoFormer models on a Vulkan GPU
   when the build enables the backend, the device is a real GPU, it beats the
   CPU in a calibration and passes a self-check against the CPU's output;
@@ -25,6 +85,24 @@
   Lines output; espeak-ng 1.52.0 is linked statically and its `espeak-ng-data`
   ships in every platform archive. The model lives in
   nomercy-lyricsalign-models and is pinned by the test suites.
+- lyricsalign 1.1.0, line starts (#130): two refinements of the onset
+  walk-back, both on by default, both only ever moving a written start
+  earlier. `soft_walkback` (float, default `0.1`): a line that follows
+  another without a pause and begins on a vowel or a sonorant walks back to
+  the onset, at most that many seconds; a line that begins on a plosive, a
+  fricative or an h stays on its first phone. `unheard_island` (int, default
+  `1`): a line whose first word scores below 0.01 starts on the stretch of
+  sound no word claims in front of it (0.3 s or longer, after 0.3 s of
+  quiet, within 2 s). `lead_in` covers both, so the JSON has no new field.
+  `soft_walkback=0:unheard_island=0` writes every line as v1.0.46 did.
+- lyricsalign 1.1.0, words (#131): `words[]` keeps its texts when espeak-ng
+  writes two tokens as one word ("of the" is `ʌvðə` in en-us), which made
+  every word of one English line in eight `text: null`. A joined word that is
+  the tokens' own phones is cut into one entry per token; one that sounds
+  different joined ("to be") is one entry with `"text":"to be"`; `null` is
+  left for a word no token accounts for, and only for that word. Line
+  `start`, `end`, `score` and `reason` are unchanged, and a line whose words
+  tied before is written byte for byte as before.
 - CI: the windows-aarch64 release gate runs on GitHub's hosted windows-11-arm
   runner (#76); verify-rc leaves no files behind in the Lima and FreeBSD
   guests, and fleet-health probes the Lima guest.

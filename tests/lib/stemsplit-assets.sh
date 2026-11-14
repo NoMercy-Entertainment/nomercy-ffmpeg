@@ -8,7 +8,7 @@
 #
 # What it fetches, and why each one is pinned:
 #
-#   * the ffmpeg-stemsplit v1.2.1 source archive -- its tests/ directory is the
+#   * the ffmpeg-stemsplit v2.0.1 source archive -- its tests/ directory is the
 #     suite the gates run (design D1). The archive is the tag's, so the checks
 #     are the ones the filter was released with, not whatever the default
 #     branch holds this afternoon.
@@ -53,21 +53,27 @@ PLATFORM="${1:?usage: stemsplit-assets.sh <platform> <dir>}"
 DIR="${2:?usage: stemsplit-assets.sh <platform> <dir>}"
 REF_PLATFORM="${PLATFORM}"
 
-STEMSPLIT_TAG=v1.2.1
+STEMSPLIT_TAG=v2.0.1
 FORGEJO=https://forgejo.phillippepelzer.me/FiLL/ffmpeg-stemsplit
-# The suite comes from the commit the tag points at. It carries the tests-only
-# change that makes the suite's devices block probe for lavapipe first and skip
-# itself loudly where there is none (a runner without a Vulkan loader, or a
-# machine with a real card). FILTER_SHA is asserted below so "the filter in the
-# archive is the tag's file" stays provable even if SUITE_REF ever moves off
-# the tag again.
-SUITE_REF=71d7523
-ARCHIVE_SHA=171c64eec54586f5aa983011da5cbd54e161911cfcceb99e54d9a2af1f0eef4f
-FILTER_SHA=594886e5963b9fc0b2234f5dde96ae463fec8ff9e3a8a2d4c2034ea9629191bb
+# The suite comes from the commit the tag points at (ffdabda is v2.0.1). 2.0.1
+# is 2.0.0 with two suite checks fixed that failed on a machine with a usable
+# GPU, and the version string moved; the filter computes and logs as 2.0.0.
+# Its devices block probes for lavapipe first and skips itself loudly where
+# there is none (a runner without a Vulkan loader, or a machine with a real
+# card); its cpu_fallback block runs in every build and expects the refusal on
+# a machine without a hardware GPU. FILTER_SHA is the digest the stemsplit
+# hand-over names for src/af_stemsplit.c at the release commit
+# (docs/handover-2.0.0.md, which covers 2.0.1); it is asserted below, so "the
+# filter in the archive is the tag's file" stays provable even if SUITE_REF
+# ever moves off the tag, and it is the digest the build log of every platform
+# must show.
+SUITE_REF=ffdabda
+ARCHIVE_SHA=0c8c1d89bdcbde2537bcd67d85a8e0e91937a502575c18f2926436f7b5ad6c4d
+FILTER_SHA=4d16e1652ed77786050814d289bbfa6e35c83ce77e94b8841544f6184c477e56
 # The tiny RoFormer models are the v1.1.0 release asset still: no model file
 # and nothing in tests/make_tiny_models.sh or the converter changed between
-# v1.1.0 and v1.2.1 (git diff --stat v1.1.0..v1.2.1 on those paths is empty),
-# so the 1.2.1 suite's tiny tier runs on the same bytes 1.1.0's did.
+# v1.1.0 and v2.0.1 (git diff --stat v1.1.0..v2.0.1 on those paths is empty),
+# so the 2.0.1 suite's tiny tier runs on the same bytes 1.1.0's did.
 TINY_TAG=v1.1.0
 TINY_SHA=7b04652c855296e7d428ad5a130cf842e4da90eb16d2246fc7393284c42ea235
 SPLEETER_URL=https://github.com/NoMercy-Entertainment/nomercy-stemsplit-models/releases/download/v2026.09.09/spleeter-2stems-f16.gguf
@@ -76,17 +82,17 @@ SPLEETER_SHA=155dc9d2e2eef70ad633af98134df29a5273defaeb98ef013d46251faa69d0ad
 # The previous release: the one the A/B gate compares against. Bump all eight
 # lines together when a release ships; the digests are the ones GitHub reports
 # for the assets (gh release view --json assets).
-REF_VERSION=v1.0.45
+REF_VERSION=v1.0.46
 REF_BASE=https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/releases/download/${REF_VERSION}
 ref_digest() {
 	case "$1" in
-	linux-x86_64)    echo ca5e9bbd91e028fd043073f063aee32f2315efe121b12cf44c8c8d97eda5eb57 ;;
-	linux-aarch64)   echo b21a4125f92e090f1126cc55068281dffb69d74856bfb6e1e4bb3b82c7786e3b ;;
-	windows-x86_64)  echo 731298b37b013f49f60532f3d1a382db1350a01a21c16c9630c5aea9c0c6d649 ;;
-	windows-aarch64) echo f7e3fd03b61c42840ecc9479f8b933aa25fef7e05669b79c8e0e10f944b77080 ;;
-	darwin-x86_64)   echo 5c05f508db5135bffe7b1d988314b2be1fb15e3e2234c2b70fa086935c238632 ;;
-	darwin-arm64)    echo e172947af99052d5b1bd72c32a1555c53d6a323ef1f93d6bf0b71945e49ec65b ;;
-	freebsd-x86_64)  echo 4d6682c8a3dd174667a6d23ea691fe49e218d047270103bea7ccecff93b72f0a ;;
+	linux-x86_64)    echo 5ca071485debe39af0e2ce13c50579f2d49c7a1eba775942dd8b23e0ea07756f ;;
+	linux-aarch64)   echo 54179aa8b2f5e80955ed413f19f4ab58b275417f6ec73c2f0100a3cb8dd97071 ;;
+	windows-x86_64)  echo 221c5562864e61354f1bab2c7fb5df13848d26e4041660899295561f7a8ce73c ;;
+	windows-aarch64) echo b90c873de3fffe9a1576e65f6fe55afa3b12b07f00ec89be9c9a1caa220dad87 ;;
+	darwin-x86_64)   echo b92e9e4db40cb9ee00288f29502f192a04a573337d7a3c7ab8baf9fd900ea660 ;;
+	darwin-arm64)    echo 679833a7f47c5d15f5dd20adfa5fec2596f3505cdc1efec807345787d6c1dad3 ;;
+	freebsd-x86_64)  echo 62e1f4c0c224e4fc988454b84450b94f8008a735b20bc1c765b0b27bb544dd83 ;;
 	*) return 1 ;;
 	esac
 }

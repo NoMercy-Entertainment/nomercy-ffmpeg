@@ -439,6 +439,8 @@ run_lyricsalign_check "lyricsalign lines espeak cannot speak" test_lyricsalign_o
 run_lyricsalign_check "lyricsalign backing shorter and longer than the vocals" test_lyricsalign_backing_lengths
 run_lyricsalign_check "lyricsalign half a second of audio" test_lyricsalign_short_audio
 run_lyricsalign_check "lyricsalign word labels per lyric token" test_lyricsalign_word_labels
+run_lyricsalign_check "lyricsalign words keep their text when espeak joins two tokens (#131)" test_lyricsalign_joined_words
+run_lyricsalign_check "lyricsalign soft_walkback and unheard_island: defaults, range, JFK unchanged (#130)" test_lyricsalign_onset_options
 run_lyricsalign_check "lyricsalign output closed early" test_lyricsalign_output_closed
 run_lyricsalign_check "lyricsalign write error fails the run" test_lyricsalign_write_error
 run_lyricsalign_check "lyricsalign non-ASCII paths" test_lyricsalign_unicode_paths

@@ -48,6 +48,12 @@ default.
   the emissions with the JFK fixture (gate (a) of #126).
 - `make_phone_fixture.py`, `make_unicode_inc.py`: generators for the unit-test
   fixtures of `nm_lyricsalign_phones.h`.
+- `make_words_fixture.sh`: generates `tests/unit/fixtures/lyricsalign-words.tsv`,
+  the fixture of the word tie (#131), with the lab's own espeak-ng:
+  `run.sh shell /repo/tools/lyricsalign-lab/make_words_fixture.sh`.
+
+The lab's ffmpeg also has `amerge` and `pan`, so the graph the lyrics-creator
+eval harness runs (the mix minus the stem as backing) works here too.
 
 ## Measured
 
