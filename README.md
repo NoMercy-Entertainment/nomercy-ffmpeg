@@ -80,7 +80,7 @@ Open an issue first. A pull request comes after the proposal is agreed: fork, th
 
 ## Security
 
-Report problems as described on the [Security](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Security) page. Known unfixed findings are listed in [docs/security/known-unfixed.md](docs/security/known-unfixed.md).
+Report a vulnerability privately, as described in [SECURITY.md](SECURITY.md). More on the [Security](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Security) page. Known unfixed findings are listed in [docs/security/known-unfixed.md](docs/security/known-unfixed.md).
 
 ## License
 
