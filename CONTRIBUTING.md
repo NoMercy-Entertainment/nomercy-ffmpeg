@@ -1,48 +1,37 @@
 # Contributing
 
-## Branch model
+The full guide is in the Wiki: [Contributing](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Contributing). This file is the short version.
 
-```
-feature/fix → dev → (PR, the only route) → master → release
-```
+## The route
 
-- **`dev`** is the integration branch. Do your work here (or in a branch merged into `dev`).
-- **`master`** is protected and only ever receives reviewed, fully tested code via a PR **from `dev`**.
-- Direct pushes to `master` are blocked. PRs into `master` from any branch other than `dev` are
-  rejected automatically.
+1. Open an issue first. Say what you want to change and why.
+2. Wait until a maintainer agrees to the proposal. A PR that was never agreed may be closed.
+3. Fork the repository and branch from `dev`.
+4. Open the PR into `dev` and link the issue.
+5. A maintainer builds and tests it, then merges it into `dev`.
 
-## Opening a release PR (dev → master)
+## Branches
 
-1. Open a PR from `dev` into `master`. The PR body comes from the template with a per-platform
-   manual-test checklist.
-2. CI builds all platforms and publishes a **Release Candidate** prerelease `vX.Y.Z-rc` on the
-   Releases page.
-3. For **each** platform: download the RC binary, run the manual suite on **real hardware** —
-   `tests/tests.sh` (unix) or `tests/tests.ps1` (Windows) — confirm the version, and verify
-   hardware acceleration (NVENC/AMF/VPL) where applicable.
-4. Tick the matching checkbox in the PR for every platform you verified.
-5. Get at least one approving review.
+Only `master` and `dev` exist in this repository. Do not push other branches here. Work in your fork.
 
-## Merge requirements
+- `dev` is where changes land.
+- `master` is the latest release. It only receives a PR from `dev`, opened by a maintainer.
 
-A PR into `master` can only merge when **all** of these are green:
+## No CI on fork PRs
 
-- `pr-validation` — source branch is `dev` and every manual-test checkbox is ticked.
-- `pr-build` — full build + export + smoke passed for all 6 platforms.
-- At least one approving review; conversations resolved; branch up to date.
+The build jobs run on the project's self-hosted runners and skip PRs from forks. A maintainer builds all platforms and runs the tests before merging. Say in your PR what you tested yourself.
 
-On merge, `master` builds the **final release** `vX.Y.Z`, runs the Trivy scan, and the `-rc`
-prerelease is deleted.
+## Commit messages
 
-## Smoke vs. manual tests
+Use `type(scope): short description`.
 
-- **CI smoke** (`tests/smoke.sh` / `tests/smoke.ps1`): only checks the binary runs, reports the
-  expected version, and exits cleanly. Cross-arch (linux-aarch64) is checked for presence only.
-- **Manual suite** (`tests/tests.sh` / `tests/tests.ps1`): the full codec/hardware suite a
-  contributor runs on real hardware before ticking the checklist.
+## More
 
-## Restore point
-
-A pre-change checkpoint of `dev` exists at branch `backup/dev-pre-pr-flow-2026-05-27` /
-tag `checkpoint-pre-pr-flow-2026-05-27` (commit `7412436`). Restore with
-`git reset --hard backup/dev-pre-pr-flow-2026-05-27`.
+| Page | What it covers |
+|---|---|
+| [Contributing](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Contributing) | The route and what a good PR has |
+| [Architecture](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Architecture) | How the build is laid out |
+| [Building-Locally](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Building-Locally) | Build one platform on your machine |
+| [Adding-or-Updating-a-Library](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Adding-or-Updating-a-Library) | Change a bundled library or a patch |
+| [Testing](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Testing) | The test scripts and what each one checks |
+| [CI-and-Releases](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/CI-and-Releases) | What happens after a PR is merged |
