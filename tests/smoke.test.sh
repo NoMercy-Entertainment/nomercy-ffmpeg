@@ -89,22 +89,69 @@ fi
 #   input-mkdir  reading a missing input creates its folder
 #   pipe-mkdir   a pipe:1 output leaves a stray folder behind
 #   muxer-missing  spritevtt is left out of the -muxers list
+#   report-missing      FFREPORT is ignored, the -report file is never written
+#   filterstats-missing filter stats_file options are ignored, nothing written
+#   encfiles-missing    x264 and x265 param files (stats, dump-yuv, csv) are not written
+#   vmaf-missing        the libvmaf log_path is not written
+#   lut-mkdir      a read-only open of a missing lut3d file creates its folder
+# The files outside the file protocol (-passlogfile, -vstats_file, FFREPORT,
+# stats_file=) get their folder and a file by default, as the patched build does.
 if [[ "$*" == "-hide_banner -encoders" ]]; then
-  printf ' V....D %s   stub\n' libx264 libvpx-vp9 libopus aac flac ffv1 png mpeg4; exit 0
+  printf ' V....D %s   stub\n' libx264 libx265 libvpx-vp9 libopus aac flac ffv1 png mpeg4; exit 0
+fi
+if [[ "$*" == "-hide_banner -filters" ]]; then
+  echo ' .. libvmaf           VV->V      stub'; exit 0
 fi
 if [[ "$*" == "-hide_banner -muxers" ]]; then
   [[ "${SMOKE_STUB_AUTODIR:-}" == muxer-missing ]] || echo '  E spritevtt   stub'
   echo '  E chapters_vtt   stub'; exit 0
 fi
+# libvmaf with its default model (tests/smoke.sh). SMOKE_STUB_VMAF=noscore
+# runs the filter but prints no score line, as a build without the models.
+if [[ "$*" == *"[a][b]libvmaf"* && "$*" != *log_path=* ]]; then
+  [[ "${SMOKE_STUB_VMAF:-}" == noscore ]] || echo '[Parsed_libvmaf_1 @ 0x1] VMAF score: 93.215400'
+  exit 0
+fi
 if [[ "$*" == *nm-autodir* || "$*" == *testsrc=d=0.5:size=128x72* ]]; then
   mode="${SMOKE_STUB_AUTODIR:-}"; prev=""; sprite=0
   [[ "$*" == *"-f spritevtt"* ]] && sprite=1
+  if [[ "$*" == *lut3d=file=* ]]; then
+    [[ "$mode" == lut-mkdir ]] && mkdir -p nm-autodir/lut/a
+    echo "Error opening file nm-autodir/lut/a/x.cube: No such file or directory" >&2; exit 254
+  fi
+  if [[ -n "${FFREPORT:-}" && "$mode" != report-missing ]]; then
+    rp="${FFREPORT#file=}"; mkdir -p "$(dirname "$rp")"; echo x > "$rp"
+  fi
+  for arg in "$@"; do
+    case "$prev" in
+      -passlogfile) mkdir -p "$(dirname "$arg")"; echo x > "$arg-0.log" ;;
+      -vstats_file) mkdir -p "$(dirname "$arg")"; echo x > "$arg" ;;
+    esac
+    if [[ "$prev" == -x264-params || "$prev" == -x265-params ]] && [[ "$mode" != encfiles-missing ]]; then
+      while read -r f; do
+        mkdir -p "$(dirname "$f")"; echo x > "$f"
+      done < <(tr ':' '\n' <<<"$arg" | sed -n -e 's/^stats=//p' -e 's/^dump-yuv=//p' -e 's/^csv=//p')
+    fi
+    if [[ "$arg" == *log_path=* && "$mode" != vmaf-missing ]]; then
+      f="$(grep -o 'log_path=[^:]*' <<<"$arg" | sed 's/^log_path=//')"
+      mkdir -p "$(dirname "$f")"; echo x > "$f"
+    fi
+    if [[ "$arg" == *stats_file=* && "$mode" != filterstats-missing ]]; then
+      while read -r f; do
+        mkdir -p "$(dirname "$f")"; echo x > "$f"
+      done < <(grep -o 'stats_file=[^[;,]*' <<<"$arg" | sed 's/^stats_file=//')
+    fi
+    prev="$arg"
+  done
+  prev=""
   if [[ "$input" == */nm-autodir/* ]]; then
     [[ "$mode" == input-mkdir ]] && mkdir -p "$(dirname "$input")"
     [[ -f "$input" ]] || { echo "Error opening input $input: No such file or directory" >&2; exit 254; }
   fi
   for arg in "$@"; do
-    if [[ "$prev" != -i && "$arg" == *nm-autodir* ]]; then
+    if [[ "$prev" != -i && "$prev" != -passlogfile && "$prev" != -vstats_file \
+          && "$prev" != -x264-params && "$prev" != -x265-params && "$arg" != *log_path=* \
+          && "$arg" != *stats_file=* && "$arg" == *nm-autodir* ]]; then
       main=1
       case "$prev" in -segment_list|-hls_segment_filename) main=0 ;; esac
       [[ "$arg" == \[* || "$arg" == *%* || "$arg" == *.m3u8 ]] && main=0
@@ -351,7 +398,10 @@ done
 # and the stub that writes everything must pass (Case 1 above).
 for fault in none:test_autodir_mp4 muxer-only:test_autodir_mp4 no-image2:test_autodir_segment \
              file-folder:test_autodir_file_prefix input-mkdir:test_autodir_input \
-             pipe-mkdir:test_autodir_pipe muxer-missing:test_autodir_spritevtt; do
+             pipe-mkdir:test_autodir_pipe report-missing:test_autodir_report \
+             filterstats-missing:test_autodir_filterstats lut-mkdir:test_autodir_readonly \
+             encfiles-missing:test_autodir_x264stats vmaf-missing:test_autodir_vmaf \
+             muxer-missing:test_autodir_spritevtt; do
   SMOKE_STUB_AUTODIR="${fault%%:*}" bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/autodir.log" 2>&1
   rc=$?
   [[ $rc -ne 0 ]] && grep -q "Auto-created output folders: ${fault##*:}" "${WORK}/autodir.log"
@@ -360,6 +410,12 @@ done
 # A skip in smoke is a failure on a release build, and says so.
 grep -q "test_autodir_spritevtt: skipped on a release build" "${WORK}/autodir.log"
 expect "autodir muxer-missing reports the skip as a release-build failure" 0 $?
+
+# libvmaf default model: a run without the score line must fail its check.
+SMOKE_STUB_VMAF=noscore bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/vmaf.log" 2>&1
+rc=$?
+[[ $rc -ne 0 ]] && grep -q "libvmaf did not print a VMAF score" "${WORK}/vmaf.log"
+expect "libvmaf without a score line fails the smoke gate" 0 $?
 
 # Bare missing-path rejection happens before backend discovery. The startup
 # helper must supply a path and require the later model-open failure instead.

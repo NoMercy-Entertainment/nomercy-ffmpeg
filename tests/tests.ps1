@@ -321,6 +321,17 @@ run_custom_test "auto_mkdir_chapters_vtt" { Test-AutoDir -FFmpegExe "$Workspace\
 run_custom_test "auto_mkdir_file_prefix" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode FilePrefix }
 run_custom_test "auto_mkdir_pipe" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Pipe }
 run_custom_test "auto_mkdir_input" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Input }
+run_custom_test "auto_mkdir_passlog" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode PassLog }
+run_custom_test "auto_mkdir_x264pass" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode X264Pass }
+run_custom_test "auto_mkdir_report" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Report }
+run_custom_test "auto_mkdir_vstats" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Vstats }
+run_custom_test "auto_mkdir_filterstats" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode FilterStats }
+run_custom_test "auto_mkdir_readonly" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode ReadOnly }
+run_custom_test "auto_mkdir_x264stats" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode X264Stats }
+run_custom_test "auto_mkdir_x264dump" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode X264Dump }
+run_custom_test "auto_mkdir_x265pass" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode X265Pass }
+run_custom_test "auto_mkdir_x265csv" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode X265Csv }
+run_custom_test "auto_mkdir_vmaf" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Vmaf }
 
 # Hardware acceleration — each runs only where the hardware exists.
 run_hw_test "NVENC" nvenc "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nvenc.mp4" "nvenc"
