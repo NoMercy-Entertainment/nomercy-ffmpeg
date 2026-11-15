@@ -24,6 +24,8 @@ source "${HERE}/lib/lyricsalign.sh"
 source "${HERE}/lib/jpegxl.sh"
 # shellcheck source=lib/alpha-codecs.sh
 source "${HERE}/lib/alpha-codecs.sh"
+# shellcheck source=lib/autodir.sh
+source "${HERE}/lib/autodir.sh"
 
 Workspace="$1"
 shift 2>/dev/null || true
@@ -373,7 +375,21 @@ run_custom_test "hap_alpha" "test_hap_alpha"
 run_custom_test "apv_alpha" "test_apv_alpha"
 run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
-run_test "auto_mkdir" "-y -f lavfi -i \"testsrc=duration=1:size=320x240:rate=1\" -frames:v 1 ${TestRoot}/subdir_test/nested/output.png" "output.png"
+# Auto-created output folders (#134): each asserts the written files.
+run_custom_test "auto_mkdir_mp4" "test_autodir_mp4"
+run_custom_test "auto_mkdir_mov" "test_autodir_mov"
+run_custom_test "auto_mkdir_webm" "test_autodir_webm"
+run_custom_test "auto_mkdir_mkv" "test_autodir_mkv"
+run_custom_test "auto_mkdir_audio" "test_autodir_audio"
+run_custom_test "auto_mkdir_segment" "test_autodir_segment"
+run_custom_test "auto_mkdir_tee" "test_autodir_tee"
+run_custom_test "auto_mkdir_hls" "test_autodir_hls"
+run_custom_test "auto_mkdir_image2" "test_autodir_image2"
+run_custom_test "auto_mkdir_spritevtt" "test_autodir_spritevtt"
+run_custom_test "auto_mkdir_chapters_vtt" "test_autodir_chapters_vtt"
+run_custom_test "auto_mkdir_file_prefix" "test_autodir_file_prefix"
+run_custom_test "auto_mkdir_pipe" "test_autodir_pipe"
+run_custom_test "auto_mkdir_input" "test_autodir_input"
 
 # Hardware acceleration — each runs only where the hardware exists.
 run_hw_test "NVENC" nvenc "-y -i ${SampleVideo} -c:v h264_nvenc ${TestRoot}/test_nvenc.mp4" "nvenc"

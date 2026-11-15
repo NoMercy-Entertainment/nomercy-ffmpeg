@@ -18,6 +18,7 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/lyricsalign.ps1"
 . "$HERE/lib/jpegxl.ps1"
 . "$HERE/lib/alpha-codecs.ps1"
+. "$HERE/lib/autodir.ps1"
 
 Report-Init -Platform $Platform
 
@@ -305,7 +306,21 @@ run_custom_test "hap_alpha" { Test-AlphaCodec -FFmpegExe "$Workspace\ffmpeg.exe"
 run_custom_test "apv_alpha" { Test-AlphaCodec -FFmpegExe "$Workspace\ffmpeg.exe" -Codec liboapv }
 run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i $SampleSvg -frames:v 1 $TestRoot\test_svg.png" "svg"
 run_test "libass" "-y -i '${SampleVideo}' -vf ass='${AssSubPath}' '${TestRoot}/test_ass.mp4'" "ass"
-run_test "auto_mkdir" "-y -f lavfi -i `"testsrc=duration=1:size=320x240:rate=1`" -frames:v 1 $TestRoot\subdir_test\nested\output.png" "output.png"
+# Auto-created output folders (#134): each asserts the written files.
+run_custom_test "auto_mkdir_mp4" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Mp4 }
+run_custom_test "auto_mkdir_mov" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Mov }
+run_custom_test "auto_mkdir_webm" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Webm }
+run_custom_test "auto_mkdir_mkv" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Mkv }
+run_custom_test "auto_mkdir_audio" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Audio }
+run_custom_test "auto_mkdir_segment" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Segment }
+run_custom_test "auto_mkdir_tee" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Tee }
+run_custom_test "auto_mkdir_hls" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Hls }
+run_custom_test "auto_mkdir_image2" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Image2 }
+run_custom_test "auto_mkdir_spritevtt" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode SpriteVtt }
+run_custom_test "auto_mkdir_chapters_vtt" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode ChaptersVtt }
+run_custom_test "auto_mkdir_file_prefix" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode FilePrefix }
+run_custom_test "auto_mkdir_pipe" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Pipe }
+run_custom_test "auto_mkdir_input" { Test-AutoDir -FFmpegExe "$Workspace\ffmpeg.exe" -Mode Input }
 
 # Hardware acceleration — each runs only where the hardware exists.
 run_hw_test "NVENC" nvenc "-y -i $SampleVideo -c:v h264_nvenc $TestRoot\test_nvenc.mp4" "nvenc"

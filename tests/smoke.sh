@@ -29,6 +29,8 @@ source "${HERE}/lib/lyricsalign.sh"
 source "${HERE}/lib/jpegxl.sh"
 # shellcheck source=lib/alpha-codecs.sh
 source "${HERE}/lib/alpha-codecs.sh"
+# shellcheck source=lib/autodir.sh
+source "${HERE}/lib/autodir.sh"
 
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
@@ -329,6 +331,23 @@ for check in test_hap_alpha test_apv_alpha; do
   FFMPEG="${ffmpeg_bin}" "${check}" || fail "Alpha codec round-trip: ${check}"
 done
 ok "HAP and APV retain the alpha gradient in three frames"
+
+# Auto-created output folders (#134): mp4, mov, webm, mkv, audio, segment,
+# tee, hls, image2, spritevtt, chapters_vtt and a file: output, each into its
+# own missing folder, plus pipe:1 and a missing input that must create none.
+# Asserts the files, not the log. tests/lib/autodir.sh skips when an encoder
+# or muxer is missing, but every release build carries libvpx, spritevtt and
+# chapters_vtt, so here a skip is a failure (tests.sh keeps the skip).
+for check in $(autodir_checks); do
+  out="$(FFMPEG="${ffmpeg_bin}" "${check}" 2>&1)"; rc=$?
+  case ${rc} in
+  0) ok "Auto-created output folders: ${out##*$'\n'}" ;;
+  2) echo "${out}"
+     fail "Auto-created output folders: ${check}: skipped on a release build" ;;
+  *) echo "${out}"
+     fail "Auto-created output folders: ${check}" ;;
+  esac
+done
 
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.

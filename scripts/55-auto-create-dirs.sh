@@ -5,158 +5,212 @@
 #/*  create output directories         */#
 #/**************************************/#
 
-# Patch io_open_default in libavformat/options.c to auto-create parent
-# directories when opening files for writing. This is the actual entry
-# point used by muxers (image2, mp4, mkv, etc.) — NOT avio_open2.
+# Create the missing parent folders of any local file FFmpeg opens for
+# writing, so an output can go into a folder that does not exist yet.
 #
-# Works cross-platform: uses _mkdir on Windows, mkdir on Unix.
+# The hook sits in file_open() in libavformat/file.c: the open callback of
+# the "file" protocol. Every local write reaches it, whoever starts it:
+#   - the ffmpeg tool's main output: avio_open2() -> ffio_open_whitelist()
+#     -> ffurl_open_whitelist() -> file_open()  (issue #134: this path never
+#     reached the old hook in io_open_default())
+#   - files a muxer opens itself (image2, hls, dash, segment, spritevtt):
+#     io_open_default() -> ffio_open_whitelist() -> ... -> file_open()
+#   - direct ffurl_open_whitelist() callers (smoothstreaming, tee:, md5:)
+# Because the protocol is already resolved there, pipe:, http:// and every
+# other protocol never get here, and file_open() strips a leading "file:"
+# itself before the hook runs, so "file:out/o.mp4" creates "out", not
+# "file:out".
+#
+# mkdir() and stat() come from os_support.h, which file.c already includes:
+# on Windows it maps them to the UTF-8 aware _wmkdir/stat calls and pulls in
+# direct.h; on Linux, darwin and FreeBSD they are the POSIX calls from
+# sys/stat.h. Best effort: a failed mkdir never fails the open, the open
+# itself reports the real error.
+#
+# Patched by text match only. Each anchor must match exactly once, or the
+# step fails: line-number patches silently patch the wrong place when the
+# FFmpeg source moves.
 
+FILE_C="/build/ffmpeg/libavformat/file.c"
 OPTIONS_FILE="/build/ffmpeg/libavformat/options.c"
 
-if [ ! -f "$OPTIONS_FILE" ]; then
-    log "  ERROR: $OPTIONS_FILE not found"
+HELPER_ANCHOR='#include "url.h"'
+CALL_ANCHOR='    fd = avpriv_open(filename, access, 0666);'
+HELPER_MARK='static void nm_ensure_parent_dirs(const char *path)'
+CALL_MARK='        nm_ensure_parent_dirs(filename);'
+
+if [ ! -f "$FILE_C" ]; then
+    log "  ERROR: $FILE_C not found"
     exit 1
 fi
 
-log "  Patching: $OPTIONS_FILE"
+# Count whole lines that equal the given text exactly.
+count_lines() {  # file, text
+    grep -cxF -- "$2" "$1"
+}
 
-# --- Step 1: Add ff_ensure_dir_exists helper function ---
-log "Step 1: Adding ff_ensure_dir_exists helper"
+log "  Patching: $FILE_C"
 
-if ! grep -q "ff_ensure_dir_exists" "$OPTIONS_FILE"; then
+# --- Step 0: refuse a tree patched by the old io_open_default hook ---
+# The old hook ran before file_open() and turned "file:out/o.mp4" into a
+# folder named "file:out". A fresh FFmpeg tree never has it; finding it
+# means this tree was patched by the previous version of this script.
+log "Step 0: Checking options.c for the old io_open_default hook"
+if [ -f "$OPTIONS_FILE" ] && grep -q "ff_ensure_dir_exists" "$OPTIONS_FILE"; then
+    log "  ERROR: $OPTIONS_FILE still carries the old ff_ensure_dir_exists hook; start from a clean FFmpeg tree"
+    exit 1
+fi
+log "  No old hook in options.c"
 
-    cat > /tmp/mkdir_patch.c << 'MKDIRPATCH'
+helper_count=$(count_lines "$FILE_C" "$HELPER_MARK")
+call_count=$(count_lines "$FILE_C" "$CALL_MARK")
 
-/* --- NoMercy: auto-create output directories --- */
-#include <sys/stat.h>
+if [ "$helper_count" -eq 1 ] && [ "$call_count" -eq 1 ]; then
+    log "  file.c already patched"
+    exit 0
+fi
+if [ "$helper_count" -ne 0 ] || [ "$call_count" -ne 0 ]; then
+    log "  ERROR: file.c is partly patched (helper=${helper_count}, call=${call_count}); start from a clean FFmpeg tree"
+    exit 1
+fi
+
+# Both anchors are checked before anything is written, so a moved anchor
+# fails the step with file.c left exactly as it was.
+for anchor in "$HELPER_ANCHOR" "$CALL_ANCHOR"; do
+    anchor_count=$(count_lines "$FILE_C" "$anchor")
+    if [ "$anchor_count" -ne 1 ]; then
+        log "  ERROR: expected exactly 1 line '${anchor}' in file.c, found ${anchor_count}"
+        exit 1
+    fi
+done
+
+# --- Step 1: Add the nm_ensure_parent_dirs helper ---
+log "Step 1: Adding nm_ensure_parent_dirs helper"
+
+HELPER_FILE=$(mktemp)
+cat > "$HELPER_FILE" << 'MKDIRPATCH'
+
+/* --- NoMercy: auto-create output directories (issue #134) --- */
 #include <errno.h>
+
 #ifdef _WIN32
-#  include <direct.h>
-#  define ff_local_mkdir(p) _mkdir(p)
+#  define NM_IS_DIR_SEP(c) ((c) == '/' || (c) == '\\')
 #else
-#  define ff_local_mkdir(p) mkdir(p, 0755)
+#  define NM_IS_DIR_SEP(c) ((c) == '/')
 #endif
 
 /**
- * Recursively create parent directories for a file path.
- * Only operates on local file paths (no protocol prefix).
- * Safe to call when directories already exist (ignores EEXIST).
+ * Create the missing parent directories of a local file that is about to be
+ * opened for writing. Best effort: every failure is ignored and errno is left
+ * as it was, so the open that follows reports the real error.
  */
-static void ff_ensure_dir_exists(const char *url, int flags)
+static void nm_ensure_parent_dirs(const char *path)
 {
-    char *tmp;
-    const char *sep;
+    struct stat st;
+    const char *sep = NULL;
+    char *dir, *start, *p;
+    int saved_errno = errno;
 
-    /* Only create dirs for output files */
-    if (!(flags & AVIO_FLAG_WRITE))
+    if (!path || !*path)
         return;
 
-    /* Skip non-local paths (URLs with protocol) */
-    if (!url || strstr(url, "://"))
+    for (const char *q = path; *q; q++)
+        if (NM_IS_DIR_SEP(*q))
+            sep = q;
+
+    /* No folder part, or the file sits in the root folder. */
+    if (!sep || sep == path)
         return;
 
-    /* Find the last directory separator */
-    sep = NULL;
-    for (const char *p = url; *p; p++) {
-        if (*p == '/' || *p == '\\')
-            sep = p;
-    }
-
-    /* No directory component — file is in current dir */
-    if (!sep || sep == url)
+    dir = av_strndup(path, sep - path);
+    if (!dir)
         return;
 
-    tmp = av_strndup(url, sep - url);
-    if (!tmp)
-        return;
+    /* The common case: the folder is already there. */
+    if (!stat(dir, &st) && S_ISDIR(st.st_mode))
+        goto done;
 
-    /* Recursively create directories, ignoring EEXIST.
-     * Skip root prefixes so we don't try to mkdir "C:" or "\\server". */
-    char *start = tmp + 1;
+    /* Never try to create a root: skip "/" here, and on Windows "C:\" and
+     * "\\server\share\" (which also covers "\\?\C:\"). */
+    start = dir + 1;
 #ifdef _WIN32
-    /* Drive letter prefix: skip past "C:\\" */
-    if (((tmp[0] >= 'A' && tmp[0] <= 'Z') || (tmp[0] >= 'a' && tmp[0] <= 'z'))
-        && tmp[1] == ':' && (tmp[2] == '/' || tmp[2] == '\\'))
-        start = tmp + 3;
-    /* UNC prefix: skip past "\\server\share" */
-    else if ((tmp[0] == '/' || tmp[0] == '\\') && tmp[0] == tmp[1]) {
-        int slashes = 0;
-        for (start = tmp + 2; *start && slashes < 2; start++)
-            if (*start == '/' || *start == '\\') slashes++;
+    if (((dir[0] >= 'A' && dir[0] <= 'Z') || (dir[0] >= 'a' && dir[0] <= 'z')) &&
+        dir[1] == ':' && NM_IS_DIR_SEP(dir[2])) {
+        start = dir + 3;
+    } else if (NM_IS_DIR_SEP(dir[0]) && NM_IS_DIR_SEP(dir[1])) {
+        int seps = 0;
+        for (start = dir + 2; *start && seps < 2; start++)
+            if (NM_IS_DIR_SEP(*start))
+                seps++;
     }
 #endif
-    for (char *p = start; *p; p++) {
-        if (*p == '/' || *p == '\\') {
+
+    for (p = start; *p; p++) {
+        if (NM_IS_DIR_SEP(*p)) {
             char saved = *p;
             *p = '\0';
-            if (ff_local_mkdir(tmp) != 0 && errno != EEXIST) {
-                av_free(tmp);
-                return;
-            }
+            (void)mkdir(dir, 0755);
             *p = saved;
         }
     }
-    if (ff_local_mkdir(tmp) != 0 && errno != EEXIST) {
-        /* best-effort: don't fail the open */
-    }
-    av_free(tmp);
+    (void)mkdir(dir, 0755);
+
+done:
+    av_free(dir);
+    errno = saved_errno;
 }
 /* --- End NoMercy patch --- */
 MKDIRPATCH
 
-    # Insert after the last #include in options.c
-    last_include_line=$(grep -n '^#include' "$OPTIONS_FILE" | tail -1 | cut -d: -f1)
+awk -v anchor="$HELPER_ANCHOR" -v helper="$HELPER_FILE" '
+    { print }
+    $0 == anchor {
+        while ((getline line < helper) > 0)
+            print line
+        close(helper)
+    }
+' "$FILE_C" > "${FILE_C}.nm_tmp"
+rm -f "$HELPER_FILE"
 
-    if [ -z "$last_include_line" ]; then
-        log "  ERROR: Could not find #include lines in options.c"
-        exit 1
-    fi
-
-    sed -i "${last_include_line}r /tmp/mkdir_patch.c" "$OPTIONS_FILE"
-    rm -f /tmp/mkdir_patch.c
-    log "  Added ff_ensure_dir_exists helper"
-else
-    log "  Helper already exists"
-fi
-
-# Verify helper was added
-if ! grep -q "ff_ensure_dir_exists" "$OPTIONS_FILE"; then
-    log "  ERROR: Helper function verification failed!"
+if [ "$(count_lines "${FILE_C}.nm_tmp" "$HELPER_MARK")" -ne 1 ]; then
+    rm -f "${FILE_C}.nm_tmp"
+    log "  ERROR: inserting the helper did not produce exactly one definition"
     exit 1
 fi
+mv "${FILE_C}.nm_tmp" "$FILE_C"
+log "  Added nm_ensure_parent_dirs helper"
 
-# --- Step 2: Patch io_open_default to call the helper ---
-log "Step 2: Patching io_open_default"
+# --- Step 2: Call the helper from file_open() before the file is opened ---
+log "Step 2: Patching file_open"
 
-if ! grep -q "ff_ensure_dir_exists(url, flags)" "$OPTIONS_FILE"; then
-    awk '
-    /static int io_open_default\(/ { in_func=1 }
-    in_func && /\{/ {
-        print
-        print "    ff_ensure_dir_exists(url, flags);"
-        in_func=0
-        next
+awk -v anchor="$CALL_ANCHOR" -v call="$CALL_MARK" '
+    $0 == anchor {
+        print "    if (flags & AVIO_FLAG_WRITE)"
+        print call
     }
     { print }
-    ' "$OPTIONS_FILE" > /tmp/options_patched.c
+' "$FILE_C" > "${FILE_C}.nm_tmp"
 
-    if [ -s /tmp/options_patched.c ] && grep -q "ff_ensure_dir_exists(url, flags);" /tmp/options_patched.c; then
-        mv /tmp/options_patched.c "$OPTIONS_FILE"
-        log "  Patched io_open_default"
-    else
-        rm -f /tmp/options_patched.c
-        log "  ERROR: awk failed to patch io_open_default"
-        exit 1
-    fi
-else
-    log "  io_open_default already patched"
+if [ "$(count_lines "${FILE_C}.nm_tmp" "$CALL_MARK")" -ne 1 ]; then
+    rm -f "${FILE_C}.nm_tmp"
+    log "  ERROR: inserting the call did not produce exactly one call"
+    exit 1
 fi
+mv "${FILE_C}.nm_tmp" "$FILE_C"
+log "  Patched file_open"
 
-# Verify the patch
-if grep -A5 "io_open_default" "$OPTIONS_FILE" | grep -q "ff_ensure_dir_exists"; then
-    log "  Verified io_open_default patch"
+# --- Verify: the call sits inside file_open(), right before the open ---
+if awk -v call="$CALL_MARK" -v anchor="$CALL_ANCHOR" '
+    /^static int file_open\(URLContext \*h, const char \*filename, int flags\)$/ { in_func = 1; next }
+    in_func && /^}/ { in_func = 0 }
+    in_func && $0 == call { seen = 1; next }
+    in_func && seen && $0 == anchor { ok = 1 }
+    in_func && seen && $0 != anchor { seen = 0 }
+    END { exit ok ? 0 : 1 }
+' "$FILE_C"; then
+    log "  Verified file_open patch"
 else
-    log "  ERROR: io_open_default patch verification failed!"
+    log "  ERROR: file_open patch verification failed!"
     exit 1
 fi
 

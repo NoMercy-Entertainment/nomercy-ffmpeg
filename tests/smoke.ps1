@@ -21,6 +21,7 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/lyricsalign.ps1"
 . "$HERE/lib/jpegxl.ps1"
 . "$HERE/lib/alpha-codecs.ps1"
+. "$HERE/lib/autodir.ps1"
 
 function Fail($msg) { Write-Host "❌ $msg"; exit 1 }
 function Note($msg) { Write-Host "ℹ️  $msg" }
@@ -275,6 +276,21 @@ foreach ($codec in @('hap', 'liboapv')) {
     $result = Test-AlphaCodec -FFmpegExe $ffmpeg -Codec $codec
     if ($result.Status -ne 'Pass') { Write-Host $result.Output; Fail $result.Reason }
     Write-Host "✅ $($result.Output)"
+}
+
+# Auto-created output folders (#134): mp4, mov, webm, mkv, audio, segment,
+# tee, hls, image2, spritevtt, chapters_vtt and a file: output, each into its
+# own missing folder, plus pipe:1 and a missing input that must create none.
+# Asserts the files, not the log. tests/lib/autodir.ps1 skips when an encoder
+# or muxer is missing, but every release build carries libvpx, spritevtt and
+# chapters_vtt, so here a skip is a failure (tests.ps1 keeps the skip).
+foreach ($mode in (Get-AutoDirModes)) {
+    $result = Test-AutoDir -FFmpegExe $ffmpeg -Mode $mode
+    switch ($result.Status) {
+        'Pass' { Write-Host "✅ Auto-created output folders: $($result.Output)" }
+        'Skip' { Write-Host $result.Output; Fail "Auto-created output folders (${mode}): skipped on a release build: $($result.Reason)" }
+        default { Write-Host $result.Output; Fail "Auto-created output folders (${mode}): $($result.Reason)" }
+    }
 }
 
 # Needs to actually execute the binary, so only reachable here, past the

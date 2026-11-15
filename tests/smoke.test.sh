@@ -78,6 +78,62 @@ if [[ "$input" == testsrc=size=64x48* ]]; then
   dd if=/dev/zero of="$out" bs=12288 count="$frames" 2>/dev/null
   exit $?
 fi
+# Auto-created output folders (#134), tests/lib/autodir.sh. Every path under
+# nm-autodir (after a file: prefix, and each tee slave) gets its folder and a
+# file, as the patched open path does. SMOKE_STUB_AUTODIR picks a fault:
+#   none         no folder is ever created
+#   muxer-only   main outputs the ffmpeg tool opens get none; sequences, tee
+#                slaves, hls playlists and option values do: the v1.0.47 bug
+#   no-image2    sequences (%d patterns) get none
+#   file-folder  the old helper's folder named after the file: prefix
+#   input-mkdir  reading a missing input creates its folder
+#   pipe-mkdir   a pipe:1 output leaves a stray folder behind
+#   muxer-missing  spritevtt is left out of the -muxers list
+if [[ "$*" == "-hide_banner -encoders" ]]; then
+  printf ' V....D %s   stub\n' libx264 libvpx-vp9 libopus aac flac ffv1 png mpeg4; exit 0
+fi
+if [[ "$*" == "-hide_banner -muxers" ]]; then
+  [[ "${SMOKE_STUB_AUTODIR:-}" == muxer-missing ]] || echo '  E spritevtt   stub'
+  echo '  E chapters_vtt   stub'; exit 0
+fi
+if [[ "$*" == *nm-autodir* || "$*" == *testsrc=d=0.5:size=128x72* ]]; then
+  mode="${SMOKE_STUB_AUTODIR:-}"; prev=""; sprite=0
+  [[ "$*" == *"-f spritevtt"* ]] && sprite=1
+  if [[ "$input" == */nm-autodir/* ]]; then
+    [[ "$mode" == input-mkdir ]] && mkdir -p "$(dirname "$input")"
+    [[ -f "$input" ]] || { echo "Error opening input $input: No such file or directory" >&2; exit 254; }
+  fi
+  for arg in "$@"; do
+    if [[ "$prev" != -i && "$arg" == *nm-autodir* ]]; then
+      main=1
+      case "$prev" in -segment_list|-hls_segment_filename) main=0 ;; esac
+      [[ "$arg" == \[* || "$arg" == *%* || "$arg" == *.m3u8 ]] && main=0
+      IFS='|' read -r -a paths <<<"$arg"
+      for p in "${paths[@]}"; do
+        [[ "$mode" == file-folder && "$p" == file:* ]] && mkdir -p "$(dirname "$p")"
+        p="${p#\[*\]}"; p="${p#file:}"; dir="$(dirname "$p")"
+        seq=0; [[ "$p" == *%* ]] && seq=1
+        case "$mode:$main:$seq" in
+          none:*|muxer-only:1:*|no-image2:*:1) ;;
+          *) mkdir -p "$dir" ;;
+        esac
+        [[ -d "$dir" ]] || { echo "Error opening output $p: No such file or directory" >&2; exit 254; }
+        if [[ $seq == 1 ]]; then
+          for n in 0 1 2; do echo x > "$(printf "$p" "$n")"; done
+        else
+          echo x > "$p"
+          [[ $sprite == 1 ]] && echo x > "${p%.*}.vtt"
+        fi
+      done
+    fi
+    prev="$arg"
+  done
+  if [[ "$out" == pipe:1 ]]; then
+    [[ "$mode" == pipe-mkdir ]] && mkdir -p nm-autodir-stray
+    echo x
+  fi
+  exit 0
+fi
 if [[ "$out" != - && -f "$input" ]]; then
   cp "$input" "$out" || exit 1
   if [[ "$out" == */decoded.rgba && "${SMOKE_STUB_CORRUPT_JXL:-0}" == 1 ]]; then
@@ -290,6 +346,20 @@ for codec in hap liboapv; do
     expect "$codec $fault fails at its alpha gate" 0 $?
   done
 done
+
+# Auto-created output folders (#134): each fault must fail at its own check,
+# and the stub that writes everything must pass (Case 1 above).
+for fault in none:test_autodir_mp4 muxer-only:test_autodir_mp4 no-image2:test_autodir_segment \
+             file-folder:test_autodir_file_prefix input-mkdir:test_autodir_input \
+             pipe-mkdir:test_autodir_pipe muxer-missing:test_autodir_spritevtt; do
+  SMOKE_STUB_AUTODIR="${fault%%:*}" bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/autodir.log" 2>&1
+  rc=$?
+  [[ $rc -ne 0 ]] && grep -q "Auto-created output folders: ${fault##*:}" "${WORK}/autodir.log"
+  expect "autodir ${fault%%:*} fails at ${fault##*:}" 0 $?
+done
+# A skip in smoke is a failure on a release build, and says so.
+grep -q "test_autodir_spritevtt: skipped on a release build" "${WORK}/autodir.log"
+expect "autodir muxer-missing reports the skip as a release-build failure" 0 $?
 
 # Bare missing-path rejection happens before backend discovery. The startup
 # helper must supply a path and require the later model-open failure instead.
