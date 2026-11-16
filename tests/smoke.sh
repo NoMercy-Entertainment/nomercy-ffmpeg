@@ -29,6 +29,8 @@ source "${HERE}/lib/lyricsalign.sh"
 source "${HERE}/lib/jpegxl.sh"
 # shellcheck source=lib/alpha-codecs.sh
 source "${HERE}/lib/alpha-codecs.sh"
+# shellcheck source=lib/autodir.sh
+source "${HERE}/lib/autodir.sh"
 
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
@@ -330,6 +332,25 @@ for check in test_hap_alpha test_apv_alpha; do
 done
 ok "HAP and APV retain the alpha gradient in three frames"
 
+# Auto-created output folders (#134): mp4, mov, webm, mkv, audio, segment,
+# tee, hls, image2, spritevtt, chapters_vtt and a file: output, each into its
+# own missing folder, the files outside the file protocol (two-pass logs,
+# -report, -vstats_file, filter stats files), plus pipe:1, a missing input and
+# a missing filter file that must create none.
+# Asserts the files, not the log. tests/lib/autodir.sh skips when an encoder
+# or muxer is missing, but every release build carries libvpx, spritevtt and
+# chapters_vtt, so here a skip is a failure (tests.sh keeps the skip).
+for check in $(autodir_checks); do
+  out="$(FFMPEG="${ffmpeg_bin}" "${check}" 2>&1)"; rc=$?
+  case ${rc} in
+  0) ok "Auto-created output folders: ${out##*$'\n'}" ;;
+  2) echo "${out}"
+     fail "Auto-created output folders: ${check}: skipped on a release build" ;;
+  *) echo "${out}"
+     fail "Auto-created output folders: ${check}" ;;
+  esac
+done
+
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.
 assert_cpu_variant_startup "${ffmpeg_bin}" "${PLATFORM}"
@@ -348,6 +369,21 @@ ts_out=$("${ffmpeg_bin}" -hide_banner -nostats -f lavfi -i "sine=frequency=440:d
 [[ -n "${ts_out}" ]] || fail "trailingsilence: empty metadata extraction"
 [[ "${ts_out}" == "1" ]] || fail "trailingsilence did not detect the tail (got '${ts_out}')"
 ok "trailingsilence detected the padded tail (detected=${ts_out})"
+
+# libvmaf with no model option must load its built-in default model
+# (vmaf_v0.6.1) and print a score. The models are compiled in by meson only
+# when xxd (or a stand-in) exists, and a build without them still has the
+# filter: assert the score line, not the exit code. Every release build
+# carries libvmaf, so a missing filter fails here too. INFO level because
+# the score is logged at AV_LOG_INFO.
+vmaf_out="$("${ffmpeg_bin}" -hide_banner -nostats -loglevel info \
+    -f lavfi -i "testsrc=d=0.5:size=128x72:rate=10" \
+    -lavfi "split[a][b];[a][b]libvmaf" -f null - 2>&1)" || true
+if [[ ! "${vmaf_out}" =~ VMAF\ score:\ [0-9]+(\.[0-9]+)? ]]; then
+  echo "${vmaf_out}"
+  fail "libvmaf did not print a VMAF score with its built-in default model (vmaf_v0.6.1)"
+fi
+ok "libvmaf loads its built-in default model (vmaf_v0.6.1): ${BASH_REMATCH[0]}"
 
 # whisper filter options (#112), with a real model. Only where the workflow
 # fetched one (the linux-x86_64 job); everywhere else they skip with a note.

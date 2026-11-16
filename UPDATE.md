@@ -4,6 +4,32 @@
 
 ### Unreleased
 
+- **Auto-create directories now covers every file ffmpeg writes (#134).**
+  Until now the folder was only created for files a muxer opens itself
+  (image2, HLS), so `ffmpeg -i in.mkv out/new/o.mp4` still failed with "No
+  such file or directory". Missing parent folders are now created for:
+  - every output through the file protocol: the main output of every format,
+    segment, HLS, image2, tee, spritevtt, chapters_vtt and muxer side files;
+  - the two-pass log (`-passlogfile`), `-report` and `-vstats_file`;
+  - filter stats files (psnr, ssim, xpsnr, ssim360, vmafmotion, loudnorm,
+    signature, deshake, vidstabdetect, paletteuse, curves, firequalizer);
+  - the files libx264 and libx265 write themselves (stats, `dump-yuv`, `csv`,
+    `analysis-save`), however they are set, and the libvmaf `log_path`.
+
+  `pipe:`, network protocols and files opened for reading never create a
+  folder. A failed mkdir never hides the real error of the open.
+- **libvmaf works without a model file.** Every earlier release shipped
+  libvmaf without its built-in models (the build tool that embeds them was
+  missing and the build skipped them silently), so a plain `libvmaf` filter
+  failed with "could not load libvmaf model". The models are compiled in
+  again, and the build now stops if they are missing. The bootstrap model
+  set `vmaf_b_v0.6.3` still does not load.
+- **Documentation moved to the
+  [Wiki](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Home):**
+  one page per component. The README is an overview with links, and there
+  is a contributor guide (CONTRIBUTING.md) and a security policy with
+  private vulnerability reporting (SECURITY.md).
+
 - **Security: every bundled library with a known CVE that upstream has fixed
   is on the fixed release.** Checked 2026-11-12 against the CVE records, OSV,
   the Debian tracker and NVD, for every library linked into the binaries.

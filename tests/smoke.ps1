@@ -21,6 +21,7 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/lyricsalign.ps1"
 . "$HERE/lib/jpegxl.ps1"
 . "$HERE/lib/alpha-codecs.ps1"
+. "$HERE/lib/autodir.ps1"
 
 function Fail($msg) { Write-Host "❌ $msg"; exit 1 }
 function Note($msg) { Write-Host "ℹ️  $msg" }
@@ -277,6 +278,23 @@ foreach ($codec in @('hap', 'liboapv')) {
     Write-Host "✅ $($result.Output)"
 }
 
+# Auto-created output folders (#134): mp4, mov, webm, mkv, audio, segment,
+# tee, hls, image2, spritevtt, chapters_vtt and a file: output, each into its
+# own missing folder, the files outside the file protocol (two-pass logs,
+# -report, -vstats_file, filter stats files), plus pipe:1, a missing input and
+# a missing filter file that must create none.
+# Asserts the files, not the log. tests/lib/autodir.ps1 skips when an encoder
+# or muxer is missing, but every release build carries libvpx, spritevtt and
+# chapters_vtt, so here a skip is a failure (tests.ps1 keeps the skip).
+foreach ($mode in (Get-AutoDirModes)) {
+    $result = Test-AutoDir -FFmpegExe $ffmpeg -Mode $mode
+    switch ($result.Status) {
+        'Pass' { Write-Host "✅ Auto-created output folders: $($result.Output)" }
+        'Skip' { Write-Host $result.Output; Fail "Auto-created output folders (${mode}): skipped on a release build: $($result.Reason)" }
+        default { Write-Host $result.Output; Fail "Auto-created output folders (${mode}): $($result.Reason)" }
+    }
+}
+
 # Needs to actually execute the binary, so only reachable here, past the
 # cross-exec early-return.
 Assert-CpuVariantStartup $ffmpeg $Platform
@@ -308,6 +326,23 @@ if ($tsMatches.Count -gt 0) { $tsOut = $tsMatches[$tsMatches.Count - 1].Groups[1
 if ([string]::IsNullOrEmpty($tsOut)) { Fail 'trailingsilence: empty metadata extraction' }
 if ($tsOut -ne '1') { Fail "trailingsilence did not detect the tail (got '$tsOut')" }
 Write-Host "✅ trailingsilence detected the padded tail (detected=$tsOut)"
+
+# libvmaf with no model option must load its built-in default model
+# (vmaf_v0.6.1) and print a score. A build without the compiled-in models
+# still has the filter: assert the score line, not the exit code. Every
+# release build carries libvmaf, so a missing filter fails here too. INFO
+# level because the score is logged at AV_LOG_INFO.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$vmafOut = & $ffmpeg -hide_banner -nostats -loglevel info -f lavfi -i "testsrc=d=0.5:size=128x72:rate=10" `
+    -lavfi "split[a][b];[a][b]libvmaf" -f null - 2>&1 | Out-String
+$ErrorActionPreference = $prevEap
+$vmafMatch = [regex]::Match($vmafOut, 'VMAF score: [0-9]+(\.[0-9]+)?')
+if (-not $vmafMatch.Success) {
+    Write-Host $vmafOut
+    Fail 'libvmaf did not print a VMAF score with its built-in default model (vmaf_v0.6.1)'
+}
+Write-Host "✅ libvmaf loads its built-in default model (vmaf_v0.6.1): $($vmafMatch.Value)"
 
 # stemsplit release gates, 1.1.0's three plus 1.2.0's use_gpu=auto runs in
 # the clean-exit loop (contract §7 rule 7 and §8; the design is
