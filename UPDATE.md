@@ -39,6 +39,12 @@
     within 5 ms (the stretcher's own window smear).
 - **New: libsoxr 0.1.3 (`--enable-libsoxr`)**, the SoX resampler, for
   `aresample=resampler=soxr` on every platform.
+- **Security, rechecked 2026-11-17:** libva 2.23.0 → **2.24.1**
+  (CVE-2026-56438, Linux; the record said "all versions", but 2.24.0 has the
+  fix); in rav1e's Rust dependencies crossbeam-epoch 0.9.18 → **0.9.20**
+  (RUSTSEC-2026-0204) and anyhow 1.0.98 → **1.0.103** (RUSTSEC-2026-0190).
+  OpenSSL's advisory of 2026-11-17 adds three Low CVEs that wait for 4.0.4,
+  like the five of 2026-11-10; see `docs/security/known-unfixed.md`.
 - **Documentation moved to the
   [Wiki](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Home):**
   one page per component. The README is an overview with links, and there

@@ -38,6 +38,26 @@ if [[ "${TARGET_OS}" == "windows" ]] \
     sed -i 's/,[[:space:]]*"git_version"//' /build/librav1e/Cargo.toml
 fi
 
+# Two crates in rav1e 0.8.1's Cargo.lock that end up in the static library
+# have advisories with a fixed release: crossbeam-epoch 0.9.18
+# (RUSTSEC-2026-0204, fixed in 0.9.20, reached through rayon) and anyhow
+# 1.0.98 (RUSTSEC-2026-0190, fixed in 1.0.103). Both are semver-compatible,
+# so move only these two in the lock file and check that it took.
+cargo update -p crossbeam-epoch --precise 0.9.20 2>&1 | log -a
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    exit 1
+fi
+cargo update -p anyhow --precise 1.0.103 2>&1 | log -a
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    exit 1
+fi
+for locked in 'crossbeam-epoch 0.9.20' 'anyhow 1.0.103'; do
+    if ! grep -A1 "^name = \"${locked% *}\"$" Cargo.lock | grep -q "^version = \"${locked#* }\"$"; then
+        log "rav1e: Cargo.lock does not have ${locked} after cargo update"
+        exit 1
+    fi
+done
+
 cargo cinstall -j$(nproc) -v ${LIBRAV1E_TARGET} --prefix=${PREFIX} --library-type=staticlib --crt-static --release 2>&1 | log -a
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
 	LDFLAGS="${OLD_LDFLAGS}"
