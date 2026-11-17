@@ -31,6 +31,10 @@ source "${HERE}/lib/jpegxl.sh"
 source "${HERE}/lib/alpha-codecs.sh"
 # shellcheck source=lib/autodir.sh
 source "${HERE}/lib/autodir.sh"
+# shellcheck source=lib/rubberband.sh
+source "${HERE}/lib/rubberband.sh"
+# shellcheck source=lib/soxr.sh
+source "${HERE}/lib/soxr.sh"
 
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
@@ -331,6 +335,14 @@ for check in test_hap_alpha test_apv_alpha; do
   FFMPEG="${ffmpeg_bin}" "${check}" || fail "Alpha codec round-trip: ${check}"
 done
 ok "HAP and APV retain the alpha gradient in three frames"
+
+# rubberband (both engines, exact length, no start delay) and libsoxr:
+# measured, not only listed.
+for check in test_rubberband_tempo test_rubberband_pitch test_rubberband_finer_tempo \
+    test_rubberband_finer_pitch test_rubberband_engines_differ test_soxr; do
+  FFMPEG="${ffmpeg_bin}" "${check}" || fail "${check}"
+done
+ok "rubberband changes tempo and pitch on both engines without delay; soxr resamples"
 
 # Auto-created output folders (#134): mp4, mov, webm, mkv, audio, segment,
 # tee, hls, image2, spritevtt, chapters_vtt and a file: output, each into its

@@ -26,6 +26,10 @@ source "${HERE}/lib/jpegxl.sh"
 source "${HERE}/lib/alpha-codecs.sh"
 # shellcheck source=lib/autodir.sh
 source "${HERE}/lib/autodir.sh"
+# shellcheck source=lib/rubberband.sh
+source "${HERE}/lib/rubberband.sh"
+# shellcheck source=lib/soxr.sh
+source "${HERE}/lib/soxr.sh"
 
 Workspace="$1"
 shift 2>/dev/null || true
@@ -373,6 +377,12 @@ run_custom_test "jpegxl_animation" "test_jpegxl_animation"
 run_custom_test "jpegxl_defaults" "test_jpegxl_defaults"
 run_custom_test "hap_alpha" "test_hap_alpha"
 run_custom_test "apv_alpha" "test_apv_alpha"
+run_custom_test "rubberband_tempo" "test_rubberband_tempo"
+run_custom_test "rubberband_pitch" "test_rubberband_pitch"
+run_custom_test "rubberband_finer_tempo" "test_rubberband_finer_tempo"
+run_custom_test "rubberband_finer_pitch" "test_rubberband_finer_pitch"
+run_custom_test "rubberband_engines" "test_rubberband_engines_differ"
+run_custom_test "soxr" "test_soxr"
 run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i ${SampleSvg} -frames:v 1 ${TestRoot}/test_svg.png" "svg"
 run_test "libass" "-y -i ${SampleVideo} -vf \"ass=${SampleSubs}\" ${TestRoot}/test_ass.mp4" "ass"
 # Auto-created output folders (#134): each asserts the written files.
