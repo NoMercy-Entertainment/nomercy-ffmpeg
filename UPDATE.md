@@ -24,6 +24,27 @@
   failed with "could not load libvmaf model". The models are compiled in
   again, and the build now stops if they are missing. The bootstrap model
   set `vmaf_b_v0.6.3` still does not load.
+- **New: the `rubberband` filter (Rubber Band 4.0.0, `--enable-librubberband`)
+  on every platform.** It changes tempo and pitch independently of each
+  other and can keep the formants, for example `rubberband=tempo=1.05` (5 %
+  faster, same key) or `rubberband=pitch=1.0595` (one semitone up, same
+  length). `atempo` only changes the tempo. Statically linked; macOS uses
+  Apple's vDSP for the FFT, the other platforms the built-in one. Two
+  changes to FFmpeg's filter:
+  - `engine=finer` selects Rubber Band's R3 engine (higher quality, more
+    CPU); `engine=faster` (R2) stays the default, as upstream.
+  - No delay: the output starts in step with the input and is exactly
+    input length ÷ tempo samples long. Upstream FFmpeg leaves the
+    stretcher's start delay in, up to 32 ms in our measurements; it is now
+    within 5 ms (the stretcher's own window smear).
+- **New: libsoxr 0.1.3 (`--enable-libsoxr`)**, the SoX resampler, for
+  `aresample=resampler=soxr` on every platform.
+- **Security, rechecked 2026-11-17:** libva 2.23.0 → **2.24.1**
+  (CVE-2026-56438, Linux; the record said "all versions", but 2.24.0 has the
+  fix); in rav1e's Rust dependencies crossbeam-epoch 0.9.18 → **0.9.20**
+  (RUSTSEC-2026-0204) and anyhow 1.0.98 → **1.0.103** (RUSTSEC-2026-0190).
+  OpenSSL's advisory of 2026-11-17 adds three Low CVEs that wait for 4.0.4,
+  like the five of 2026-11-10; see `docs/security/known-unfixed.md`.
 - **Documentation moved to the
   [Wiki](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Home):**
   one page per component. The README is an overview with links, and there

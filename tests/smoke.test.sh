@@ -78,6 +78,54 @@ if [[ "$input" == testsrc=size=64x48* ]]; then
   dd if=/dev/zero of="$out" bs=12288 count="$frames" 2>/dev/null
   exit $?
 fi
+# rubberband and libsoxr (tests/lib/rubberband.sh, soxr.sh): answer as the
+# patched build does, from the tempo and pitch in the filter string.
+# SMOKE_STUB_RUBBERBAND picks a fault:
+#   missing         no rubberband filter in the build
+#   delay           the output starts 30 ms late (the unpatched filter)
+#   length          the output is 100 samples too long
+#   nopitch         pitch= is ignored, the sine stays at 440 Hz
+#   engine-ignored  engine= is accepted but both engines give the same output
+# SMOKE_STUB_SOXR=missing: aresample has no soxr engine.
+if [[ "$*" == *resampler=soxr* ]]; then
+  if [[ "${SMOKE_STUB_SOXR:-}" == missing ]]; then
+    echo 'Requested resampling engine is unavailable' >&2; exit 1
+  fi
+  if [[ "$*" == *aspectralstats* ]]; then
+    for i in $(seq 1 14); do echo 'lavfi.aspectralstats.1.centroid=440.2'; done
+  else
+    echo 'lavfi.astats.Overall.Number_of_samples=176400.000000'
+  fi
+  exit 0
+fi
+if [[ "$*" == *rubberband=* ]]; then
+  rb_fault="${SMOKE_STUB_RUBBERBAND:-}"
+  if [[ "$rb_fault" == missing ]]; then
+    echo "No such filter: 'rubberband'" >&2; exit 1
+  fi
+  rb_opts="$(grep -o 'rubberband=[^,]*' <<<"$*")"
+  rb_tempo="$(grep -o 'tempo=[0-9.]*' <<<"$rb_opts" | cut -d= -f2)"
+  rb_pitch="$(grep -o 'pitch=[0-9.]*' <<<"$rb_opts" | cut -d= -f2)"
+  rb_engine="$(grep -o 'engine=[a-z]*' <<<"$rb_opts" | cut -d= -f2)"
+  rb_tempo="${rb_tempo:-1}"; rb_pitch="${rb_pitch:-1}"
+  if [[ "$*" == *"-f hash"* ]]; then
+    [[ "$rb_fault" == engine-ignored ]] && rb_engine=faster
+    printf 'MD5=%s\n' "$(printf '%s %s' "$rb_tempo" "$rb_engine" | md5sum | cut -c1-32)"
+  elif [[ "$*" == *aspectralstats* ]]; then
+    [[ "$rb_fault" == nopitch ]] && rb_pitch=1
+    echo 'lavfi.aspectralstats.1.centroid=3332.0'
+    for i in $(seq 1 12); do
+      awk -v p="$rb_pitch" 'BEGIN { printf "lavfi.aspectralstats.1.centroid=%.1f\n", 440 * p + 1.5 }'
+    done
+    echo 'lavfi.aspectralstats.1.centroid=691.0'
+  else
+    awk -v t="$rb_tempo" -v f="$rb_fault" 'BEGIN {
+      printf "lavfi.silence_end=%.6f\n", 1 / t + 0.0017 + (f == "delay" ? 0.030 : 0)
+      printf "lavfi.astats.Overall.Number_of_samples=%d.000000\n", int(192000 / t + 0.5) + (f == "length" ? 100 : 0)
+    }'
+  fi
+  exit 0
+fi
 # Auto-created output folders (#134), tests/lib/autodir.sh. Every path under
 # nm-autodir (after a file: prefix, and each tee slave) gets its folder and a
 # file, as the patched open path does. SMOKE_STUB_AUTODIR picks a fault:
@@ -393,6 +441,19 @@ for codec in hap liboapv; do
     expect "$codec $fault fails at its alpha gate" 0 $?
   done
 done
+
+# rubberband and soxr: each fault must fail at its own check, and the stub
+# that answers like the patched build must pass (Case 1 above).
+for fault in missing:test_rubberband_tempo delay:test_rubberband_tempo \
+             length:test_rubberband_tempo nopitch:test_rubberband_pitch \
+             engine-ignored:test_rubberband_engines_differ; do
+  SMOKE_STUB_RUBBERBAND="${fault%%:*}" bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/rubberband.log" 2>&1
+  rc=$?
+  [[ $rc -ne 0 ]] && grep -q "❌ ${fault#*:}$" "${WORK}/rubberband.log"
+  expect "rubberband ${fault%%:*} fails at ${fault#*:}" 0 $?
+done
+SMOKE_STUB_SOXR=missing bash "$SMOKE" "$d" 8.1.1 linux-x86_64 >"${WORK}/soxr.log" 2>&1
+rc=$?; [[ $rc -ne 0 ]] && grep -q '❌ test_soxr$' "${WORK}/soxr.log"; expect "missing soxr fails at test_soxr" 0 $?
 
 # Auto-created output folders (#134): each fault must fail at its own check,
 # and the stub that writes everything must pass (Case 1 above).

@@ -22,6 +22,8 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/jpegxl.ps1"
 . "$HERE/lib/alpha-codecs.ps1"
 . "$HERE/lib/autodir.ps1"
+. "$HERE/lib/rubberband.ps1"
+. "$HERE/lib/soxr.ps1"
 
 function Fail($msg) { Write-Host "❌ $msg"; exit 1 }
 function Note($msg) { Write-Host "ℹ️  $msg" }
@@ -274,6 +276,22 @@ foreach ($mode in @('still', 'animated', 'defaults')) {
 
 foreach ($codec in @('hap', 'liboapv')) {
     $result = Test-AlphaCodec -FFmpegExe $ffmpeg -Codec $codec
+    if ($result.Status -ne 'Pass') { Write-Host $result.Output; Fail $result.Reason }
+    Write-Host "✅ $($result.Output)"
+}
+
+# rubberband (both engines, exact length, no start delay) and libsoxr:
+# measured, not only listed.
+$audioChecks = @(
+    { Test-Rubberband -FFmpegExe $ffmpeg -Engine faster -Tempo 2 },
+    { Test-Rubberband -FFmpegExe $ffmpeg -Engine faster -Pitch 0.5 },
+    { Test-Rubberband -FFmpegExe $ffmpeg -Engine finer -Tempo 1.05 },
+    { Test-Rubberband -FFmpegExe $ffmpeg -Engine finer -Pitch 2 },
+    { Test-RubberbandEnginesDiffer -FFmpegExe $ffmpeg },
+    { Test-Soxr -FFmpegExe $ffmpeg }
+)
+foreach ($check in $audioChecks) {
+    $result = & $check
     if ($result.Status -ne 'Pass') { Write-Host $result.Output; Fail $result.Reason }
     Write-Host "✅ $($result.Output)"
 }

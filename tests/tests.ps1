@@ -19,6 +19,8 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/jpegxl.ps1"
 . "$HERE/lib/alpha-codecs.ps1"
 . "$HERE/lib/autodir.ps1"
+. "$HERE/lib/rubberband.ps1"
+. "$HERE/lib/soxr.ps1"
 
 Report-Init -Platform $Platform
 
@@ -304,6 +306,12 @@ run_custom_test "jpegxl_animation" { Test-JpegXL -FFmpegExe "$Workspace\ffmpeg.e
 run_custom_test "jpegxl_defaults" { Test-JpegXL -FFmpegExe "$Workspace\ffmpeg.exe" -DefaultSettings }
 run_custom_test "hap_alpha" { Test-AlphaCodec -FFmpegExe "$Workspace\ffmpeg.exe" -Codec hap }
 run_custom_test "apv_alpha" { Test-AlphaCodec -FFmpegExe "$Workspace\ffmpeg.exe" -Codec liboapv }
+run_custom_test "rubberband_tempo" { Test-Rubberband -FFmpegExe "$Workspace\ffmpeg.exe" -Engine faster -Tempo 2 }
+run_custom_test "rubberband_pitch" { Test-Rubberband -FFmpegExe "$Workspace\ffmpeg.exe" -Engine faster -Pitch 0.5 }
+run_custom_test "rubberband_finer_tempo" { Test-Rubberband -FFmpegExe "$Workspace\ffmpeg.exe" -Engine finer -Tempo 1.05 }
+run_custom_test "rubberband_finer_pitch" { Test-Rubberband -FFmpegExe "$Workspace\ffmpeg.exe" -Engine finer -Pitch 2 }
+run_custom_test "rubberband_engines" { Test-RubberbandEnginesDiffer -FFmpegExe "$Workspace\ffmpeg.exe" }
+run_custom_test "soxr" { Test-Soxr -FFmpegExe "$Workspace\ffmpeg.exe" }
 run_platform_test "librsvg" "linux-x86_64 windows-x86_64 darwin-x86_64" "-y -i $SampleSvg -frames:v 1 $TestRoot\test_svg.png" "svg"
 run_test "libass" "-y -i '${SampleVideo}' -vf ass='${AssSubPath}' '${TestRoot}/test_ass.mp4'" "ass"
 # Auto-created output folders (#134): each asserts the written files.

@@ -1,0 +1,301 @@
+--- a/configure
++++ b/configure
+@@ -7431,7 +7431,7 @@
+ enabled librist           && require_pkg_config librist "librist >= 0.2.7" librist/librist.h rist_receiver_create
+ enabled librsvg           && require_pkg_config librsvg librsvg-2.0 librsvg-2.0/librsvg/rsvg.h rsvg_handle_new_from_data
+ enabled librtmp           && require_pkg_config librtmp librtmp librtmp/rtmp.h RTMP_Socket
+-enabled librubberband     && require_pkg_config librubberband "rubberband >= 1.8.1" rubberband/rubberband-c.h rubberband_new -lstdc++ && append librubberband_extralibs "-lstdc++"
++enabled librubberband     && require_pkg_config librubberband "rubberband >= 3.0.0" rubberband/rubberband-c.h rubberband_new -lstdc++ && append librubberband_extralibs "-lstdc++"
+ enabled libshine          && require_pkg_config libshine shine shine/layer3.h shine_encode_buffer
+ enabled libsmbclient      && { check_pkg_config libsmbclient smbclient libsmbclient.h smbc_init ||
+                                require libsmbclient libsmbclient.h smbc_init -lsmbclient; }
+--- a/libavfilter/af_rubberband.c
++++ b/libavfilter/af_rubberband.c
+@@ -16,29 +16,44 @@
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+  */
+ 
++#include <math.h>
++#include <string.h>
++
+ #include <rubberband/rubberband-c.h>
+ 
+ #include "libavutil/channel_layout.h"
+ #include "libavutil/common.h"
++#include "libavutil/mem.h"
+ #include "libavutil/opt.h"
+ 
+ #include "audio.h"
+ #include "avfilter.h"
+ #include "filters.h"
+ 
++/* Silence is fed to the stretcher in blocks of this many samples: the
++ * preferred start pad, and the tail that flushes it at the end. */
++#define SILENCE_BLOCK 1024
++
+ typedef struct RubberBandContext {
+     const AVClass *class;
+     RubberBandState rbs;
+ 
+     double tempo, pitch;
+     int transients, detector, phase, window,
+-        smoothing, formant, opitch, channels;
++        smoothing, formant, opitch, channels, engine;
+     int64_t nb_samples_out;
+     int64_t nb_samples_in;
++    /* Output length the input asks for: the sum of every input block's
++     * length divided by the tempo in force for that block. */
++    double expected_out;
++    /* Output samples still to discard: the stretcher's start delay. */
++    int64_t to_drop;
+     int64_t first_pts;
+-    int64_t last_pts;
+     int nb_samples;
+     int eof;
++    int nb_channels;
++    float *silence;
++    const float **silence_ptrs;
+ } RubberBandContext;
+ 
+ #define OFFSET(x) offsetof(RubberBandContext, x)
+@@ -76,6 +91,9 @@
+     { "channels",   "set channels",   OFFSET(channels),   AV_OPT_TYPE_INT, {.i64=0}, 0, INT_MAX, A, .unit = "channels" },
+         { "apart",    0,              0,                  AV_OPT_TYPE_CONST, {.i64=RubberBandOptionChannelsApart},    0, 0, A, .unit = "channels" },
+         { "together", 0,              0,                  AV_OPT_TYPE_CONST, {.i64=RubberBandOptionChannelsTogether}, 0, 0, A, .unit = "channels" },
++    { "engine",     "set engine",     OFFSET(engine),     AV_OPT_TYPE_INT, {.i64=RubberBandOptionEngineFaster}, 0, INT_MAX, A, .unit = "engine" },
++        { "faster",   "R2, the engine of Rubber Band 2", 0, AV_OPT_TYPE_CONST, {.i64=RubberBandOptionEngineFaster}, 0, 0, A, .unit = "engine" },
++        { "finer",    "R3, higher quality, more CPU",    0, AV_OPT_TYPE_CONST, {.i64=RubberBandOptionEngineFiner},  0, 0, A, .unit = "engine" },
+     { NULL },
+ };
+ 
+@@ -87,43 +105,123 @@
+ 
+     if (s->rbs)
+         rubberband_delete(s->rbs);
++    s->rbs = NULL;
++    av_freep(&s->silence);
++    av_freep(&s->silence_ptrs);
+ }
+ 
+-static int filter_frame(AVFilterLink *inlink, AVFrame *in)
++static void feed_silence(RubberBandContext *s, int64_t nb_samples, int final)
++{
++    while (nb_samples > 0) {
++        int n = FFMIN(nb_samples, SILENCE_BLOCK);
++
++        nb_samples -= n;
++        rubberband_process(s->rbs, s->silence_ptrs, n, final && !nb_samples);
++    }
++}
++
++/* Retrieve what the stretcher has ready, drop the start delay, and send
++ * the rest on. With limit >= 0, nothing past that output length is sent. */
++static int push_output(AVFilterContext *ctx, int64_t limit)
++{
++    RubberBandContext *s = ctx->priv;
++    AVFilterLink *outlink = ctx->outputs[0];
++    int avail;
++
++    while ((avail = rubberband_available(s->rbs)) > 0) {
++        AVFrame *out = ff_get_audio_buffer(outlink, avail);
++        int64_t keep;
++        int n, skip, ret;
++
++        if (!out)
++            return AVERROR(ENOMEM);
++        n = rubberband_retrieve(s->rbs, (float *const *)out->extended_data, avail);
++        skip = FFMIN(n, s->to_drop);
++        s->to_drop -= skip;
++        keep = n - skip;
++        if (limit >= 0)
++            keep = FFMIN(keep, FFMAX(limit - s->nb_samples_out, 0));
++        if (keep <= 0) {
++            av_frame_free(&out);
++            continue;
++        }
++        if (skip) {
++            for (int ch = 0; ch < s->nb_channels; ch++)
++                memmove(out->extended_data[ch], out->extended_data[ch] + skip * sizeof(float),
++                        keep * sizeof(float));
++        }
++        out->nb_samples = keep;
++        out->pts = s->first_pts + av_rescale_q(s->nb_samples_out,
++                     (AVRational){ 1, outlink->sample_rate },
++                     outlink->time_base);
++        s->nb_samples_out += keep;
++        ret = ff_filter_frame(outlink, out);
++        if (ret < 0)
++            return ret;
++    }
++    return 0;
++}
++
++/* End of input: flush the stretcher with silence until the output is as
++ * long as the input asked for, then cut it to exactly that length (or pad
++ * the last few samples with silence should the stretcher come up short). */
++static int flush_output(AVFilterContext *ctx)
+ {
+-    AVFilterContext *ctx = inlink->dst;
+     RubberBandContext *s = ctx->priv;
+     AVFilterLink *outlink = ctx->outputs[0];
+-    AVFrame *out;
+-    int ret = 0, nb_samples;
++    int64_t target = llrint(s->expected_out);
++    int64_t fed = 0, bound = 4 * (int64_t)outlink->sample_rate + 8 * s->to_drop;
++    int ret;
+ 
+     if (s->first_pts == AV_NOPTS_VALUE)
+-        s->first_pts = in->pts;
++        return 0;
+ 
+-    rubberband_process(s->rbs, (const float *const *)in->extended_data, in->nb_samples, s->eof);
+-    s->nb_samples_in += in->nb_samples;
++    while (s->nb_samples_out < target && fed < bound) {
++        int n = FFMAX(s->nb_samples, SILENCE_BLOCK);
+ 
+-    nb_samples = rubberband_available(s->rbs);
+-    if (nb_samples > 0) {
+-        out = ff_get_audio_buffer(outlink, nb_samples);
+-        if (!out) {
+-            av_frame_free(&in);
++        feed_silence(s, n, 0);
++        fed += n;
++        ret = push_output(ctx, target);
++        if (ret < 0)
++            return ret;
++    }
++    feed_silence(s, SILENCE_BLOCK, 1);
++    ret = push_output(ctx, target);
++    if (ret < 0)
++        return ret;
++
++    if (s->nb_samples_out < target) {
++        int64_t missing = target - s->nb_samples_out;
++        AVFrame *out = ff_get_audio_buffer(outlink, missing);
++
++        if (!out)
+             return AVERROR(ENOMEM);
+-        }
++        av_samples_set_silence(out->extended_data, 0, missing, s->nb_channels, out->format);
+         out->pts = s->first_pts + av_rescale_q(s->nb_samples_out,
+                      (AVRational){ 1, outlink->sample_rate },
+                      outlink->time_base);
+-        s->last_pts = out->pts;
+-        nb_samples = rubberband_retrieve(s->rbs, (float *const *)out->extended_data, nb_samples);
+-        out->nb_samples = nb_samples;
++        s->nb_samples_out += missing;
+         ret = ff_filter_frame(outlink, out);
+-        s->nb_samples_out += nb_samples;
++        if (ret < 0)
++            return ret;
+     }
++    return 0;
++}
++
++static int filter_frame(AVFilterLink *inlink, AVFrame *in)
++{
++    AVFilterContext *ctx = inlink->dst;
++    RubberBandContext *s = ctx->priv;
+ 
++    if (s->first_pts == AV_NOPTS_VALUE)
++        s->first_pts = in->pts;
++
++    rubberband_process(s->rbs, (const float *const *)in->extended_data, in->nb_samples, 0);
++    s->nb_samples_in += in->nb_samples;
++    s->expected_out += in->nb_samples / s->tempo;
+     av_frame_free(&in);
+-    if (ff_inlink_queued_samples(inlink) >= s->nb_samples)
+-        ff_filter_set_ready(ctx, 100);
+-    return ret < 0 ? ret : nb_samples;
++
++    return push_output(ctx, -1);
+ }
+ 
+ static int config_input(AVFilterLink *inlink)
+@@ -131,17 +229,36 @@
+     AVFilterContext *ctx = inlink->dst;
+     RubberBandContext *s = ctx->priv;
+     int opts = s->transients|s->detector|s->phase|s->window|
+-               s->smoothing|s->formant|s->opitch|s->channels|
++               s->smoothing|s->formant|s->opitch|s->channels|s->engine|
+                RubberBandOptionProcessRealTime;
+ 
+     if (s->rbs)
+         rubberband_delete(s->rbs);
+-    s->rbs = rubberband_new(inlink->sample_rate, inlink->ch_layout.nb_channels, opts, 1. / s->tempo, s->pitch);
++    av_freep(&s->silence);
++    av_freep(&s->silence_ptrs);
++
++    s->nb_channels = inlink->ch_layout.nb_channels;
++    s->silence = av_calloc(SILENCE_BLOCK, sizeof(*s->silence));
++    s->silence_ptrs = av_calloc(s->nb_channels, sizeof(*s->silence_ptrs));
++    if (!s->silence || !s->silence_ptrs)
++        return AVERROR(ENOMEM);
++    for (int ch = 0; ch < s->nb_channels; ch++)
++        s->silence_ptrs[ch] = s->silence;
++
++    s->rbs = rubberband_new(inlink->sample_rate, s->nb_channels, opts, 1. / s->tempo, s->pitch);
+     if (!s->rbs)
+         return AVERROR(ENOMEM);
+ 
+-    s->nb_samples = rubberband_get_samples_required(s->rbs);
++    /* Real-time mode leaves delay compensation to the caller: feed the
++     * preferred start pad as silence and drop the start delay from the
++     * output, so output sample 0 lines up with input sample 0. */
+     s->first_pts = AV_NOPTS_VALUE;
++    s->nb_samples_in = s->nb_samples_out = 0;
++    s->expected_out = 0;
++    s->eof = 0;
++    s->to_drop = rubberband_get_start_delay(s->rbs);
++    feed_silence(s, rubberband_get_preferred_start_pad(s->rbs), 0);
++    s->nb_samples = rubberband_get_samples_required(s->rbs);
+ 
+     return 0;
+ }
+@@ -152,26 +269,37 @@
+     AVFilterLink *outlink = ctx->outputs[0];
+     RubberBandContext *s = ctx->priv;
+     AVFrame *in = NULL;
+-    int64_t pts;
+-    int status, ret;
++    int64_t pts = AV_NOPTS_VALUE;
++    int status, ret, nb = s->nb_samples > 0 ? s->nb_samples : SILENCE_BLOCK;
+ 
+     FF_FILTER_FORWARD_STATUS_BACK(outlink, inlink);
+ 
+-    ret = ff_inlink_consume_samples(inlink, s->nb_samples, s->nb_samples, &in);
+-
+-    if (ff_inlink_acknowledge_status(inlink, &status, &pts))
+-        s->eof |= status == AVERROR_EOF;
+-
++    ret = ff_inlink_consume_samples(inlink, nb, nb, &in);
+     if (ret < 0)
+         return ret;
+     if (ret > 0) {
+         ret = filter_frame(inlink, in);
+-        if (ret != 0)
++        if (ret < 0)
+             return ret;
+     }
+ 
++    if (!s->eof && ff_inlink_acknowledge_status(inlink, &status, &pts))
++        s->eof = 1;
++
+     if (s->eof) {
+-        ff_outlink_set_status(outlink, AVERROR_EOF, s->last_pts);
++        ret = flush_output(ctx);
++        if (ret < 0)
++            return ret;
++        if (s->first_pts != AV_NOPTS_VALUE)
++            pts = s->first_pts + av_rescale_q(s->nb_samples_out,
++                    (AVRational){ 1, outlink->sample_rate },
++                    outlink->time_base);
++        ff_outlink_set_status(outlink, AVERROR_EOF, pts);
++        return 0;
++    }
++
++    if (ff_inlink_queued_samples(inlink) >= nb) {
++        ff_filter_set_ready(ctx, 100);
+         return 0;
+     }
+ 

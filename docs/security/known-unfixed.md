@@ -4,7 +4,9 @@ The CVEs below cover a version this repository builds, and no release of
 the project that owns the code fixes them yet. Everything that has a fixed
 release is on it (see UPDATE.md). Checked on 2026-11-12 against the CVE
 records (cve.org), OSV, the Debian security tracker and NVD; rechecked
-before every release.
+before every release, last on 2026-11-17 (NVD records published since
+2026-11-10, and every bundled version against the Debian tracker's fixed
+versions).
 
 "Not in this build" means the code is not compiled into the binaries: the
 library or the FFmpeg component is not enabled on any platform.
@@ -12,7 +14,7 @@ library or the FFmpeg component is not enabled on any platform.
 ## FFmpeg 9.0.2 (125 CVEs)
 
 Every record below says "FFmpeg ... through 9.0.2". No newer release exists
-on 2026-11-12: 9.0.2 is the last tag of the 9.0 line, and 9.1 has no release
+on 2026-11-17: 9.0.2 is the last tag of the 9.0 line, and 9.1 has no release
 yet. They move to the next FFmpeg point release when it is out.
 
 | CVE | published | where |
@@ -147,7 +149,7 @@ yet. They move to the next FFmpeg point release when it is out.
 
 | library (version built) | CVEs | note |
 |---|---|---|
-| OpenSSL 4.0.3 | CVE-2026-88822, CVE-2026-88823, CVE-2026-95691, CVE-2026-95692, CVE-2026-107496 | published 2026-11-10; fixed in 4.0.4 / 4.1.1, which are not tagged yet |
+| OpenSSL 4.0.3 | CVE-2026-88822, CVE-2026-88823, CVE-2026-95691, CVE-2026-95692, CVE-2026-107496, CVE-2026-35190, CVE-2026-107493, CVE-2026-124709 | advisories of 2026-11-10 and 2026-11-17 (the last three Low); fixed in 4.0.4 / 4.1.1, which are not tagged yet on 2026-11-17 |
 | openjpeg 2.5.4 | CVE-2026-6192, CVE-2026-107080 | encoder side; 2.5.4 is the newest release |
 | libbluray 1.4.1 | CVE-2026-112282, CVE-2026-112283 | "through 1.5.1", the newest release |
 | libdvdnav 7.0.0 | CVE-2026-112058 | "through 7.0.0", the newest release |
@@ -156,14 +158,20 @@ yet. They move to the next FFmpeg point release when it is out.
 | giflib 6.1.3 | CVE-2026-26740 | fixed only in the repository head; giflib is not linked into the ffmpeg binary |
 | glib 2.88.4 | CVE-2026-86469 | no fixed release |
 | libass 0.17.5 | CVE-2026-95127 | reported against 0.17.5, the newest release |
-| libva 2.23.0 | CVE-2026-56438 | "all versions" |
 | cairo 1.18.4 | CVE-2025-50422 | "through 1.18.4"; the 1.18.6 notes do not mention it |
 | libtiff 4.7.2 | CVE-2026-52492 | in the rgb2ycbcr tool, which is not shipped |
+| libstdc++ (GCC) | CVE-2026-125709 | a failed byte-wise `putc()` on a file stream; no GCC release has the fix yet. Linked statically where the toolchain is GCC |
 
 ## Not counted here
 
 - whisper.cpp CVE-2026-17512 and CVE-2026-17513 name a development snapshot,
   so whether 1.9.1 is in range cannot be told from the records.
-- Advisories in the Rust crates librsvg and rav1e lock (bytes, time,
-  tracing-subscriber): which of those crates end up in the static libraries
-  was not determined.
+- Rust crates in the librsvg 2.61.5 and rav1e 0.8.1 lock files, checked
+  against OSV with `cargo tree` on 2026-11-17. The two with a fixed release
+  that reach a static library are moved to it in scripts/21-librav1e.sh
+  (crossbeam-epoch 0.9.20, anyhow 1.0.103). Not in any shipped library:
+  bytes and rand in librsvg (rand only at compile time, in a proc-macro),
+  tracing-subscriber, rustix, git2 and libz-sys in rav1e (the command-line
+  tool or the build script). Left: crates marked unmaintained (chrono,
+  fxhash, paste, pin-utils, core2) and rand's "unsound with a custom
+  logger" note, none of which is a vulnerability.
