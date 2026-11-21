@@ -56,10 +56,13 @@ function Invoke-StemsplitBashCheck {
     $assets = $env:STEMSPLIT_ASSETS_DIR
     if (-not $assets) {
         $next = Join-Path (Split-Path -Parent (Resolve-Path $FFmpegExe).Path) 'stemsplit-assets'
+        $own = Split-Path -Parent (Resolve-Path $FFmpegExe).Path
         if (Test-Path $next) { $assets = $next }
+        # stemsplit-assets.sh pointed at the binary's own directory.
+        elseif (Test-Path (Join-Path $own 'ffmpeg-stemsplit/.nm-suite-tag')) { $assets = $own }
     }
     if (-not $assets -or -not (Test-Path $assets)) {
-        return @{ Status = 'Skip'; Reason = 'no stemsplit assets in this environment (run tests/lib/stemsplit-assets.sh <platform> <dir> and set STEMSPLIT_ASSETS_DIR=<dir>)'; Output = '' }
+        return @{ Status = 'Skip'; Reason = 'no stemsplit assets in this environment (run tests/lib/stemsplit-assets.sh <platform> <dir> and set STEMSPLIT_ASSETS_DIR=<dir>; a stemsplit-assets directory next to the binary is found without it)'; Output = '' }
     }
     $assets = ((Resolve-Path $assets).Path -replace '\\', '/')
 

@@ -39,6 +39,12 @@ source "${HERE}/lib/soxr.sh"
 WORKSPACE="${1:?workspace dir required}"
 EXPECTED_VERSION="${2:?expected version required}"
 PLATFORM="${3:-}"
+# No platform given: take this machine's. An empty platform is nobody's
+# platform, and the checks below would treat it as one that carries the ggml
+# cpu dispatcher, which fails on macOS.
+if [[ -z "${PLATFORM}" ]]; then
+  PLATFORM="$(host_platform_tag)" || PLATFORM=""
+fi
 
 fail() { echo "❌ $*" >&2; exit 1; }
 note() { echo "ℹ️  $*"; }

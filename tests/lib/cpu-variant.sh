@@ -50,6 +50,26 @@
 # test_cpu_variant() directly: smoke.sh has its own fail()/note()/ok()
 # reporting and its own cross-exec platform handling that must run first.
 
+# Prints the platform tag of the machine this runs on ("darwin-x86_64",
+# "linux-aarch64", ...), for a caller that was given none. Fails, printing
+# nothing, on a host that is not one of the seven platforms.
+host_platform_tag() {
+	local os arch
+	case "$(uname -s)" in
+	Linux) os=linux ;;
+	Darwin) os=darwin ;;
+	FreeBSD) os=freebsd ;;
+	MINGW* | MSYS* | CYGWIN*) os=windows ;;
+	*) return 1 ;;
+	esac
+	case "$(uname -m)" in
+	x86_64 | amd64) arch=x86_64 ;;
+	arm64 | aarch64) if [[ "${os}" == darwin ]]; then arch=arm64; else arch=aarch64; fi ;;
+	*) return 1 ;;
+	esac
+	echo "${os}-${arch}"
+}
+
 # True if the platform tag carries no ggml cpu dispatcher at all (fixed
 # instruction level, Task 6) -- NOMERCY_GGML_CPU is a no-op there.
 cpu_variant_is_darwin() {

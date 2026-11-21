@@ -22,6 +22,12 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/rubberband.ps1"
 . "$HERE/lib/soxr.ps1"
 
+# Several checks change into a scratch directory before they run ffmpeg, so a
+# relative workspace (.\workspace) would stop resolving there.
+if (Test-Path -LiteralPath $Workspace -PathType Container) {
+    $Workspace = (Resolve-Path -LiteralPath $Workspace).Path
+}
+
 Report-Init -Platform $Platform
 
 $TOTAL_WIDTH_TEXT = 54

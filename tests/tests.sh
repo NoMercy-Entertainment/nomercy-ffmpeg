@@ -63,7 +63,15 @@ if [[ -L "$Workspace" ]]; then
 	exit 1
 fi
 
-[[ -z "$Platform" ]] && Platform="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+# Several checks change into a scratch directory before they run ffmpeg, so a
+# relative workspace (./workspace) would stop resolving there.
+if [[ -d "$Workspace" ]]; then
+	Workspace="$(cd "$Workspace" && pwd)"
+fi
+
+if [[ -z "$Platform" ]]; then
+	Platform="$(host_platform_tag)" || Platform="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+fi
 report_init "$Platform"
 
 TOTAL_WIDTH_TEXT=54

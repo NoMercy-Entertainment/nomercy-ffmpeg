@@ -15,6 +15,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# No platform given: take this machine's. An empty platform is nobody's
+# platform, and the checks below would run as if for one.
+if (-not $Platform) {
+    $Platform = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'windows-aarch64' } else { 'windows-x86_64' }
+}
+
 $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/cpu-variant.ps1"
 . "$HERE/lib/stemsplit.ps1"
