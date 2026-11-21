@@ -1,0 +1,127 @@
+NoMercy: on an Intel Mac, register ggml's Metal device only when the default
+GPU can run the backend well.
+
+ggml's Metal backend is built for both Macs. Apple Silicon is untouched. On
+x86_64 the default device must report the Metal 3 GPU family and must not be
+an integrated (low power) GPU; otherwise the backend registers no device and
+every filter stays on the CPU, as all releases up to v1.0.49 did there.
+Without Metal 3 ggml_metal_device_supports_op() refuses the matrix products
+and the graph bounces between GPU and CPU. NOMERCY_GGML_METAL=1 takes the
+default device regardless (for measuring a GPU this rule leaves out).
+
+Applied by scripts/48-whisper.sh to the pinned v1.9.1 checkout, after the
+residency-sets sed. Not sent upstream: upstream offers the device on every
+Mac and leaves the choice to the application.
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index 4a3ebb5..fb338fb 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -269,6 +269,10 @@ void ggml_metal_event_encode_signal(ggml_metal_event_t ev, ggml_metal_cmd_buf_t
+ void ggml_metal_event_encode_wait  (ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf);
+ 
+ ggml_metal_device_t ggml_metal_device_init(int device);
++
++// NoMercy: false when the default Metal device should not be offered at all
++// (see the definition in ggml-metal-device.m)
++bool nm_ggml_metal_default_device_usable(void);
+ void ggml_metal_device_free(ggml_metal_device_t dev);
+ 
+ ggml_metal_device_t ggml_metal_device_get(int device);
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index 611221f..6ed546b 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -676,6 +676,62 @@ static enum ggml_metal_device_id ggml_metal_device_id_parse(const char * name) {
+     return GGML_METAL_DEVICE_GENERIC;
+ }
+ 
++// NoMercy: decide whether the Metal backend registers a device at all.
++//
++// Apple Silicon is left exactly as upstream has it. On an Intel Mac the answer
++// depends on the GPU, and a wrong yes is worse than a no: without Metal 3 the
++// device has no simdgroup reduction, ggml_metal_device_supports_op() then
++// refuses the matrix products, and the graph bounces between GPU and CPU for
++// every one of them. So the default device has to report the Metal 3 family
++// (AMD Vega and the 5000/6000 series do on macOS 13 and later; Polaris, the
++// Radeon Pro 4xx/5xx and RX 580, does not).
++//
++// Intel's integrated GPUs report Metal 3 too, but nobody has measured one with
++// this backend, and they share the CPU's memory and power budget. Until
++// someone does, they stay on the CPU, which is what every release before this
++// one did on these machines.
++//
++// NOMERCY_GGML_METAL=1 takes the default device regardless, for measuring
++// exactly those GPUs. NOMERCY_GGML_GPU=0 remains the off switch.
++//
++// supportsFamily: is macOS 10.15; it is asked for first, so an older system
++// answers no instead of raising on an unknown selector.
++bool nm_ggml_metal_default_device_usable(void) {
++#if TARGET_CPU_X86_64
++    bool usable = false;
++
++    @autoreleasepool {
++        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
++
++        if (device == nil) {
++            GGML_LOG_INFO("%s: no Metal device, the CPU is used\n", __func__);
++            return false;
++        }
++
++        const char * force = getenv("NOMERCY_GGML_METAL");
++
++        if (![device respondsToSelector:@selector(supportsFamily:)]) {
++            GGML_LOG_INFO("%s: %s: this macOS cannot report the GPU family, the CPU is used\n", __func__, [[device name] UTF8String]);
++        } else if (force != NULL && strcmp(force, "1") == 0) {
++            GGML_LOG_INFO("%s: %s: taken because NOMERCY_GGML_METAL=1\n", __func__, [[device name] UTF8String]);
++            usable = true;
++        } else if (![device supportsFamily:MTLGPUFamilyMetal3_GGML]) {
++            GGML_LOG_INFO("%s: %s does not report Metal 3, the CPU is used\n", __func__, [[device name] UTF8String]);
++        } else if ([device isLowPower]) {
++            GGML_LOG_INFO("%s: %s is an integrated GPU, the CPU is used (NOMERCY_GGML_METAL=1 to try it)\n", __func__, [[device name] UTF8String]);
++        } else {
++            usable = true;
++        }
++
++        [device release];
++    }
++
++    return usable;
++#else
++    return true;
++#endif
++}
++
+ ggml_metal_device_t ggml_metal_device_init(int device) {
+     ggml_metal_device_t dev = calloc(1, sizeof(struct ggml_metal_device));
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
+index a1003b3..2744c71 100644
+--- a/ggml/src/ggml-metal/ggml-metal.cpp
++++ b/ggml/src/ggml-metal/ggml-metal.cpp
+@@ -590,6 +590,11 @@ static ggml_guid_t ggml_backend_metal_guid(void) {
+ }
+ 
+ ggml_backend_t ggml_backend_metal_init(void) {
++    // NoMercy: the registry can be empty now (see ggml_backend_metal_reg)
++    if (ggml_backend_reg_dev_count(ggml_backend_metal_reg()) == 0) {
++        return NULL;
++    }
++
+     ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_metal_reg(), 0);
+     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
+ 
+@@ -920,6 +925,13 @@ ggml_backend_reg_t ggml_backend_metal_reg(void) {
+ 
+         static std::vector<ggml_backend_device_ptr> devs;
+ 
++        // NoMercy: no device is registered when the default GPU is one this
++        // backend should not run on; every caller then sees a registry
++        // without a Metal device and stays on the CPU.
++        if (!initialized && !nm_ggml_metal_default_device_usable()) {
++            g_devices = 0;
++        }
++
+         if (!initialized) {
+             // workaround macOS limitation (kIOGPUCommandBufferCallbackErrorImpactingInteractivity) until proper fix becomes possible
+             // ref: https://github.com/ggml-org/llama.cpp/issues/20141#issuecomment-4272947703

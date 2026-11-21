@@ -152,7 +152,7 @@ assert_vulkan_backend_present() {  # bin, platform
   local bin="$1" platform="$2" diag
 
   if ! vulkan_platform_has_backend "${platform}"; then
-    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (darwin-arm64 gets Metal instead, asserted separately below)"
+    note "vulkan: skipped on ${platform} — it carries no Vulkan by design (the Mac builds get Metal instead, asserted separately below)"
     return 0
   fi
 
@@ -233,8 +233,8 @@ assert_vulkan_startup() {  # bin, platform
   esac
 }
 
-# ggml Metal GPU backend (2026-09-27-metal-backend plan, Task 3): darwin-arm64
-# only, and unlike Vulkan there is no startup check to add here. Global
+# ggml Metal GPU backend (2026-09-27-metal-backend plan, Task 3): both Mac
+# builds, and unlike Vulkan there is no startup check to add here. Global
 # Constraint of that plan is that nothing in this repo's own CI proves Metal
 # actually runs -- only the owner's Apple Silicon Mac can, via
 # tools/metal/verify-on-mac.sh -- so both checks below are pure greps over the
@@ -246,7 +246,7 @@ assert_metal_backend_present() {  # bin, platform
   local bin="$1" platform="$2"
 
   if ! metal_platform_has_backend "${platform}"; then
-    note "metal: skipped on ${platform} — Metal is darwin-arm64 only (darwin-x86_64 stays off on purpose; freebsd and linux/windows never had a Metal question at all)"
+    note "metal: skipped on ${platform} — Metal is in the two Mac builds only"
     return 0
   fi
 

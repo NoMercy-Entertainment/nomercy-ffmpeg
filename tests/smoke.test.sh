@@ -528,6 +528,29 @@ grep -q 'darwin-x86_64 carries no ggml cpu dispatcher' "${WORK}/noplatform.log" 
   ! grep -q 'does not carry the ggml cpu dispatcher' "${WORK}/noplatform.log"
 expect "no platform argument on an Intel Mac runs as darwin-x86_64" 0 $?
 
+# Metal is in both Mac builds and in no other. An Intel Mac was left out until
+# v1.0.49, so its archive was never checked for the backend at all.
+for c in darwin-arm64:0 darwin-x86_64:0 freebsd-x86_64:1 linux-x86_64:1 linux-aarch64:1 windows-x86_64:1 windows-aarch64:1; do
+  want=expected; [[ "${c##*:}" == 0 ]] || want="not expected"
+  metal_platform_has_backend "${c%%:*}"; expect "Metal backend on ${c%%:*}: ${want}" "${c##*:}" $?
+done
+# The stubs carry stemsplit's "none." statement, which the gate reads first.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0 none; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0 none
+bash "$SMOKE" "$d" 8.1.1 darwin-x86_64 >"${WORK}/metal-missing.log" 2>&1; rc=$?
+[[ $rc -ne 0 ]] && grep -q 'does not carry the ggml Metal backend' "${WORK}/metal-missing.log"
+expect "Intel Mac archive without the Metal backend fails" 0 $?
+printf '%s\n' '# kernel void kernel_mul_mm' '# using embedded metal library' >>"$d/ffmpeg"
+bash "$SMOKE" "$d" 8.1.1 darwin-x86_64 >"${WORK}/metal-present.log" 2>&1
+grep -q 'metal: ggml Metal backend is linked in' "${WORK}/metal-present.log" &&
+  ! grep -q 'does not carry the ggml Metal backend' "${WORK}/metal-present.log"
+expect "Intel Mac archive with the Metal backend passes the Metal check" 0 $?
+# One marker alone is not the backend.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0 none; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0 none
+printf '%s\n' '# using embedded metal library' >>"$d/ffmpeg"
+bash "$SMOKE" "$d" 8.1.1 darwin-x86_64 >"${WORK}/metal-half.log" 2>&1
+grep -q 'does not carry the ggml Metal backend' "${WORK}/metal-half.log"
+expect "Intel Mac archive with the log line but no shaders fails" 0 $?
+
 # A binary that does not start fails every autodir check. Before, the encoder
 # probe read it as "not in this build" (a skip) and the two checks that expect
 # ffmpeg to fail passed.

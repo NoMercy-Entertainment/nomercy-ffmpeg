@@ -132,7 +132,7 @@ function Assert-PeMachine($bin, $expected) {
 
 # ggml Metal GPU backend, mirroring Assert-VulkanBackendPresent above. No
 # platform this script's caller ever runs on (windows-x86_64, windows-aarch64)
-# is darwin-arm64, so Test-MetalPlatformHasBackend is always false in
+# is a Mac, so Test-MetalPlatformHasBackend is always false in
 # practice here and this always reports the skip note - kept in full anyway,
 # the same reason Assert-VulkanBackendPresent above is, so the .ps1 and .sh
 # sides stay easy to diff. Unlike Vulkan there is no startup half to add:
@@ -141,7 +141,7 @@ function Assert-PeMachine($bin, $expected) {
 # pure string searches over the artifact.
 function Assert-MetalBackendPresent($bin, $platform) {
     if (-not (Test-MetalPlatformHasBackend $platform)) {
-        Note "$(Split-Path $bin -Leaf): $platform carries no Metal by design (darwin-arm64 only); check skipped"
+        Note "$(Split-Path $bin -Leaf): $platform carries no Metal by design (the two Mac builds only); check skipped"
         return
     }
 

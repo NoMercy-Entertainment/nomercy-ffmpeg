@@ -576,15 +576,16 @@ vulkan_startup_ok() {
 # correct darwin-arm64 build for carrying no "ggml_vulkan" string, which is
 # exactly right for that build.
 #
-# Metal is darwin-arm64 only. darwin-x86_64 stays off on purpose: that
-# dockerfile's deployment floor is 10.13 while ggml uses unguarded 10.15
-# APIs, and Intel/AMD GPUs report neither Apple7 nor Metal3, so they would
-# take ggml's slow paths on the oldest Macs this project supports. freebsd
-# never had a Metal question to begin with. Every other platform (linux,
-# windows) has no Metal at all, ever.
+# Metal is in both Mac builds. darwin-x86_64 was left out through v1.0.49 on
+# the belief that Intel and AMD GPUs report no Metal 3; AMD Vega and the
+# 5000/6000 series do. Whether an Intel Mac then USES it is decided at run
+# time, per GPU (scripts/includes/ggml-metal-intel-guard.patch): this predicate
+# only says the backend has to be in the archive. freebsd never had a Metal
+# question to begin with. Every other platform (linux, windows) has no Metal
+# at all, ever.
 metal_platform_has_backend() {
 	case "$1" in
-	*darwin-arm64*) return 0 ;;
+	*darwin-arm64* | *darwin-x86_64*) return 0 ;;
 	*) return 1 ;;
 	esac
 }
