@@ -1,0 +1,35 @@
+FFmpeg commit 60bc31fcf6543505e6d2fc1a9399cca95f54ba4d (master, 2026-11-03),
+"avcodec/jpeglsdec: decode line interleaved scans with more than 8 bits".
+CVE-2026-125243: a 16-bit line interleaved JPEG-LS scan was decoded as 8-bit
+samples, so half of every line of the 16-bit frame stayed unwritten.
+
+Not in FFmpeg 9.1. Applied by scripts/69-ffmpeg-security-backports.sh,
+unchanged from upstream. Remove this file and its line in that script once
+the build moves to an FFmpeg release that contains the commit.
+
+diff --git a/libavcodec/jpeglsdec.c b/libavcodec/jpeglsdec.c
+index 7633bcceb6..0ab73eb3e4 100644
+--- a/libavcodec/jpeglsdec.c
++++ b/libavcodec/jpeglsdec.c
+@@ -480,11 +480,18 @@ int ff_jpegls_decode_picture(MJpegDecodeContext *s)
+                 last = zero;
+             }
+             for (j = 0; j < stride; j++) {
+-                ret = ls_decode_line(state, s, last + j, cur + j,
+-                               Rc[j], width, stride, j, 8);
++                if (s->bits <= 8) {
++                    ret = ls_decode_line(state, s, last + j, cur + j,
++                                         Rc[j], width, stride, j, 8);
++                    Rc[j] = last[j];
++                } else {
++                    /* only single component scans can have more than 8 bits */
++                    ret = ls_decode_line(state, s, last, cur,
++                                         Rc[j], width, stride, j, 16);
++                    Rc[j] = *((uint16_t *)last);
++                }
+                 if (ret < 0)
+                     break;
+-                Rc[j] = last[j];
+             }
+             if (ret < 0)
+                 break;

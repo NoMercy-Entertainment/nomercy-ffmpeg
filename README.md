@@ -8,7 +8,7 @@
 
 </div>
 
-NoMercy FFmpeg is a custom build of FFmpeg 9.0, built from the 9.0.2 point release. It is tuned for the MediaServer, not for general use. For standard FFmpeg binaries, see [ffmpeg.org](https://ffmpeg.org/). The licence terms are on the [License](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/License) page.
+NoMercy FFmpeg is a custom build of FFmpeg 9.1. It is tuned for the MediaServer, not for general use. For standard FFmpeg binaries, see [ffmpeg.org](https://ffmpeg.org/). The licence terms are on the [License](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/License) page.
 
 It is not stock FFmpeg. It adds filters, muxers, input protocols and patches that the official build does not have. It ships as one self-contained archive per platform, with the codec libraries built in.
 
@@ -21,7 +21,7 @@ Get the archive for your platform from the [Releases page](https://github.com/No
 Quick start:
 
 ```bash
-tar -xzf ffmpeg-9.0-linux-x86_64-v*.tar.gz   # the name ends in the release tag
+tar -xzf ffmpeg-9.1-linux-x86_64-v*.tar.gz   # the name ends in the release tag
 ./ffmpeg -version
 ```
 

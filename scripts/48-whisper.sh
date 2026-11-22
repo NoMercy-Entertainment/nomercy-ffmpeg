@@ -844,12 +844,12 @@ lib_private_flags="Libs.private: -lstdc++"
 # See: https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/issues/38
 if [[ -f /scripts/includes/af_whisper.c ]]; then
     # Our copy replaces upstream's whole file, so it is upstream's file at one
-    # release plus our changes; the digest is that upstream file (FFmpeg 9.0
-    # and 9.0.2 have the same one). Any other upstream file means the copy
+    # release plus our changes; the digest is that upstream file (FFmpeg
+    # 9.1). Any other upstream file means the copy
     # would put back what FFmpeg changed there: rebase it first (see
     # 57-hls-master-playlist.sh for the hlsenc.c case that made this check).
     whisper_upstream=$(sha256sum /build/ffmpeg/libavfilter/af_whisper.c | cut -d' ' -f1)
-    if [[ "${whisper_upstream}" != 322a8d54baa69b74f91552ad809a43ad0e3934632b256adf2123e4325a3b85d6 ]]; then
+    if [[ "${whisper_upstream}" != ebf55032923ab03d9d2e40c2604198883c3957fe18e089b9157d85105e747dea ]]; then
         log "Error: FFmpeg's libavfilter/af_whisper.c (sha256 ${whisper_upstream}) is not the file scripts/includes/af_whisper.c is based on: rebase the copy"
         exit 1
     fi

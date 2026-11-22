@@ -113,9 +113,12 @@ segs = load(path)
 want_words = len(sys.argv) > 2 and sys.argv[2] == "words"
 
 for n, s in enumerate(segs, 1):
-    for k in ("start", "end", "text"):
+    for k in ("start", "end", "text", "language"):
         if k not in s:
             sys.exit(f"{path}: segment {n} has no '{k}'")
+    # FFmpeg 9.1: every segment names the language whisper used for its window.
+    if not re.fullmatch(r"[a-z]{2,3}", s["language"]):
+        sys.exit(f"{path}: segment {n}: language is not a language code: {s['language']!r}")
     if not want_words:
         if "words" in s:
             sys.exit(f"{path}: segment {n} has a words array nobody asked for")
@@ -265,6 +268,113 @@ test_whisper_options() {
 
 	echo "all whisper option checks passed"
 	return 0
+}
+
+# FFmpeg 9.1: language=eval and language=lock. Both auto-detect; lock keeps the
+# language it found for every later window. The filter is our own copy of
+# af_whisper.c, so the two values exist only because that copy took them over.
+#
+# With the English-only test model, both must be accepted and give the bytes
+# language=auto gives. A build without them reads "eval" as a language code
+# and refuses it ("Transcription requested but multilingual model not
+# provided"), which is how this check fails on v1.0.49. A real language code
+# must still be refused there: the new values may not swallow the others.
+#
+# The lock itself needs a model that can detect a language. With one in
+# WHISPER_TEST_MULTILINGUAL_MODEL (ggml-tiny.bin), or next to the binary, lock
+# must say which language it locked on, that must be the language on the first
+# JSON line, and eval must not lock.
+test_whisper_language_modes() {
+	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
+	local d mode multi locked first
+
+	_whisper_test_inputs || return 2
+	WT_BASELINE=""
+	_whisper_test_workdir
+	d="${WT_DIR}"
+	# shellcheck disable=SC2064
+	trap "rm -rf '${d}'" RETURN
+
+	_whisper_run "${ffmpeg}" "${d}/auto.json" "${d}/auto.err" "language=auto:format=json:destination=-" \
+		|| { tail -5 "${d}/auto.err"; echo "FAIL: the language=auto run failed"; return 1; }
+	_whisper_check_json "${d}/auto.json" || return 1
+	for mode in eval lock; do
+		_whisper_run "${ffmpeg}" "${d}/${mode}.json" "${d}/${mode}.err" "language=${mode}:format=json:destination=-" \
+			|| { tail -4 "${d}/${mode}.err"; echo "FAIL: language=${mode} is refused"; return 1; }
+		cmp -s "${d}/auto.json" "${d}/${mode}.json" \
+			|| { diff "${d}/auto.json" "${d}/${mode}.json" | head -6; echo "FAIL: language=${mode} does not give the language=auto output on an English-only model"; return 1; }
+	done
+	echo "language=eval and language=lock are accepted and give the language=auto output ($(wc -c <"${d}/auto.json") bytes)"
+
+	if _whisper_run "${ffmpeg}" "${d}/nl.json" "${d}/nl.err" "language=nl:format=json:destination=-"; then
+		echo "FAIL: language=nl was accepted on an English-only model"
+		return 1
+	fi
+	grep -q "requested but multilingual model not provided" "${d}/nl.err" \
+		|| { tail -4 "${d}/nl.err"; echo "FAIL: language=nl on an English-only model failed for another reason"; return 1; }
+	echo "a language code is still refused on an English-only model"
+
+	multi="${WHISPER_TEST_MULTILINGUAL_MODEL:-}"
+	[[ -z "${multi}" && -f "$(dirname "${ffmpeg}")/ggml-tiny.bin" ]] && multi="$(dirname "${ffmpeg}")/ggml-tiny.bin"
+	if [[ -z "${multi}" || ! -f "${multi}" ]]; then
+		echo "note: no multilingual model (set WHISPER_TEST_MULTILINGUAL_MODEL to ggml-tiny.bin), so the lock itself was not checked"
+		return 0
+	fi
+	ln -s "$(cd "$(dirname "${multi}")" && pwd)/$(basename "${multi}")" "${d}/multi.bin" 2>/dev/null || cp "${multi}" "${d}/multi.bin"
+	for mode in lock eval; do
+		(cd "${d}" && "${ffmpeg}" -hide_banner -nostdin -nostats -filter_threads 1 -i "${WT_AUDIO}" \
+			-af "whisper=model=multi.bin:use_gpu=0:language=${mode}:format=json:destination=-" -f null - \
+			>"${d}/multi-${mode}.json" 2>"${d}/multi-${mode}.err" </dev/null) \
+			|| { tail -4 "${d}/multi-${mode}.err"; echo "FAIL: language=${mode} failed on the multilingual model"; return 1; }
+	done
+	locked="$(sed -n 's/.*Locked auto-detected language: \([a-z]*\).*/\1/p' "${d}/multi-lock.err" | head -1)"
+	[[ -n "${locked}" ]] || { tail -6 "${d}/multi-lock.err"; echo "FAIL: language=lock did not say which language it locked on"; return 1; }
+	first="$(head -1 "${d}/multi-lock.json")"
+	[[ "${first}" == *"\"detected_language\":\"${locked}\""* ]] \
+		|| { echo "${first}"; echo "FAIL: language=lock locked on '${locked}', but the first JSON line names another language"; return 1; }
+	if grep -q "Locked auto-detected language" "${d}/multi-eval.err"; then
+		echo "FAIL: language=eval locked the language"
+		return 1
+	fi
+	echo "language=lock locks on the detected language (${locked}); language=eval does not lock"
+	return 0
+}
+
+# _whisper_strip_language <src.json> <dst.json>
+# FFmpeg 9.1 added a "language" field to every segment line. The reference
+# build (v1.0.44) has none, so the comparison is made without it: this writes
+# src without that field, byte for byte otherwise, and fails when a segment
+# line has no such field or names another language than the first line does
+# (the default run is one language, the one resolved for the stream).
+_whisper_strip_language() {
+	python3 - "$@" <<'PY'
+import json, re, sys
+
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, "rb") as f:
+    lines = f.read().split(b"\n")
+stream = json.loads(lines[0]).get("detected_language")
+if not stream:
+    sys.exit(f"{src}: the first line names no language")
+field = re.compile(rb',"language":"([a-z]{2,3})"\}$')
+out, n = [lines[0]], 0
+for i, line in enumerate(lines[1:], 2):
+    if not line:
+        out.append(line)
+        continue
+    m = field.search(line)
+    if not m:
+        sys.exit(f"{src}:{i}: no language field at the end of the line: {line[:200]!r}")
+    if m.group(1).decode() != stream:
+        sys.exit(f"{src}:{i}: language {m.group(1).decode()!r}, but the stream's is {stream!r}")
+    out.append(line[:m.start()] + b"}")
+    n += 1
+if not n:
+    sys.exit(f"{src}: no segment lines")
+with open(dst, "wb") as f:
+    f.write(b"\n".join(out))
+print(f"language field: {n} segment line(s), all '{stream}'")
+PY
 }
 
 # #113: with dtw set, a window shorter than ~160 ms used to abort the whole
@@ -636,7 +746,7 @@ test_whisper_segment_ends() {
 test_whisper_defaults_unchanged() {
 	local ffmpeg="${FFMPEG:?FFMPEG must point at the binary under test}"
 	local ref="${WHISPER_TEST_REFERENCE_FFMPEG:-}"
-	local d fmt rc
+	local d fmt rc cmp_new
 
 	_whisper_test_inputs || return 2
 	if [[ -z "${ref}" || ! -x "${ref}" ]]; then
@@ -674,8 +784,17 @@ test_whisper_defaults_unchanged() {
 		# first, from the windows this run logged.
 		_whisper_bound_reference "${d}/ref.${fmt}" "${fmt}" "${d}/new.err" "${d}/ref.err" "${d}/bounded.${fmt}" \
 			|| { echo "FAIL: could not bound the reference's ${fmt} output to its windows"; return 1; }
-		cmp "${d}/new.${fmt}" "${d}/bounded.${fmt}" \
-			|| { diff "${d}/new.${fmt}" "${d}/bounded.${fmt}" | head -8; echo "FAIL: default format=${fmt} output differs from the reference beyond the segment ends bounded to their window (#119)"; return 1; }
+		# FFmpeg 9.1 names the language on every JSON segment line; the
+		# reference predates that. The field is checked and taken out, and
+		# what is left must still be the reference's bytes.
+		cmp_new="${d}/new.${fmt}"
+		if [[ "${fmt}" == json ]]; then
+			_whisper_strip_language "${d}/new.json" "${d}/new-nolang.json" \
+				|| { echo "FAIL: the language field of the JSON output is not what FFmpeg 9.1 writes"; return 1; }
+			cmp_new="${d}/new-nolang.json"
+		fi
+		cmp "${cmp_new}" "${d}/bounded.${fmt}" \
+			|| { diff "${cmp_new}" "${d}/bounded.${fmt}" | head -8; echo "FAIL: default format=${fmt} output differs from the reference beyond the segment ends bounded to their window (#119) and the language field (FFmpeg 9.1)"; return 1; }
 		echo "format=${fmt}: identical to the reference with its segment ends bounded to their window ($(wc -c <"${d}/new.${fmt}") bytes)"
 	done
 	return 0

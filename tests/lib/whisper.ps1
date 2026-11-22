@@ -139,9 +139,11 @@ function Test-WhisperJson {
         $n = 0
         foreach ($s in $segs) {
             $n++
-            foreach ($k in 'start', 'end', 'text') {
+            foreach ($k in 'start', 'end', 'text', 'language') {
                 if ($null -eq $s.$k) { return "${Path}: segment $n has no '$k'" }
             }
+            # FFmpeg 9.1: every segment names the language whisper used for its window.
+            if ([string]$s.language -cnotmatch '^[a-z]{2,3}$') { return "${Path}: segment ${n}: language is not a language code: $($s.language)" }
             if ($Mode -ne 'words') {
                 if ($null -ne $s.words) { return "${Path}: segment $n has a words array nobody asked for" }
                 continue
@@ -322,6 +324,77 @@ function Test-WhisperDtwShortWindow {
             $lines.Add("cut at $ss s: transcribed with dtw, exit 0")
         }
         return @{ Status = 'Pass'; Reason = ''; Output = ($lines -join "`n") }
+    } finally {
+        Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
+    }
+}
+
+# FFmpeg 9.1: language=eval and language=lock (see test_whisper_language_modes
+# in whisper.sh for the reasoning behind each step).
+function Test-WhisperLanguageModes {
+    param([string]$FFmpegExe, [string]$Platform)
+
+    $inputs = Get-WhisperTestInputs -FFmpegExe $FFmpegExe
+    if (-not $inputs) {
+        return @{ Status = 'Skip'; Reason = 'no whisper model and clip in this environment (set WHISPER_TEST_MODEL to ggml-base.en.bin and WHISPER_TEST_AUDIO to jfk.wav)'; Output = '' }
+    }
+    $dir = New-WhisperTestDir -Model $inputs.Model
+    try {
+        $ctx = @{ Dir = $dir; Audio = $inputs.Audio; Baseline = '' }
+        $auto = Join-Path $dir 'auto.json'
+        if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $ctx -OutFile $auto -ErrFile (Join-Path $dir 'auto.err') -Options 'language=auto:format=json:destination=-') -ne 0) {
+            return @{ Status = 'Fail'; Reason = 'the language=auto run failed'; Output = '' }
+        }
+        $why = Test-WhisperJson $auto
+        if ($why) { return @{ Status = 'Fail'; Reason = $why; Output = '' } }
+        foreach ($mode in 'eval', 'lock') {
+            $out = Join-Path $dir "$mode.json"
+            if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $ctx -OutFile $out -ErrFile (Join-Path $dir "$mode.err") -Options "language=${mode}:format=json:destination=-") -ne 0) {
+                return @{ Status = 'Fail'; Reason = "language=$mode is refused"; Output = '' }
+            }
+            if (-not (Test-SameBytes $auto $out)) {
+                return @{ Status = 'Fail'; Reason = "language=$mode does not give the language=auto output on an English-only model"; Output = '' }
+            }
+        }
+        $notes = @("language=eval and language=lock are accepted and give the language=auto output ($((Get-Item $auto).Length) bytes)")
+
+        $nlErr = Join-Path $dir 'nl.err'
+        if ((Invoke-WhisperRun -Exe $FFmpegExe -Ctx $ctx -OutFile (Join-Path $dir 'nl.json') -ErrFile $nlErr -Options 'language=nl:format=json:destination=-') -eq 0) {
+            return @{ Status = 'Fail'; Reason = 'language=nl was accepted on an English-only model'; Output = '' }
+        }
+        if ([System.IO.File]::ReadAllText($nlErr) -notmatch 'requested but multilingual model not provided') {
+            return @{ Status = 'Fail'; Reason = 'language=nl on an English-only model failed for another reason'; Output = '' }
+        }
+        $notes += 'a language code is still refused on an English-only model'
+
+        $multi = $env:WHISPER_TEST_MULTILINGUAL_MODEL
+        $beside = Join-Path (Split-Path -Parent $FFmpegExe) 'ggml-tiny.bin'
+        if (-not $multi -and (Test-Path $beside)) { $multi = $beside }
+        if (-not $multi -or -not (Test-Path $multi)) {
+            $notes += 'note: no multilingual model (set WHISPER_TEST_MULTILINGUAL_MODEL to ggml-tiny.bin), so the lock itself was not checked'
+            return @{ Status = 'Pass'; Reason = ''; Output = ($notes -join "`n") }
+        }
+        Copy-Item -Path (Resolve-Path $multi).Path -Destination (Join-Path $dir 'multi.bin')
+        foreach ($mode in 'lock', 'eval') {
+            $arguments = ('-hide_banner -nostdin -nostats -filter_threads 1 -i "{0}" -af "whisper=model=multi.bin:use_gpu=0:language={1}:format=json:destination=-" -f null -' -f $inputs.Audio, $mode)
+            $code = Invoke-NativeToFiles -Exe $FFmpegExe -Arguments $arguments -WorkDir $dir -OutFile (Join-Path $dir "multi-$mode.json") -ErrFile (Join-Path $dir "multi-$mode.err")
+            if ($code -ne 0) { return @{ Status = 'Fail'; Reason = "language=$mode failed on the multilingual model"; Output = '' } }
+        }
+        $lockLog = [System.IO.File]::ReadAllText((Join-Path $dir 'multi-lock.err'))
+        $match = [regex]::Match($lockLog, 'Locked auto-detected language: ([a-z]+)')
+        if (-not $match.Success) {
+            return @{ Status = 'Fail'; Reason = 'language=lock did not say which language it locked on'; Output = '' }
+        }
+        $locked = $match.Groups[1].Value
+        $first = @([System.IO.File]::ReadAllLines((Join-Path $dir 'multi-lock.json')))[0]
+        if (-not $first.Contains(('"detected_language":"{0}"' -f $locked))) {
+            return @{ Status = 'Fail'; Reason = "language=lock locked on '$locked', but the first JSON line names another language"; Output = $first }
+        }
+        if ([System.IO.File]::ReadAllText((Join-Path $dir 'multi-eval.err')) -match 'Locked auto-detected language') {
+            return @{ Status = 'Fail'; Reason = 'language=eval locked the language'; Output = '' }
+        }
+        $notes += "language=lock locks on the detected language ($locked); language=eval does not lock"
+        return @{ Status = 'Pass'; Reason = ''; Output = ($notes -join "`n") }
     } finally {
         Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
     }
@@ -636,6 +709,35 @@ function Test-WhisperSegmentEnds {
     }
 }
 
+# FFmpeg 9.1 added a "language" field to every segment line; the reference
+# build (v1.0.44) has none. Writes $Src without that field, byte for byte
+# otherwise. Reason is set when a segment line has no such field or names
+# another language than the first line does. Same rules as
+# _whisper_strip_language in whisper.sh.
+function Remove-WhisperLanguageField {
+    param([string]$Src, [string]$Dst)
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $lines = [System.IO.File]::ReadAllText($Src, $utf8) -split "`n"
+    $stream = $null
+    try { $stream = ($lines[0] | ConvertFrom-Json).detected_language } catch { }
+    if (-not $stream) { return @{ Reason = "${Src}: the first line names no language"; Note = '' } }
+    $out = New-Object System.Collections.Generic.List[string]
+    $out.Add($lines[0])
+    $n = 0
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line -eq '') { $out.Add($line); continue }
+        $m = [regex]::Match($line, ',"language":"([a-z]{2,3})"\}$')
+        if (-not $m.Success) { return @{ Reason = "${Src}:$($i + 1): no language field at the end of the line"; Note = '' } }
+        if ($m.Groups[1].Value -cne $stream) { return @{ Reason = "${Src}:$($i + 1): language '$($m.Groups[1].Value)', but the stream's is '$stream'"; Note = '' } }
+        $out.Add($line.Substring(0, $m.Index) + '}')
+        $n++
+    }
+    if ($n -eq 0) { return @{ Reason = "${Src}: no segment lines"; Note = '' } }
+    [System.IO.File]::WriteAllText($Dst, ($out -join "`n"), $utf8)
+    return @{ Reason = ''; Note = "language field: $n segment line(s), all '$stream'" }
+}
+
 function Test-WhisperDefaultsUnchanged {
     param([string]$FFmpegExe, [string]$Platform)
 
@@ -676,8 +778,20 @@ function Test-WhisperDefaultsUnchanged {
                 return @{ Status = 'Fail'; Reason = "could not bound the reference's $fmt output to its windows: $($b.Reason)"; Output = ($lines -join "`n") }
             }
             $lines.Add($b.Note)
-            if (-not (Test-SameBytes $new $bounded)) {
-                return @{ Status = 'Fail'; Reason = "default format=$fmt output differs from the reference beyond the segment ends bounded to their window (#119)"; Output = ($lines -join "`n") }
+            # FFmpeg 9.1 names the language on every JSON segment line; the
+            # reference predates that. The field is checked and taken out, and
+            # what is left must still be the reference's bytes.
+            $compare = $new
+            if ($fmt -eq 'json') {
+                $compare = Join-Path $dir 'new-nolang.json'
+                $l = Remove-WhisperLanguageField -Src $new -Dst $compare
+                if ($l.Reason) {
+                    return @{ Status = 'Fail'; Reason = "the language field of the JSON output is not what FFmpeg 9.1 writes: $($l.Reason)"; Output = ($lines -join "`n") }
+                }
+                $lines.Add($l.Note)
+            }
+            if (-not (Test-SameBytes $compare $bounded)) {
+                return @{ Status = 'Fail'; Reason = "default format=$fmt output differs from the reference beyond the segment ends bounded to their window (#119) and the language field (FFmpeg 9.1)"; Output = ($lines -join "`n") }
             }
             $lines.Add("format=${fmt}: identical to the reference with its segment ends bounded to their window ($((Get-Item $new).Length) bytes)")
         }

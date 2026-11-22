@@ -453,6 +453,8 @@ run_custom_test "cpu_variant" "test_cpu_variant"
 # v1.0.44 reference binary in WHISPER_TEST_REFERENCE_FFMPEG.
 run_custom_test "whisper_options" "test_whisper_options"
 run_custom_test "whisper_defaults" "test_whisper_defaults_unchanged"
+# language=eval and language=lock, the two values FFmpeg 9.1 added.
+run_custom_test "whisper_language_modes" "test_whisper_language_modes"
 # #113 dtw on very short windows, #114 one model load per run, #115 VAD
 # threads (the last also needs ggml-silero-v5.1.2.bin in WHISPER_TEST_VAD_MODEL).
 run_custom_test "whisper_dtw_short" "test_whisper_dtw_short_window"

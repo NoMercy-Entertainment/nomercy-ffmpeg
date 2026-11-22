@@ -425,6 +425,7 @@ run_whisper_check() {  # name, function
 }
 run_whisper_check "whisper options (dtw, word_timestamps, prompt, beam search)" test_whisper_options
 run_whisper_check "whisper default output unchanged from the reference build" test_whisper_defaults_unchanged
+run_whisper_check "whisper language=eval and language=lock (FFmpeg 9.1)" test_whisper_language_modes
 run_whisper_check "whisper dtw survives 0.12 s windows (#113)" test_whisper_dtw_short_window
 run_whisper_check "whisper loads its model once per run (#114)" test_whisper_model_loaded_once
 run_whisper_check "whisper default thread count is not slower than one thread (#115)" test_whisper_default_threads

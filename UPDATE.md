@@ -4,6 +4,46 @@
 
 ### Unreleased
 
+- **FFmpeg 9.0.2 → 9.1.** Built from the release tarball, so `ffmpeg
+  -version` says `9.1`. **The archives are now named `ffmpeg-9.1-<platform>…`**
+  (they were `ffmpeg-9.0-…`): a download that names the full file has to
+  follow; a download that picks the asset by platform name keeps working, and
+  so does the npm client. Everything of ours was rebuilt on 9.1 and compared
+  with v1.0.49 on the same inputs: HLS (TS, subtitles, closed captions,
+  encryption, PQ and HLG master playlists), spritevtt, chapters_vtt,
+  keydetect, beatdetect, trailingsilence, rubberband, `dvdread:`, VobSub and
+  HEVC alpha give byte-identical output. What does change comes from FFmpeg
+  9.1 itself and is kept as it is:
+  - **Built-in AAC encoder (`-c:a aac`) rewritten.** The output bytes differ
+    and it is faster (stereo about twice as fast in our measurement). New
+    options `aac_rc`, `aac_nmr_speed` and `aac_allow_71wide`; the default
+    coder is now `nmr`. `libfdk_aac` is unchanged.
+  - **MP4 and fragmented MP4 (also HLS fMP4 and DASH):** the last audio
+    sample of a file or fragment is written with its full frame duration.
+    The decoded audio is the same, sample for sample; the files differ by a
+    few bytes.
+  - **ffprobe:** the csv writer no longer ends a line with a comma;
+    `-show_entries stream=…` prints each stream once for inputs with
+    programs (MPEG-TS, HLS), where it printed them twice; streams have a new
+    `seek_preroll` field and the json field order moved. A parser that reads
+    by field name is not affected.
+  - A lone MPEG-TS segment probes with score 50 where it was 100. The
+    `asf_o` demuxer is gone; upstream's new muxers, demuxers, filters and
+    bitstream filters are in.
+- **whisper: `language=eval` and `language=lock`, and a `language` field per
+  line.** Both are FFmpeg 9.1's additions to the filter, merged into ours.
+  `eval` detects the language again for every window (what `auto` does),
+  `lock` detects it once and transcribes the rest of the stream in that
+  language. Every JSON line now carries `"language"`: the language whisper
+  used for that window. The stream-level `detected_language` line and the
+  `lavfi.whisper.language` metadata are unchanged.
+- **Security: FFmpeg 9.1 fixes 121 of the 125 CVEs that were open against
+  9.0.2**, and CVE-2026-133519 (dvdvideo demuxer). Three more have a fix on
+  FFmpeg's master that 9.1 does not carry and are applied here
+  (`scripts/69-ffmpeg-security-backports.sh`): CVE-2026-125243 (JPEG-LS
+  decoder) and CVE-2026-125208 / CVE-2026-125270 (V4L2 buffers). One has no
+  fix anywhere yet; see `docs/security/known-unfixed.md`.
+
 - **Auto-create directories now covers every file ffmpeg writes (#134).**
   Until now the folder was only created for files a muxer opens itself
   (image2, HLS), so `ffmpeg -i in.mkv out/new/o.mp4` still failed with "No
