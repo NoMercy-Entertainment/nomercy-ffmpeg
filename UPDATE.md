@@ -43,6 +43,39 @@
   (`scripts/69-ffmpeg-security-backports.sh`): CVE-2026-125243 (JPEG-LS
   decoder) and CVE-2026-125208 / CVE-2026-125270 (V4L2 buffers). One has no
   fix anywhere yet; see `docs/security/known-unfixed.md`.
+- **beatdetect 1.4.1: the beats before the first lock and after the last are
+  on the track's grid (#138).** Where a track opens or ends without its
+  beat (silence, a tone, pads, a voice) the beat list followed whatever
+  moved: on the track of the issue it ran half a beat out for 34 s and then
+  slid onto the kit over 28 beats. Two changes in the filter:
+  - A stretch without the beat no longer becomes a tempo segment of its own
+    (`tempo_segmentN`). A tone ahead of a kit at 128 read 142.9 BPM, and the
+    beat list ran through it at that tempo.
+  - The beats before the first lock and after the last are counted from the
+    lock, on the line through its heard beats, wherever the tracker's own
+    were more than a 16th of a beat off it. A lock that is not straight over
+    64 beats (a drummer) is left as it was.
+
+  **Values move** in `beatsN`, `tempo_wander`, `no_pulseN` and
+  `tempo_segmentN` on tracks with such a stretch; on 48 library tracks 36
+  beat lists change, most by the few beats before the first hit or after
+  the last. `bpm`, `confidence`, `beat_offset_ms` and the bar do not move.
+- **Security, rechecked 2026-11-22.** Fixed in this build:
+  - CVE-2026-116840 in ggml's GGUF loader, which `stemsplit` and
+    `lyricsalign` open their models with: a tensor size near the top of the
+    address range passed the size check. whisper.cpp stays 1.9.1 with the
+    fix of 1.9.5 applied (`scripts/includes/whisper-security-backports.patch`).
+  - CVE-2026-133306 in libaacs: the path resolver wrote past two buffers on a
+    disc path through a symbolic link. No libaacs release has the fix, so
+    the fix of its master is applied (`scripts/includes/libaacs-path-bounds.patch`).
+  - RUSTSEC-2026-0592 in the `url` crate of librsvg: 2.5.7 → **2.5.9**.
+
+  New in `docs/security/known-unfixed.md`, without a fix to move to: five
+  OpenSSL records of 2026-11-18 that wait for 4.0.4, five libstdc++ records
+  that Ubuntu 24.04's GCC 13 has no fixed package for, and glibc 2.39 as it
+  is linked statically into the linux-aarch64 binaries (22 CVEs fixed in
+  Ubuntu's native package that the cross package does not have, in every
+  linux-aarch64 release so far).
 
 - **Auto-create directories now covers every file ffmpeg writes (#134).**
   Until now the folder was only created for files a muxer opens itself

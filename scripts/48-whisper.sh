@@ -26,10 +26,11 @@ if [[ $(grep -c 'narrow the filter instead of aborting' src/whisper.cpp) -ne 1 ]
 fi
 log "Applied whisper.cpp DTW median-filter backport (a46fadb)"
 
-# Three security fixes of v1.9.5, taken alone so ggml stays the one every
+# Four security fixes of v1.9.5, taken alone so ggml stays the one every
 # whisper/stemsplit/lyricsalign gate was measured on (the patch header lists
-# them; CVE-2026-110810 is one). Same rule as above: the patch must apply,
-# and each fix must be in the tree afterwards.
+# them; CVE-2026-110810 and CVE-2026-116840 are two). The one hunk in ggml
+# is in the GGUF loader's size check, which no computation reads. Same rule
+# as above: the patch must apply, and each fix must be in the tree afterwards.
 git apply /scripts/includes/whisper-security-backports.patch \
     || { log "Error: whisper-security-backports.patch does not apply to whisper.cpp v${whisper_version}"; exit 1; }
 if [[ $(grep -c 'invalid ttype %d in model file' src/whisper.cpp) -ne 2 ]]; then
@@ -40,7 +41,11 @@ if ! grep -q 'invalid n_dims' src/whisper.cpp; then
     log "Error: the n_dims check is not in src/whisper.cpp after applying the patch"
     exit 1
 fi
-log "Applied whisper.cpp security backports (60c0be6 CVE-2026-110810, df1547b, 8631825)"
+if ! grep -q 'overflows after padding' ggml/src/gguf.cpp; then
+    log "Error: the padding check (CVE-2026-116840) is not in ggml/src/gguf.cpp after applying the patch"
+    exit 1
+fi
+log "Applied whisper.cpp security backports (60c0be6 CVE-2026-110810, df1547b, 8631825, 6e48a36 CVE-2026-116840)"
 
 # chmod +x ./models/download-ggml-model.sh
 # ./models/download-ggml-model.sh base

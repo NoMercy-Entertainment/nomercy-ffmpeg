@@ -584,6 +584,20 @@ build_librsvg() {
     fi
     cd librsvg
 
+    # url 2.5.7 in librsvg 2.61.5's Cargo.lock has an advisory with a fixed
+    # release (RUSTSEC-2026-0592, fixed in 2.5.9) and ends up in the static
+    # library: move that crate alone in the lock file and check that it
+    # took. The same step and the reasons are in scripts/50-librsvg.sh.
+    cargo update -p url --precise 2.5.9 2>&1 | log -a
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        log "librsvg: cargo update -p url --precise 2.5.9 failed"
+        exit 1
+    fi
+    if ! grep -A1 '^name = "url"$' Cargo.lock | grep -q '^version = "2.5.9"$'; then
+        log "librsvg: Cargo.lock does not have url 2.5.9 after cargo update"
+        exit 1
+    fi
+
     # Set Rust target based on platform
     local RUST_TARGET=""
     local CARGO_TARGET_DIR=""

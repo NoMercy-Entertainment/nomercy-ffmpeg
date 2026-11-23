@@ -9,12 +9,41 @@ applies this file and checks that each fix is in the tree afterwards.
            prevent stack-buffer-overflow on malformed model files (#3957)
   8631825d whisper : heap out-of-bounds read in log_mel_spectrogram on very
            short audio (#3956)
+  6e48a365 gguf : reject tensor size that wraps after padding (the sync of
+           llama.cpp a6ea155d)
+           CVE-2026-116840: a tensor whose byte size is within one
+           alignment of SIZE_MAX pads to 0, and the size check after it
+           passes. The loader that stemsplit and lyricsalign open their
+           models with. Fixed in v1.9.5.
 
 Upstream ships them in v1.9.5, together with 773 other commits, most of them
-in ggml, which whisper, stemsplit and lyricsalign all run on. These three are
+in ggml, which whisper, stemsplit and lyricsalign all run on. These four are
 taken alone so that ggml stays the one every gate of those filters was
-measured on. Drop this file when whisper.cpp is bumped to v1.9.5 or later.
+measured on: the one hunk in ggml is in the GGUF loader's size check, and
+no computation reads it. Drop this file when whisper.cpp is bumped to
+v1.9.5 or later.
 
+diff --git a/ggml/src/gguf.cpp b/ggml/src/gguf.cpp
+--- a/ggml/src/gguf.cpp
++++ b/ggml/src/gguf.cpp
+@@ -770,7 +770,16 @@
+                 gguf_free(ctx);
+                 return nullptr;
+             }
+-            size_t padded_size = GGML_PAD(ggml_nbytes(&ti.t), ctx->alignment);
++            const size_t nbytes = ggml_nbytes(&ti.t);
++            // GGML_PAD adds (alignment - 1) to nbytes. when nbytes is near
++            // SIZE_MAX this wraps to 0 and makes the check below dead.
++            if (nbytes > SIZE_MAX - (ctx->alignment - 1)) {
++                GGML_LOG_ERROR("%s: tensor '%s' size %zu overflows after padding (alignment %zu)\n",
++                    __func__, ti.t.name, nbytes, ctx->alignment);
++                gguf_free(ctx);
++                return nullptr;
++            }
++            const size_t padded_size = GGML_PAD(nbytes, ctx->alignment);
+             if (SIZE_MAX - ctx->size < padded_size) {
+                 GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %zu + %zu\n",
+                     __func__, ti.t.name, ctx->size, padded_size);
 diff --git a/src/parakeet.cpp b/src/parakeet.cpp
 index b5da73e9..a62e00ac 100644
 --- a/src/parakeet.cpp
