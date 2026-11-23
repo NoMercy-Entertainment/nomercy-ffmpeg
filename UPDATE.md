@@ -11,9 +11,9 @@
   so does the npm client. Everything of ours was rebuilt on 9.1 and compared
   with v1.0.49 on the same inputs: HLS (TS, subtitles, closed captions,
   encryption, PQ and HLG master playlists), spritevtt, chapters_vtt,
-  keydetect, beatdetect, trailingsilence, rubberband, `dvdread:`, VobSub and
-  HEVC alpha give byte-identical output. What does change comes from FFmpeg
-  9.1 itself and is kept as it is:
+  keydetect, trailingsilence, rubberband, `dvdread:`, VobSub and HEVC alpha
+  give byte-identical output, and so did beatdetect before its own change
+  below. What does change comes from FFmpeg 9.1 itself and is kept as it is:
   - **Built-in AAC encoder (`-c:a aac`) rewritten.** The output bytes differ
     and it is faster (stereo about twice as fast in our measurement). New
     options `aac_rc`, `aac_nmr_speed` and `aac_allow_71wide`; the default
@@ -37,6 +37,16 @@
   language. Every JSON line now carries `"language"`: the language whisper
   used for that window. The stream-level `detected_language` line and the
   `lavfi.whisper.language` metadata are unchanged.
+- **Metal on Intel Macs.** The darwin-x86_64 build now carries ggml's Metal
+  backend, as the darwin-arm64 build does, and the filters that run on Metal
+  on Apple Silicon follow the same rules here. It is used only when the Mac's
+  default GPU is a discrete one that reports Metal 3 (AMD Vega and the Radeon
+  5000 and 6000 series, on macOS 13 or later). An Intel Mac with integrated
+  graphics only stays on the CPU, as before. `NOMERCY_GGML_METAL=1` takes the
+  default GPU regardless; `NOMERCY_GGML_GPU=0` keeps every filter on the CPU.
+  **Not run on an Intel Mac before this release**: that the result equals the
+  CPU's and that it is faster is not measured yet.
+  `tools/metal/check-intel-mac.sh` measures both on such a Mac.
 - **Security: FFmpeg 9.1 fixes 121 of the 125 CVEs that were open against
   9.0.2**, and CVE-2026-133519 (dvdvideo demuxer). Three more have a fix on
   FFmpeg's master that 9.1 does not carry and are applied here

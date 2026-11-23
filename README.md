@@ -67,7 +67,7 @@ Every NoMercy-only component has its own Wiki page.
 ### Acceleration
 
 - **GPU acceleration** — `whisper`, `stemsplit` and `lyricsalign` can run on a GPU through Vulkan: `whisper` by default, `stemsplit` RoFormer when the GPU computes like the CPU, `lyricsalign` only with `use_gpu=1`. macOS uses Metal. [GPU-Acceleration](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/GPU-Acceleration)
-- **Metal** — the GPU path on Apple Silicon. [Metal](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Metal)
+- **Metal** — the GPU path on Apple Silicon, and on Intel Macs whose default GPU is a discrete one that reports Metal 3. [Metal](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Metal)
 - **CPU instruction sets** — ggml is built per instruction-set level and on most platforms picks one at run time. [CPU-Instruction-Sets](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/CPU-Instruction-Sets)
 
 ### Bundled libraries
