@@ -195,7 +195,19 @@ FROM alpine:latest AS final
 # flagged CVE-2026-4738 on every v1.0.46 image: zlib 1.3.2-r1 while 3.24
 # already shipped 1.4-r0). The upgrade keeps the image at what the branch
 # has fixed on the day it is built.
-RUN apk upgrade --no-cache
+#
+# Only when the layer really runs. Its cache key is the alpine digest and
+# the instruction, and neither changes when the branch publishes a fix, so
+# a cached copy is the image of the day the layer was first built. CI
+# imports the cache of the last published image: the v1.0.50-rc images were
+# built with this layer replayed ("CACHED" in the build log) and carried
+# OpenSSL 3.5.9-r0 while 3.24 already had 3.5.9-r1, five CVEs on every
+# image. ALPINE_REFRESH is in the layer's cache key because the RUN names
+# it; CI passes a value that differs for every run, so the upgrade runs
+# again each time. A local build has to pass its own (any new value), or it
+# gets the layer it built before.
+ARG ALPINE_REFRESH=local
+RUN echo "alpine packages as of build ${ALPINE_REFRESH}" && apk upgrade --no-cache
 
 # The archive is named after ffmpeg_version in ffmpeg-base.dockerfile
 # (scripts/init/package.sh builds the name). It used to be spelled out
