@@ -8,7 +8,7 @@
 
 </div>
 
-NoMercy FFmpeg is a custom build of FFmpeg 9.0, built from the 9.0.2 point release. It is tuned for the MediaServer, not for general use. For standard FFmpeg binaries, see [ffmpeg.org](https://ffmpeg.org/). The licence terms are on the [License](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/License) page.
+NoMercy FFmpeg is a custom build of FFmpeg 9.1. It is tuned for the MediaServer, not for general use. For standard FFmpeg binaries, see [ffmpeg.org](https://ffmpeg.org/). The licence terms are on the [License](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/License) page.
 
 It is not stock FFmpeg. It adds filters, muxers, input protocols and patches that the official build does not have. It ships as one self-contained archive per platform, with the codec libraries built in.
 
@@ -21,7 +21,7 @@ Get the archive for your platform from the [Releases page](https://github.com/No
 Quick start:
 
 ```bash
-tar -xzf ffmpeg-9.0-linux-x86_64-v*.tar.gz   # the name ends in the release tag
+tar -xzf ffmpeg-9.1-linux-x86_64-v*.tar.gz   # the name ends in the release tag
 ./ffmpeg -version
 ```
 
@@ -67,7 +67,7 @@ Every NoMercy-only component has its own Wiki page.
 ### Acceleration
 
 - **GPU acceleration** — `whisper`, `stemsplit` and `lyricsalign` can run on a GPU through Vulkan: `whisper` by default, `stemsplit` RoFormer when the GPU computes like the CPU, `lyricsalign` only with `use_gpu=1`. macOS uses Metal. [GPU-Acceleration](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/GPU-Acceleration)
-- **Metal** — the GPU path on Apple Silicon. [Metal](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Metal)
+- **Metal** — the GPU path on Apple Silicon, and on Intel Macs whose default GPU is a discrete one that reports Metal 3. [Metal](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/Metal)
 - **CPU instruction sets** — ggml is built per instruction-set level and on most platforms picks one at run time. [CPU-Instruction-Sets](https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/wiki/CPU-Instruction-Sets)
 
 ### Bundled libraries

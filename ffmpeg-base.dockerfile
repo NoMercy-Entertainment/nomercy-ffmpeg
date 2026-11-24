@@ -14,11 +14,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # ffmpeg_version names the archives (ffmpeg-<version>-<platform>), which every
 # download URL depends on: the media server's, the npm client's and CI's. It
-# stays the release line. ffmpeg_source_version is the point release the
-# binaries are built from (9.0.2 carries the security fixes of 9.0.1 and
-# 9.0.2), and is what `ffmpeg -version` reports.
-ENV ffmpeg_version=9.0 \
-    ffmpeg_source_version=9.0.2 \
+# stays the release line. ffmpeg_source_version is the release the binaries
+# are built from and is what `ffmpeg -version` reports; a point release
+# (9.1.1) changes only this one.
+ENV ffmpeg_version=9.1 \
+    ffmpeg_source_version=9.1 \
     iconv_version=1.19 \
     libxml2_version=2.15 \
     zlib_version=1.4 \
@@ -824,9 +824,9 @@ RUN \
 RUN \
     echo "------------------------------------------------------" \
     && echo "🔄 Start downloading FFmpeg" \
-    # 9.0.2: signed by the FFmpeg release signing key
-    # (FCF986EA15E6E293A5644F10B4322F04D67658D8), checked 2026-11-12.
-    && fetch-pinned ffmpeg.tar.bz2 ee80a25a5621df84498cef46917be87eab3b4f01951e85c2c7cbe5c94914ee70 \
+    # 9.1: the release tarball, signed by the FFmpeg release signing key
+    # (FCF986EA15E6E293A5644F10B4322F04D67658D8), checked 2026-11-21.
+    && fetch-pinned ffmpeg.tar.bz2 1ba978f21a9cdf3506a98afb6b410f62c42a7225b08952ff437204156dfe7bef \
         https://github.com/NoMercy-CI-Mirrors/sources/releases/download/ffmpeg-${ffmpeg_source_version}/ffmpeg-${ffmpeg_source_version}.tar.bz2 \
         https://ffmpeg.org/releases/ffmpeg-${ffmpeg_source_version}.tar.bz2 \
     && tar -xjf ffmpeg.tar.bz2 >/dev/null 2>&1 && rm ffmpeg.tar.bz2 && mv ffmpeg-${ffmpeg_source_version} ffmpeg \

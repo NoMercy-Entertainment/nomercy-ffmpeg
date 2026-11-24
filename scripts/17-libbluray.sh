@@ -188,6 +188,16 @@ echo "Libs.private: -lstdc++" >>${PREFIX}/lib/pkgconfig/libbdplus.pc
 #region libaacs
 cd /build/libaacs
 
+# CVE-2026-133306: the path resolver wrote past two buffers on a disc path
+# through a symbolic link. Fixed on libaacs master (6bbd2143), in no release:
+# 0.11.1 and 0.12.0 have the same src/file/path.c. The patch must apply, and
+# the fix must be in the tree afterwards.
+git apply /scripts/includes/libaacs-path-bounds.patch     || { log "Error: libaacs-path-bounds.patch does not apply to libaacs"; exit 1; }
+if [[ $(grep -c 'new_path_end' src/file/path.c) -ne 2 ]]; then
+    log "Error: the bounds check (CVE-2026-133306) is not in libaacs src/file/path.c after applying the patch"
+    exit 1
+fi
+
 if [[ ${TARGET_OS} == "freebsd" ]]; then
     # same -D_POSIX_C_SOURCE strictness as libbdplus; keep XSI declarations visible
     sed -i 's/^SET_FEATURES="\(.*\)"/SET_FEATURES="\1 -D_XOPEN_SOURCE=700"/' configure.ac

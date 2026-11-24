@@ -62,6 +62,13 @@ _autodir_run() (  # mode
     work=$(mktemp -d) || return 1
     trap 'rm -rf "${work}"' EXIT
     cd "${work}" || return 1
+    # A binary that does not start is a failure. Without this, the encoder
+    # probes below read it as "not in this build" (a skip), and the two
+    # checks that expect ffmpeg to fail (input, readonly) pass.
+    if ! "${FFMPEG}" -hide_banner -version >/dev/null 2>&1; then
+        echo "ffmpeg does not run from ${work}: ${FFMPEG}"
+        return 1
+    fi
     # Absolute paths for most checks; tee and the file: check use relative
     # ones on purpose (see there).
     local d="${work}/nm-autodir"

@@ -4,6 +4,89 @@
 
 ### Unreleased
 
+- **FFmpeg 9.0.2 → 9.1.** Built from the release tarball, so `ffmpeg
+  -version` says `9.1`. **The archives are now named `ffmpeg-9.1-<platform>…`**
+  (they were `ffmpeg-9.0-…`): a download that names the full file has to
+  follow; a download that picks the asset by platform name keeps working, and
+  so does the npm client. Everything of ours was rebuilt on 9.1 and compared
+  with v1.0.49 on the same inputs: HLS (TS, subtitles, closed captions,
+  encryption, PQ and HLG master playlists), spritevtt, chapters_vtt,
+  keydetect, trailingsilence, rubberband, `dvdread:`, VobSub and HEVC alpha
+  give byte-identical output, and so did beatdetect before its own change
+  below. What does change comes from FFmpeg 9.1 itself and is kept as it is:
+  - **Built-in AAC encoder (`-c:a aac`) rewritten.** The output bytes differ
+    and it is faster (stereo about twice as fast in our measurement). New
+    options `aac_rc`, `aac_nmr_speed` and `aac_allow_71wide`; the default
+    coder is now `nmr`. `libfdk_aac` is unchanged.
+  - **MP4 and fragmented MP4 (also HLS fMP4 and DASH):** the last audio
+    sample of a file or fragment is written with its full frame duration.
+    The decoded audio is the same, sample for sample; the files differ by a
+    few bytes.
+  - **ffprobe:** the csv writer no longer ends a line with a comma;
+    `-show_entries stream=…` prints each stream once for inputs with
+    programs (MPEG-TS, HLS), where it printed them twice; streams have a new
+    `seek_preroll` field and the json field order moved. A parser that reads
+    by field name is not affected.
+  - A lone MPEG-TS segment probes with score 50 where it was 100. The
+    `asf_o` demuxer is gone; upstream's new muxers, demuxers, filters and
+    bitstream filters are in.
+- **whisper: `language=eval` and `language=lock`, and a `language` field per
+  line.** Both are FFmpeg 9.1's additions to the filter, merged into ours.
+  `eval` detects the language again for every window (what `auto` does),
+  `lock` detects it once and transcribes the rest of the stream in that
+  language. Every JSON line now carries `"language"`: the language whisper
+  used for that window. The stream-level `detected_language` line and the
+  `lavfi.whisper.language` metadata are unchanged.
+- **Metal on Intel Macs.** The darwin-x86_64 build now carries ggml's Metal
+  backend, as the darwin-arm64 build does, and the filters that run on Metal
+  on Apple Silicon follow the same rules here. It is used only when the Mac's
+  default GPU is a discrete one that reports Metal 3 (AMD Vega and the Radeon
+  5000 and 6000 series, on macOS 13 or later). An Intel Mac with integrated
+  graphics only stays on the CPU, as before. `NOMERCY_GGML_METAL=1` takes the
+  default GPU regardless; `NOMERCY_GGML_GPU=0` keeps every filter on the CPU.
+  **Not run on an Intel Mac before this release**: that the result equals the
+  CPU's and that it is faster is not measured yet.
+  `tools/metal/check-intel-mac.sh` measures both on such a Mac.
+- **Security: FFmpeg 9.1 fixes 121 of the 125 CVEs that were open against
+  9.0.2**, and CVE-2026-133519 (dvdvideo demuxer). Three more have a fix on
+  FFmpeg's master that 9.1 does not carry and are applied here
+  (`scripts/69-ffmpeg-security-backports.sh`): CVE-2026-125243 (JPEG-LS
+  decoder) and CVE-2026-125208 / CVE-2026-125270 (V4L2 buffers). One has no
+  fix anywhere yet; see `docs/security/known-unfixed.md`.
+- **beatdetect 1.4.1: the beats before the first lock and after the last are
+  on the track's grid (#138).** Where a track opens or ends without its
+  beat (silence, a tone, pads, a voice) the beat list followed whatever
+  moved: on the track of the issue it ran half a beat out for 34 s and then
+  slid onto the kit over 28 beats. Two changes in the filter:
+  - A stretch without the beat no longer becomes a tempo segment of its own
+    (`tempo_segmentN`). A tone ahead of a kit at 128 read 142.9 BPM, and the
+    beat list ran through it at that tempo.
+  - The beats before the first lock and after the last are counted from the
+    lock, on the line through its heard beats, wherever the tracker's own
+    were more than a 16th of a beat off it. A lock that is not straight over
+    64 beats (a drummer) is left as it was.
+
+  **Values move** in `beatsN`, `tempo_wander`, `no_pulseN` and
+  `tempo_segmentN` on tracks with such a stretch; on 48 library tracks 36
+  beat lists change, most by the few beats before the first hit or after
+  the last. `bpm`, `confidence`, `beat_offset_ms` and the bar do not move.
+- **Security, rechecked 2026-11-22.** Fixed in this build:
+  - CVE-2026-116840 in ggml's GGUF loader, which `stemsplit` and
+    `lyricsalign` open their models with: a tensor size near the top of the
+    address range passed the size check. whisper.cpp stays 1.9.1 with the
+    fix of 1.9.5 applied (`scripts/includes/whisper-security-backports.patch`).
+  - CVE-2026-133306 in libaacs: the path resolver wrote past two buffers on a
+    disc path through a symbolic link. No libaacs release has the fix, so
+    the fix of its master is applied (`scripts/includes/libaacs-path-bounds.patch`).
+  - RUSTSEC-2026-0592 in the `url` crate of librsvg: 2.5.7 → **2.5.9**.
+
+  New in `docs/security/known-unfixed.md`, without a fix to move to: five
+  OpenSSL records of 2026-11-18 that wait for 4.0.4, five libstdc++ records
+  that Ubuntu 24.04's GCC 13 has no fixed package for, and glibc 2.39 as it
+  is linked statically into the linux-aarch64 binaries (22 CVEs fixed in
+  Ubuntu's native package that the cross package does not have, in every
+  linux-aarch64 release so far).
+
 - **Auto-create directories now covers every file ffmpeg writes (#134).**
   Until now the folder was only created for files a muxer opens itself
   (image2, HLS), so `ffmpeg -i in.mkv out/new/o.mp4` still failed with "No

@@ -506,5 +506,60 @@ for code in 139 124; do
   expect "lavfi fatal status $code stops immediately instead of passing via WAV" 0 $?
 done
 
+# No platform argument: smoke.sh and tests.sh take the machine's own platform.
+# uname is replaced by a stub, so every host is covered from this one.
+u="$(mktemp -d "${WORK}/uname.XXXXXX")"
+printf '%s\n' '#!/bin/bash' 'case "$1" in -s) echo "$STUB_UNAME_S" ;; -m) echo "$STUB_UNAME_M" ;; esac' >"$u/uname"
+chmod +x "$u/uname"
+for c in Linux:x86_64:linux-x86_64 Linux:aarch64:linux-aarch64 Darwin:x86_64:darwin-x86_64 \
+         Darwin:arm64:darwin-arm64 FreeBSD:amd64:freebsd-x86_64 \
+         MINGW64_NT-10.0-19045:x86_64:windows-x86_64 MSYS_NT-10.0-26100:aarch64:windows-aarch64; do
+  IFS=: read -r os arch want <<<"$c"
+  got="$(STUB_UNAME_S="$os" STUB_UNAME_M="$arch" PATH="$u:$PATH" host_platform_tag)"
+  [[ "$got" == "$want" ]]; expect "host ${os}/${arch} is ${want}" 0 $?
+done
+got="$(STUB_UNAME_S=SunOS STUB_UNAME_M=x86_64 PATH="$u:$PATH" host_platform_tag)"; rc=$?
+[[ $rc -ne 0 && -z "$got" ]]; expect "an unknown host has no platform tag" 0 $?
+# On an Intel Mac, a run without the argument must skip the dispatcher check
+# (darwin has none) instead of failing on it.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_stub "$d" ffmpeg 8.1.1 0; make_stub "$d" ffprobe 8.1.1 0
+STUB_UNAME_S=Darwin STUB_UNAME_M=x86_64 PATH="$u:$PATH" bash "$SMOKE" "$d" 8.1.1 >"${WORK}/noplatform.log" 2>&1
+grep -q 'darwin-x86_64 carries no ggml cpu dispatcher' "${WORK}/noplatform.log" &&
+  ! grep -q 'does not carry the ggml cpu dispatcher' "${WORK}/noplatform.log"
+expect "no platform argument on an Intel Mac runs as darwin-x86_64" 0 $?
+
+# Metal is in both Mac builds and in no other. An Intel Mac was left out until
+# v1.0.49, so its archive was never checked for the backend at all.
+for c in darwin-arm64:0 darwin-x86_64:0 freebsd-x86_64:1 linux-x86_64:1 linux-aarch64:1 windows-x86_64:1 windows-aarch64:1; do
+  want=expected; [[ "${c##*:}" == 0 ]] || want="not expected"
+  metal_platform_has_backend "${c%%:*}"; expect "Metal backend on ${c%%:*}: ${want}" "${c##*:}" $?
+done
+# The stubs carry stemsplit's "none." statement, which the gate reads first.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0 none; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0 none
+bash "$SMOKE" "$d" 8.1.1 darwin-x86_64 >"${WORK}/metal-missing.log" 2>&1; rc=$?
+[[ $rc -ne 0 ]] && grep -q 'does not carry the ggml Metal backend' "${WORK}/metal-missing.log"
+expect "Intel Mac archive without the Metal backend fails" 0 $?
+printf '%s\n' '# kernel void kernel_mul_mm' '# using embedded metal library' >>"$d/ffmpeg"
+bash "$SMOKE" "$d" 8.1.1 darwin-x86_64 >"${WORK}/metal-present.log" 2>&1
+grep -q 'metal: ggml Metal backend is linked in' "${WORK}/metal-present.log" &&
+  ! grep -q 'does not carry the ggml Metal backend' "${WORK}/metal-present.log"
+expect "Intel Mac archive with the Metal backend passes the Metal check" 0 $?
+# One marker alone is not the backend.
+d="$(mktemp -d "${WORK}/case.XXXXXX")"; make_dispatcher_stub "$d" ffmpeg 8.1.1 0 0 none; make_dispatcher_stub "$d" ffprobe 8.1.1 0 0 none
+printf '%s\n' '# using embedded metal library' >>"$d/ffmpeg"
+bash "$SMOKE" "$d" 8.1.1 darwin-x86_64 >"${WORK}/metal-half.log" 2>&1
+grep -q 'does not carry the ggml Metal backend' "${WORK}/metal-half.log"
+expect "Intel Mac archive with the log line but no shaders fails" 0 $?
+
+# A binary that does not start fails every autodir check. Before, the encoder
+# probe read it as "not in this build" (a skip) and the two checks that expect
+# ffmpeg to fail passed.
+source "${HERE}/lib/autodir.sh"
+for func in test_autodir_webm test_autodir_x264pass test_autodir_input test_autodir_readonly; do
+  out="$(FFMPEG="./no-such-workspace/ffmpeg" "$func" 2>&1)"; rc=$?
+  [[ $rc -eq 1 && "$out" == *"ffmpeg does not run"* ]]
+  expect "${func} fails when ffmpeg does not start" 0 $?
+done
+
 echo "----"; echo "passed=$PASS failed=$FAIL"
 [[ $FAIL -eq 0 ]]

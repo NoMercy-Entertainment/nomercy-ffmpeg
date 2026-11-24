@@ -28,8 +28,9 @@
 #
 #   STEMSPLIT_ASSETS_DIR   the directory given to stemsplit-assets.sh. Unset, a
 #                          stemsplit-assets/ directory next to the binary under
-#                          test is used if present. Without one, every check
-#                          SKIPs with a reason.
+#                          test is used if present, or the binary's own
+#                          directory if stemsplit-assets.sh filled that.
+#                          Without one, every check SKIPs with a reason.
 #
 # Every ffmpeg run happens with that directory as the working directory and
 # names its files by relative paths. On Windows, Git Bash turns an absolute path
@@ -55,8 +56,10 @@ _stemsplit_inputs() {
 	bindir="$(cd "$(dirname "${FFMPEG}")" && pwd)"
 	SS_ASSETS="${STEMSPLIT_ASSETS_DIR:-}"
 	[[ -z "${SS_ASSETS}" && -d "${bindir}/stemsplit-assets" ]] && SS_ASSETS="${bindir}/stemsplit-assets"
+	# stemsplit-assets.sh pointed at the binary's own directory.
+	[[ -z "${SS_ASSETS}" && -f "${bindir}/ffmpeg-stemsplit/.nm-suite-tag" ]] && SS_ASSETS="${bindir}"
 	if [[ -z "${SS_ASSETS}" || ! -d "${SS_ASSETS}" ]]; then
-		echo "SKIP: no stemsplit assets in this environment (run tests/lib/stemsplit-assets.sh <platform> <dir> and set STEMSPLIT_ASSETS_DIR=<dir>)"
+		echo "SKIP: no stemsplit assets in this environment (run tests/lib/stemsplit-assets.sh <platform> <dir> and set STEMSPLIT_ASSETS_DIR=<dir>; a stemsplit-assets directory next to the binary is found without it)"
 		return 1
 	fi
 	SS_ASSETS="$(cd "${SS_ASSETS}" && pwd)"

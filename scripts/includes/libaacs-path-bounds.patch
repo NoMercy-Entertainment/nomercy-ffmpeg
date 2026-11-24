@@ -1,0 +1,42 @@
+libaacs 0.11.1: bounds of the path resolver, from upstream master.
+
+  6bbd2143 bound aacs_resolve_path() writes against their destination
+           buffers (2026-11-16)
+           CVE-2026-133306: a disc path through a symbolic link could write
+           past resolved_path and link[] (Linux and FreeBSD builds). No
+           libaacs release has the fix: 0.11.1 and 0.12.0 carry the same
+           src/file/path.c. scripts/17-libbluray.sh applies this file and
+           checks that the fix is in the tree afterwards.
+
+Drop this file when libaacs is bumped to a release that has 6bbd2143.
+
+diff --git a/src/file/path.c b/src/file/path.c
+--- a/src/file/path.c
++++ b/src/file/path.c
+@@ -42,6 +42,7 @@
+     char link[AACS_PATH_MAX];
+     char *new_path = resolved_path;
+     char *path_end = tmp_path + AACS_PATH_MAX - 1;
++    char *new_path_end = resolved_path + AACS_PATH_MAX - 2;
+     int readlinks = 0;
+     int n;
+ 
+@@ -91,7 +92,7 @@
+ 
+         /* copy next component */
+         while (*path && *path != '/') {
+-            if (path >= path_end) {
++            if (path >= path_end || new_path >= new_path_end) {
+                 return NULL;
+             }
+             *new_path++ = *path++;
+@@ -124,7 +125,8 @@
+                 while (*(--new_path) != '/');
+             }
+ 
+-            if (path + n >= path_end) {
++            /* link[] receives the link target plus what is left of the path */
++            if ((size_t)n + strlen(path) >= AACS_PATH_MAX - 1) {
+                 return NULL;
+             }
+ 

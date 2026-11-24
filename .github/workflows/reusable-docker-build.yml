@@ -258,6 +258,12 @@ jobs:
           # BUILD_JOBS caps it; 12 is the default that fits at roughly 1 GiB
           # per C++ compile job, and the repository variable FFMPEG_BUILD_JOBS
           # can raise it later without touching this file.
+          # ALPINE_REFRESH differs for every run and attempt. The platform
+          # Dockerfiles name it in the `apk upgrade` layer of the final image,
+          # so that layer runs on every build and is never replayed from the
+          # cache imported above (the comment at that layer has the case). The
+          # base Dockerfile does not declare it: an argument nothing consumes
+          # is a warning, not an error.
           BUILD_ARGS="--file ${{ inputs.dockerfile }} \
             --tag ${IMAGE}:latest \
             --tag ${IMAGE}:${{ github.sha }} \
@@ -265,6 +271,7 @@ jobs:
             ${CACHE_FROM_FLAG} \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             --build-arg BUILD_JOBS=${{ vars.FFMPEG_BUILD_JOBS || 12 }} \
+            --build-arg ALPINE_REFRESH=${{ github.run_id }}.${{ github.run_attempt }} \
             ${BASE_TAG_FLAG} \
             ${SOURCE_REF_FLAGS} \
             --pull \

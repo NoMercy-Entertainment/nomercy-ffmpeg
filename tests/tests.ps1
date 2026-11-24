@@ -22,6 +22,12 @@ $HERE = Split-Path -Parent $PSCommandPath
 . "$HERE/lib/rubberband.ps1"
 . "$HERE/lib/soxr.ps1"
 
+# Several checks change into a scratch directory before they run ffmpeg, so a
+# relative workspace (.\workspace) would stop resolving there.
+if (Test-Path -LiteralPath $Workspace -PathType Container) {
+    $Workspace = (Resolve-Path -LiteralPath $Workspace).Path
+}
+
 Report-Init -Platform $Platform
 
 $TOTAL_WIDTH_TEXT = 54
@@ -379,6 +385,8 @@ run_custom_test "cpu_variant" { Test-CpuVariant -FFmpegExe "$Workspace\ffmpeg.ex
 # also needs a v1.0.44 ffmpeg.exe in WHISPER_TEST_REFERENCE_FFMPEG.
 run_custom_test "whisper_options" { Test-WhisperOptions -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 run_custom_test "whisper_defaults" { Test-WhisperDefaultsUnchanged -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
+# language=eval and language=lock, the two values FFmpeg 9.1 added.
+run_custom_test "whisper_language_modes" { Test-WhisperLanguageModes -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }
 # #113 dtw on very short windows, #114 one model load per run, #115 VAD
 # threads (the last also needs ggml-silero-v5.1.2.bin in WHISPER_TEST_VAD_MODEL).
 run_custom_test "whisper_dtw_short" { Test-WhisperDtwShortWindow -FFmpegExe "$Workspace\ffmpeg.exe" -Platform $Platform }

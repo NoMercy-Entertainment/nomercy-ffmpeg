@@ -608,6 +608,21 @@ fi
 
 cd /build/librsvg
 
+# One crate in librsvg 2.61.5's Cargo.lock that ends up in the static library
+# has an advisory with a fixed release: url 2.5.7 (RUSTSEC-2026-0592, fixed
+# in 2.5.9). It is semver-compatible, so move only that crate in the lock
+# file (form_urlencoded follows it, 1.2.2 to 1.2.3) and check that it took.
+# FFmpeg does not reach the affected Url::origin(): it is on the
+# rsvg_handle_new_from_file path, and FFmpeg calls rsvg_handle_new_from_data.
+if ! cargo update -p url --precise 2.5.9 >>/ffmpeg_build.log 2>&1; then
+	echo "librsvg: cargo update -p url --precise 2.5.9 failed" >>/ffmpeg_build.log
+	exit 1
+fi
+if ! grep -A1 '^name = "url"$' Cargo.lock | grep -q '^version = "2.5.9"$'; then
+	echo "librsvg: Cargo.lock does not have url 2.5.9 after cargo update" >>/ffmpeg_build.log
+	exit 1
+fi
+
 # Install Rust target for cross-compilation if needed
 if [[ "${ARCH}" == "aarch64" && "${TARGET_OS}" == "linux" ]]; then
 	rustup target add aarch64-unknown-linux-gnu >/dev/null 2>&1

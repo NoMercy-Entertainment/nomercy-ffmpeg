@@ -26,10 +26,11 @@ if [[ $(grep -c 'narrow the filter instead of aborting' src/whisper.cpp) -ne 1 ]
 fi
 log "Applied whisper.cpp DTW median-filter backport (a46fadb)"
 
-# Three security fixes of v1.9.5, taken alone so ggml stays the one every
+# Four security fixes of v1.9.5, taken alone so ggml stays the one every
 # whisper/stemsplit/lyricsalign gate was measured on (the patch header lists
-# them; CVE-2026-110810 is one). Same rule as above: the patch must apply,
-# and each fix must be in the tree afterwards.
+# them; CVE-2026-110810 and CVE-2026-116840 are two). The one hunk in ggml
+# is in the GGUF loader's size check, which no computation reads. Same rule
+# as above: the patch must apply, and each fix must be in the tree afterwards.
 git apply /scripts/includes/whisper-security-backports.patch \
     || { log "Error: whisper-security-backports.patch does not apply to whisper.cpp v${whisper_version}"; exit 1; }
 if [[ $(grep -c 'invalid ttype %d in model file' src/whisper.cpp) -ne 2 ]]; then
@@ -40,7 +41,11 @@ if ! grep -q 'invalid n_dims' src/whisper.cpp; then
     log "Error: the n_dims check is not in src/whisper.cpp after applying the patch"
     exit 1
 fi
-log "Applied whisper.cpp security backports (60c0be6 CVE-2026-110810, df1547b, 8631825)"
+if ! grep -q 'overflows after padding' ggml/src/gguf.cpp; then
+    log "Error: the padding check (CVE-2026-116840) is not in ggml/src/gguf.cpp after applying the patch"
+    exit 1
+fi
+log "Applied whisper.cpp security backports (60c0be6 CVE-2026-110810, df1547b, 8631825, 6e48a36 CVE-2026-116840)"
 
 # chmod +x ./models/download-ggml-model.sh
 # ./models/download-ggml-model.sh base
@@ -211,7 +216,7 @@ if [[ ${TARGET_OS} == "windows" ]]; then
     # are in examples/ and bindings/, which nothing here compiles (EXAMPLES,
     # SERVER and TESTS are off below), and in seven ggml backend sources:
     # hexagon, metal, openvino, virtgpu and zdnn. None of those backends is
-    # built on Windows -- Metal is turned on for darwin-arm64 alone, and the
+    # built on Windows -- Metal is turned on for the two Mac builds alone, and the
     # other four default OFF and are never enabled in this script. So on the
     # one platform the seds ran, they touched no file that was compiled.
     #
@@ -298,41 +303,57 @@ else
         else
             WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_CPU_ARM_ARCH=armv8.4-a+dotprod+fp16"
             NM_GGML_CPU_FIXED_NAME="armv8.4+dotprod+fp16"
+        fi
 
-            # Apple Silicon only: override the darwin default above and turn ggml's
-            # Metal backend on. darwin-x86_64 stays OFF -- that dockerfile's floor is
-            # 10.13 while ggml's Metal path uses unguarded 10.15 APIs, and Intel/AMD
-            # GPUs report neither Apple7 nor Metal3 anyway.
-            #
-            # EMBED_LIBRARY is passed explicitly rather than relied on as ggml's own
-            # default (it defaults to ${GGML_METAL}, ggml/CMakeLists.txt): without the
-            # embed path cmake shells out to `xcrun metal`, which osxcross has no
-            # answer for.
-            NM_METAL=1
-            WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON"
+        # Both Macs: override the darwin default above and turn ggml's Metal
+        # backend on. Intel Macs were left out at first on the belief that their
+        # GPUs report neither Apple7 nor Metal3. That is wrong: AMD Vega and
+        # 5000/6000 series and Intel UHD 630 / Iris Plus report Metal3 on macOS
+        # 13 and later, and ggml has a path for them (private buffers for
+        # discrete memory, the matrix-vector kernels where Apple7's simdgroup
+        # matrices are missing). The 10.15 APIs are no obstacle either: ggml is
+        # built for 10.15 on darwin-x86_64 already (see above).
+        #
+        # EMBED_LIBRARY is passed explicitly rather than relied on as ggml's own
+        # default (it defaults to ${GGML_METAL}, ggml/CMakeLists.txt): without the
+        # embed path cmake shells out to `xcrun metal`, which osxcross has no
+        # answer for.
+        NM_METAL=1
+        WHISPER_CMAKE_COMMON_ARG="${WHISPER_CMAKE_COMMON_ARG} -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON"
 
-            # osxcross's clang 18 can neither parse ggml's visionOS @available
-            # clauses nor link the __isPlatformVersionAtLeast they lower to (no
-            # libclang_rt.osx.a in this toolchain). Both sites exist purely to gate
-            # macOS-15 "residency sets" behind one #define that SDK macros alone
-            # already drive (ggml-metal-device.m); neutralise that #define and the
-            # build takes the pre-macOS-15 path upstream already ships and supports
-            # (GGML_METAL_NO_RESIDENCY exists as the same off switch on real macOS).
-            #
-            # A bare sed that matches nothing succeeds silently and this build then
-            # dies later with a compiler error nobody would connect to this line --
-            # so count the match first and fail by name if it is not exactly 1.
-            metal_src="ggml/src/ggml-metal/ggml-metal-device.m"
-            nm_metal_residency_before=$(grep -c '^#define GGML_METAL_HAS_RESIDENCY_SETS 1' "${metal_src}")
-            if [[ ${nm_metal_residency_before} -ne 1 ]]; then
-                log "Error: expected exactly one GGML_METAL_HAS_RESIDENCY_SETS define in ${metal_src}, found ${nm_metal_residency_before} -- has whisper.cpp changed?"
-                exit 1
-            fi
-            sed -i 's/^#define GGML_METAL_HAS_RESIDENCY_SETS 1$/#undef GGML_METAL_HAS_RESIDENCY_SETS/' "${metal_src}"
-            if ! grep -q '^#undef GGML_METAL_HAS_RESIDENCY_SETS' "${metal_src}"; then
-                log "Error: residency-sets patch did not apply to ${metal_src}"
-                exit 1
-            fi
+        # osxcross's clang 18 can neither parse ggml's visionOS @available
+        # clauses nor link the __isPlatformVersionAtLeast they lower to (no
+        # libclang_rt.osx.a in this toolchain). Both sites exist purely to gate
+        # macOS-15 "residency sets" behind one #define that SDK macros alone
+        # already drive (ggml-metal-device.m); neutralise that #define and the
+        # build takes the pre-macOS-15 path upstream already ships and supports
+        # (GGML_METAL_NO_RESIDENCY exists as the same off switch on real macOS).
+        #
+        # A bare sed that matches nothing succeeds silently and this build then
+        # dies later with a compiler error nobody would connect to this line --
+        # so count the match first and fail by name if it is not exactly 1.
+        metal_src="ggml/src/ggml-metal/ggml-metal-device.m"
+        nm_metal_residency_before=$(grep -c '^#define GGML_METAL_HAS_RESIDENCY_SETS 1' "${metal_src}")
+        if [[ ${nm_metal_residency_before} -ne 1 ]]; then
+            log "Error: expected exactly one GGML_METAL_HAS_RESIDENCY_SETS define in ${metal_src}, found ${nm_metal_residency_before} -- has whisper.cpp changed?"
+            exit 1
+        fi
+        sed -i 's/^#define GGML_METAL_HAS_RESIDENCY_SETS 1$/#undef GGML_METAL_HAS_RESIDENCY_SETS/' "${metal_src}"
+        if ! grep -q '^#undef GGML_METAL_HAS_RESIDENCY_SETS' "${metal_src}"; then
+            log "Error: residency-sets patch did not apply to ${metal_src}"
+            exit 1
+        fi
+
+        # Intel Macs: the Metal device is only registered when the default GPU
+        # reports Metal 3 and is not an integrated one; every other Intel Mac
+        # stays on the CPU, as before. The patch header has the reasons. It
+        # compiles to "always yes" on arm64, so both Macs take the same patch
+        # and a whisper.cpp bump that breaks it is seen on both.
+        git apply /scripts/includes/ggml-metal-intel-guard.patch \
+            || { log "Error: ggml-metal-intel-guard.patch does not apply to whisper.cpp v${whisper_version}"; exit 1; }
+        if [[ $(grep -c 'nm_ggml_metal_default_device_usable' ggml/src/ggml-metal/ggml-metal.cpp) -ne 1 ]]; then
+            log "Error: the Intel Mac Metal guard is not called from ggml-metal.cpp after applying the patch"
+            exit 1
         fi
     elif [[ ${TARGET_OS} == "freebsd" ]]; then
         # Keep libomp.so out of the binary's base-runtime-only dependencies;
@@ -814,7 +835,7 @@ lib_private_flags="Libs.private: -lstdc++"
     # and no installed whisper/ggml header tests the macro; ggml itself only
     # reads it inside its own compiled registry. Metal is deliberately not
     # announced the same way: stemsplit enables no Metal backend for auto
-    # (its design G12), so darwin-arm64 keeps the plain line.
+    # (its design G12), so the Mac builds keep the plain line.
     nm_whisper_cflags="-I\${includedir}"
     [[ ${NM_VULKAN} == 1 ]] && nm_whisper_cflags="${nm_whisper_cflags} -DGGML_USE_VULKAN"
     echo "Cflags: ${nm_whisper_cflags}"
@@ -828,12 +849,12 @@ lib_private_flags="Libs.private: -lstdc++"
 # See: https://github.com/NoMercy-Entertainment/nomercy-ffmpeg/issues/38
 if [[ -f /scripts/includes/af_whisper.c ]]; then
     # Our copy replaces upstream's whole file, so it is upstream's file at one
-    # release plus our changes; the digest is that upstream file (FFmpeg 9.0
-    # and 9.0.2 have the same one). Any other upstream file means the copy
+    # release plus our changes; the digest is that upstream file (FFmpeg
+    # 9.1). Any other upstream file means the copy
     # would put back what FFmpeg changed there: rebase it first (see
     # 57-hls-master-playlist.sh for the hlsenc.c case that made this check).
     whisper_upstream=$(sha256sum /build/ffmpeg/libavfilter/af_whisper.c | cut -d' ' -f1)
-    if [[ "${whisper_upstream}" != 322a8d54baa69b74f91552ad809a43ad0e3934632b256adf2123e4325a3b85d6 ]]; then
+    if [[ "${whisper_upstream}" != ebf55032923ab03d9d2e40c2604198883c3957fe18e089b9157d85105e747dea ]]; then
         log "Error: FFmpeg's libavfilter/af_whisper.c (sha256 ${whisper_upstream}) is not the file scripts/includes/af_whisper.c is based on: rebase the copy"
         exit 1
     fi

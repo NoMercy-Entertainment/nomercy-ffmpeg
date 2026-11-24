@@ -488,20 +488,19 @@ function Test-VulkanStartup {
 # Mirrors the Metal half of tests/lib/cpu-variant.sh exactly -- see that file
 # for the full rationale and the measured counts behind each marker. No
 # platform this file's caller ever runs on (windows-x86_64, windows-aarch64)
-# is darwin-arm64, so Test-MetalPlatformHasBackend is always false in
+# is a Mac, so Test-MetalPlatformHasBackend is always false in
 # practice here; it is still written out in full, the same way
 # Test-VulkanPlatformHasGuard above is, because the value of a predicate like
 # this is asserting an ABSENCE correctly, not just being true somewhere.
 
 # Kept separate from Test-VulkanPlatformHasBackend rather than adding a
 # darwin-arm64 arm to it: that function answers "does this platform carry
-# ggml's VULKAN backend", and darwin-arm64's answer stays no. Metal is
-# darwin-arm64 only -- darwin-x86_64 stays off (10.13 deployment floor vs
-# ggml's unguarded 10.15 APIs, and Intel/AMD GPUs report neither Apple7 nor
-# Metal3, so they'd take ggml's slow paths on the oldest Macs supported).
+# ggml's VULKAN backend", and darwin-arm64's answer stays no. Metal is in
+# both Mac builds; whether an Intel Mac uses it is decided at run time, per
+# GPU (scripts/includes/ggml-metal-intel-guard.patch).
 function Test-MetalPlatformHasBackend {
     param([string]$Platform)
-    return ($Platform -match 'darwin-arm64')
+    return ($Platform -match 'darwin-(arm64|x86_64)')
 }
 
 # True if ggml's Metal backend is really linked in. Two markers, both

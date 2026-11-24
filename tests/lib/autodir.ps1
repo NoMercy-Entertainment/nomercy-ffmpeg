@@ -50,6 +50,11 @@ function Test-AutoDir {
         New-Item -ItemType Directory -Path $work -ErrorAction Stop | Out-Null
         Push-Location -LiteralPath $work
         $pushed = $true
+        # A binary that does not start is a failure. Without this, the encoder
+        # probes below read it as "not in this build" (a skip), and the two
+        # checks that expect ffmpeg to fail (Input, ReadOnly) pass.
+        & $FFmpegExe -hide_banner -version 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "ffmpeg does not run from ${work}: $FFmpegExe" }
         switch ($Mode) {
             { $_ -in 'Mp4', 'Mov' } {
                 $ext = $Mode.ToLower()

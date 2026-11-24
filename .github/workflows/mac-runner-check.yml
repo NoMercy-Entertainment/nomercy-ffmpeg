@@ -263,7 +263,7 @@ jobs:
         shell: bash
         run: |
           chmod +x tests/smoke.sh
-          tests/smoke.sh "${GITHUB_WORKSPACE}" 9.0 darwin-arm64
+          tests/smoke.sh "${GITHUB_WORKSPACE}" 9.1 darwin-arm64
 
       - name: Summary
         if: always()
